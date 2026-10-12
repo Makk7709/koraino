@@ -4,15 +4,18 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
+import { AuthGate } from "../components/auth/AuthGate";
 import { AppLayout } from "../components/layout/AppLayout";
 import { Toaster } from "../components/ui/sonner";
 import appCss from "../styles.css?url";
+import { isAuthPage } from "../lib/auth/redirect";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
@@ -125,13 +128,20 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AppLayout>
-        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+      {isAuthPage(pathname) ? (
         <Outlet />
-      </AppLayout>
+      ) : (
+        <AuthGate>
+          <AppLayout>
+            {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+            <Outlet />
+          </AppLayout>
+        </AuthGate>
+      )}
       <Toaster richColors position="top-right" />
     </QueryClientProvider>
   );

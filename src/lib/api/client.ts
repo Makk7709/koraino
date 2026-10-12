@@ -36,6 +36,14 @@ import type {
   UsageSnapshot,
   User,
 } from "./types";
+import { getAccessToken, handleUnauthenticated } from "@/lib/auth/token";
+import type {
+  AccountUser,
+  CreateUserInput,
+  CreateUserResponse,
+  InvitationResponse,
+  UpdateUserInput,
+} from "@/lib/auth/types";
 
 export class ApiError extends Error {
   constructor(
@@ -58,15 +66,23 @@ function toQuery(params?: object): string {
   return s ? `?${s}` : "";
 }
 
+const isAuthRoute = (path: string) => path === "/auth" || path.startsWith("/auth/");
+
 /**
  * Toute requête mutante porte l'en-tête `x-kora-request` : le serveur refuse les
  * écritures sans cet en-tête (protection CSRF basique pour les routes /api).
+ * En mode supabase, le jeton de session part en `Authorization: Bearer` ; un 401 hors
+ * `/auth/*` renvoie vers la page de connexion.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("x-kora-request", "1");
   if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (!headers.has("authorization")) {
+    const token = await getAccessToken();
+    if (token) headers.set("authorization", `Bearer ${token}`);
   }
   const res = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });
   if (!res.ok) {
@@ -75,6 +91,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       body = (await res.json()) as ApiErrorBody;
     } catch {
       body = null;
+    }
+    if (!isAuthRoute(path)) {
+      if (res.status === 401) void handleUnauthenticated("unauthenticated");
+      else if (res.status === 403 && body?.error?.code === "account_not_authorized") {
+        void handleUnauthenticated("account_not_authorized");
+      }
     }
     throw new ApiError(
       res.status,
@@ -106,7 +128,23 @@ export const api = {
   /* Session & utilisateurs */
   me: () => apiFetch<User>("/me"),
   switchUser: (userId: string) => apiFetch<User>("/me", json("POST", { userId })),
-  users: () => apiFetch<User[]>("/users"),
+  users: () => apiFetch<AccountUser[]>("/users"),
+  createUser: (input: CreateUserInput) =>
+    apiFetch<CreateUserResponse>("/users", json("POST", input)),
+  updateUser: (id: string, input: UpdateUserInput) =>
+    apiFetch<AccountUser>(`/users/${id}`, json("PATCH", input)),
+  deleteUser: (id: string) => apiFetch<void>(`/users/${id}`, json("DELETE")),
+  resendInvitation: (id: string) =>
+    apiFetch<InvitationResponse>(`/users/${id}/invite`, json("POST")),
+
+  /* Authentification (mode supabase) */
+  /** Vérifie le jeton côté serveur et pose le cookie `kora_session` (liens de téléchargement). */
+  openServerSession: (accessToken: string) =>
+    apiFetch<AccountUser>("/auth/session", {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+    }),
+  closeServerSession: () => apiFetch<void>("/auth/logout", json("POST")),
 
   /* Dashboard & recherche */
   dashboard: (q?: { from?: string; to?: string }) => apiFetch<Dashboard>(`/dashboard${toQuery(q)}`),
