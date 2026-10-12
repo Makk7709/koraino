@@ -38,7 +38,7 @@ export interface CollectInput {
 
 export interface Collector {
   readonly name: string;
-  collect(input: CollectInput): CollectResult;
+  collect(input: CollectInput): CollectResult | Promise<CollectResult>;
 }
 
 const CATEGORIES: Category[] = [
@@ -150,5 +150,157 @@ export class SimulatedCollector implements Collector {
         eventDate: null,
       },
     ];
+  }
+}
+
+/** Lien Google News (flux RSS) pour une recherche par nom d'entreprise. */
+export function googleNewsUrl(query: string): string {
+  return `https://news.google.com/rss/search?q=${encodeURIComponent(`"${query}"`)}&hl=fr&gl=FR&ceid=FR:fr`;
+}
+
+function decode(s: string): string {
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
+function tag(block: string, name: string): string | null {
+  const m = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i"));
+  return m ? decode(m[1]!) : null;
+}
+
+function brandFor(name: string): Outlet["brand"] {
+  const letters = name.replace(/[^A-Za-zÀ-ÿ ]/g, "").split(/\s+/).filter(Boolean);
+  const initials = (letters.map((w) => w[0]).join("").slice(0, 2) || "?").toUpperCase();
+  return { initials, bg: "oklch(0.92 0.02 250)", fg: "oklch(0.3 0.05 250)" };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/** Analyse un flux RSS 2.0 ou Atom. */
+export function parseFeed(xml: string, fallbackOutlet: Outlet): RawItem[] {
+  const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>|<entry[\s>][\s\S]*?<\/entry>/gi) ?? [];
+  const items: RawItem[] = [];
+  for (const b of blocks) {
+    const title = tag(b, "title");
+    let link = tag(b, "link");
+    if (!link) link = b.match(/<link[^>]*href="([^"]+)"/i)?.[1] ?? null;
+    if (!title || !link) continue;
+    const date = tag(b, "pubDate") ?? tag(b, "published") ?? tag(b, "updated");
+    const parsed = date ? new Date(date) : null;
+    const desc = tag(b, "description") ?? tag(b, "summary") ?? tag(b, "content") ?? "";
+    const sourceName = tag(b, "source");
+    const sourceUrl = b.match(/<source[^>]*url="([^"]+)"/i)?.[1];
+    const outlet: Outlet = sourceName
+      ? { name: sourceName, domain: hostOf(sourceUrl ?? link), brand: brandFor(sourceName) }
+      : fallbackOutlet;
+    let cleanTitle = title;
+    if (sourceName && cleanTitle.endsWith(` - ${sourceName}`))
+      cleanTitle = cleanTitle.slice(0, -(sourceName.length + 3));
+    items.push({
+      url: link,
+      title: cleanTitle,
+      html: `<article><h1>${cleanTitle}</h1><p>${desc}</p></article>`,
+      outlet,
+      publishedAt: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : null,
+      eventDate: null,
+    });
+  }
+  return items;
+}
+
+/**
+ * Collecte réelle : lit le flux RSS/Atom de la source (ou le découvre depuis la page HTML),
+ * et interroge Google News pour les sources « recherche web » / « actualités ».
+ */
+export class RealCollector implements Collector {
+  readonly name = "collecteur-rss-google-v1";
+
+  async collect(input: CollectInput): Promise<CollectResult> {
+    const { source, company } = input;
+    const useGoogle =
+      source.type === "recherche_web" ||
+      (source.type === "actualites" && !/rss|feed|atom|xml/i.test(source.url));
+    const url =
+      useGoogle && !source.url.includes("news.google.com")
+        ? googleNewsUrl(company?.name ?? source.label)
+        : source.url;
+    const fallback: Outlet = company
+      ? { name: company.name, domain: company.domain, brand: company.brand }
+      : { name: hostOf(url), domain: hostOf(url), brand: brandFor(hostOf(url)) };
+    try {
+      let text = await this.fetchText(url);
+      if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
+        const alt = text.match(
+          /<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i,
+        )?.[0];
+        const href = alt?.match(/href="([^"]+)"/i)?.[1];
+        if (!href) return { ok: true, items: [] };
+        text = await this.fetchText(new URL(href, url).toString());
+      }
+      let items = parseFeed(text, fallback);
+      if (company && !useGoogle) {
+        // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
+        // sauf si le flux est celui de l'entreprise elle-même.
+        const own = hostOf(url).endsWith(company.domain);
+        if (!own) {
+          const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+          items = items.filter((i) =>
+            names.some((n) => `${i.title} ${i.html}`.toLowerCase().includes(n)),
+          );
+        }
+      }
+      const cutoff = input.now.getTime() - 30 * 86_400_000;
+      items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
+      return { ok: true, items };
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      return {
+        ok: false,
+        code: err.code ?? "NETWORK",
+        reason: err.message || "Erreur réseau",
+        transient: err.code !== "HTTP_403" && err.code !== "HTTP_404",
+      };
+    }
+  }
+
+  private async fetchText(url: string): Promise<string> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
+          accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
+        },
+      });
+      if (!res.ok) {
+        const e = new Error(`Réponse HTTP ${res.status}`) as Error & { code: string };
+        e.code = `HTTP_${res.status}`;
+        throw e;
+      }
+      return await res.text();
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        const err = new Error("Délai de réponse dépassé") as Error & { code: string };
+        err.code = "TIMEOUT";
+        throw err;
+      }
+      throw e;
+    } finally {
+      clearTimeout(t);
+    }
   }
 }
