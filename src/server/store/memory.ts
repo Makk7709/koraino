@@ -115,7 +115,7 @@ function holder(): Holder | undefined {
 export async function getRepository(): Promise<Repository> {
   if (!process.env["VITEST"] && process.env["SUPABASE_URL"]) {
     const g = globalThis as Record<string, unknown>;
-    const db = (g.__koraDb__ ??= new DbRepository()) as DbRepository;
+    const db = (g['__koraDb__'] ??= new DbRepository()) as DbRepository;
     await db.ensureReady();
     return db;
   }
