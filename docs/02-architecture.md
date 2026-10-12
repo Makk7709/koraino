@@ -47,8 +47,10 @@ flowchart LR
   end
   C -- "fetch /api/*<br/>JSON + x-kora-request" --> R
   A -- "HTTPS (si AI_API_KEY)" --> OAI[(OpenAI)]
-  A -. "simulé" .-> EXT[(Web, WordPress, LinkedIn)]
-  ST --> MEM[("Store en mémoire<br/>seed au démarrage")]
+  A -- "HTTPS : flux RSS, Google News" --> WEB[(Sites des sources)]
+  A -. "simulé / export" .-> EXT[(WordPress, LinkedIn)]
+  ST -- "production" --> DB[("Supabase PostgreSQL<br/>kora_records en JSONB")]
+  ST -. "tests, démo locale" .-> MEM[("Mémoire<br/>seed au démarrage")]
 ```
 
 Le contrat entre le front et le back est figé dans trois fichiers partagés :
@@ -63,8 +65,11 @@ Le contrat entre le front et le back est figé dans trois fichiers partagés :
 
 ```text
 .
+├── .env                      Valeurs publiques Supabase, versionnées par Lovable (aucun secret)
 ├── AGENTS.md                 Règles de synchronisation Lovable (à lire avant tout commit)
-├── db/postgres/schema.sql    Schéma PostgreSQL cible (non branché)
+├── db/postgres/schema.sql    Schéma relationnel cible (non branché)
+├── drizzle/migrations/       Migrations appliquées par Lovable (tables kora_records, kora_settings)
+├── supabase/config.toml      Identifiant du projet Supabase de Lovable Cloud
 ├── docs/                     Cette documentation
 ├── public/                   Fichiers statiques (favicon, robots.txt)
 ├── src/
@@ -81,6 +86,7 @@ Le contrat entre le front et le back est figé dans trois fichiers partagés :
 │   │   ├── dashboard/, signals/, veille/, entreprises/, parametres/,
 │   │   │   articles/, linkedin/, newsletter/   Composants par domaine
 │   │   └── ui/               Composants shadcn/ui (Radix), base générique
+│   ├── integrations/supabase/ Clients Supabase générés par Lovable (ne pas éditer)
 │   ├── lib/api/              Contrat front/back (types, client, hooks)
 │   ├── server/               API métier (jamais importée par le front)
 │   │   ├── router.ts         Table des routes et contrôles transverses
@@ -91,7 +97,7 @@ Le contrat entre le front et le back est figé dans trois fichiers partagés :
 │   │   ├── handlers/         Un fichier par domaine d'API
 │   │   ├── services/         Orchestrations réutilisables (collecte, audit, quotas…)
 │   │   ├── domain/           Règles métier pures (scoring, preuves, droits, budget…)
-│   │   ├── store/            Repository, store mémoire, seed, catalogue
+│   │   ├── store/            Repository, dépôts base et mémoire, seed, catalogue
 │   │   └── adapters/         Modèle de texte, OpenAI, collecteur, canaux
 │   ├── server.ts             Entrée serveur : filet de sécurité des erreurs SSR
 │   ├── start.ts              Middlewares TanStack Start (erreurs, CSRF des server functions)
@@ -125,31 +131,51 @@ La liste exhaustive des endpoints, avec rôles, corps et erreurs, est dans la [R
 | Handlers | [`handlers/`](../src/server/handlers) | Un handler par endpoint : lecture et validation de l'entrée, droits, appel des services et du domaine, mise en forme de la réponse. | Peut tout appeler sauf un autre handler. |
 | Services | [`services/`](../src/server/services) | Orchestrations partagées entre handlers : collecte (`collection.ts`), audit et notifications (`journal.ts`), quotas et budget (`usage.ts`), signaux, newsletters, Editorial DNA, vues DTO (`view.ts`). | Utilisent le repository, le domaine et les adaptateurs. |
 | Domaine | [`domain/`](../src/server/domain) | Règles métier **pures** : scoring, indicateur documentaire, regroupement, workflow, droits, budget, dates, CSV, sécurité des URL, extraction DOCX, calculs du dashboard. | N'accède ni au repository ni au réseau ; n'importe que des types (`lib/api/types.ts`, `store/records.ts`) et d'autres modules du domaine (seule dépendance externe : `fflate` pour lire les DOCX). Testable sans serveur. |
-| Store | [`store/`](../src/server/store) | Interface `Repository`, implémentation mémoire, seed de démonstration, générateur pseudo-aléatoire déterministe. | Ne connaît pas HTTP. |
+| Store | [`store/`](../src/server/store) | Interface `Repository`, implémentation en base Supabase (`db.ts`) et en mémoire (`memory.ts`), seed de démonstration, générateur pseudo-aléatoire déterministe. | Ne connaît pas HTTP. |
 | Adaptateurs | [`adapters/`](../src/server/adapters) | Accès aux services tiers derrière des interfaces remplaçables. | Ne connaissent ni le repository ni HTTP. |
 
-Conventions communes : messages d'erreur et libellés en français, dates au format ISO 8601 en UTC dans l'API, identifiants préfixés générés par `repo.nextId(prefix)` (par exemple `sig_n1042`), chaque action significative tracée par `audit()` dans le journal.
+Conventions communes : messages d'erreur et libellés en français, dates au format ISO 8601 en UTC dans l'API, identifiants préfixés générés par `repo.nextId(prefix)` (par exemple `sig_mgo4k2x1a3f9c2` en base, `sig_n1042` en mémoire), chaque action significative tracée par `audit()` dans le journal.
 
 ## Persistance
 
 ### Interface `Repository`
 
-Tout accès aux données passe par l'interface asynchrone `Repository` de [`store/repository.ts`](../src/server/store/repository.ts) : une `Collection<T>` par entité (`get`, `list`, `insert`, `update`, `remove`), plus `getSettings` / `saveSettings` (quotas, budget, état de suspension) et `nextId`. Les handlers et services n'utilisent que cette interface : brancher PostgreSQL consiste à fournir une autre implémentation, sans toucher au reste du code.
+Tout accès aux données passe par l'interface asynchrone `Repository` de [`store/repository.ts`](../src/server/store/repository.ts) : une `Collection<T>` par entité (`get`, `list`, `insert`, `update`, `remove`), plus `getSettings` / `saveSettings` (quotas, budget, état de suspension) et `nextId`. Les handlers et services n'utilisent que cette interface : changer de stockage consiste à fournir une autre implémentation, sans toucher au reste du code.
 
-### Implémentation actuelle : store en mémoire
+`getRepository()` ([`store/memory.ts`](../src/server/store/memory.ts)), appelé par le routeur pour chaque requête, choisit l'implémentation :
 
-[`store/memory.ts`](../src/server/store/memory.ts) fournit `MemoryRepository`, conservé comme singleton sur `globalThis` (clé `__koraNewsroomStore__`) pour survivre au rechargement à chaud du code serveur. Le store est construit par `resetStore()` à partir de `buildSeed(now)` ([`seed.ts`](../src/server/store/seed.ts)). La constante `STORE_VERSION` doit être incrémentée quand la forme des enregistrements change : le store est alors reconstruit au prochain appel.
+| Condition | Implémentation | Usage |
+|---|---|---|
+| `SUPABASE_URL` définie et hors Vitest | `DbRepository` ([`store/db.ts`](../src/server/store/db.ts)) | Application hébergée par Lovable. |
+| Sinon | `MemoryRepository` avec le seed | Tests, et démonstration locale lancée avec `SUPABASE_URL=` vide. |
+
+### Implémentation de production : base Supabase
+
+`DbRepository` stocke les données dans la base PostgreSQL du projet Supabase de Lovable Cloud, au moyen du client `supabaseAdmin` ([`client.server.ts`](../src/integrations/supabase/client.server.ts)), qui utilise la clé de service `SUPABASE_SERVICE_ROLE_KEY`. Deux tables, créées par la migration [`0000_kora_records.sql`](../drizzle/migrations/0000_kora_records.sql) :
+
+| Table | Contenu |
+|---|---|
+| `kora_records` | Une ligne par enregistrement : `collection` (nom de la collection : `companies`, `signals`, `articles`…), `id`, `data` (l'enregistrement complet en JSONB, au format de [`records.ts`](../src/server/store/records.ts)), `created_at`, `updated_at`. Clé primaire `(collection, id)`. |
+| `kora_settings` | Les réglages (quotas, budget réservé, suspension, alertes déjà envoyées) en JSONB, une ligne par espace (clé `"kora"`). |
+
+La sécurité par ligne est activée sur les deux tables sans aucune règle d'accès : seul le rôle de service, donc seul le serveur, peut les lire ou les écrire. Le client Supabase navigateur généré par Lovable ([`client.ts`](../src/integrations/supabase/client.ts)) n'est utilisé par aucun écran.
+
+Au premier usage, `ensureReady()` installe les quatre utilisateurs, les grilles de score, les règles éditoriales et les réglages du seed (budget réservé remis à zéro). **Aucune donnée de démonstration n'est créée** : la production démarre vide. Les identifiants sont générés par `nextId` à partir de l'horodatage et d'un fragment aléatoire (`sig_mgo4k2x1a3f9c2`).
 
 Limites à connaître :
 
-- **Aucune durabilité** : un redémarrage efface toutes les modifications.
-- **Un store par processus** : sur Cloudflare Workers, chaque isolat a son propre `globalThis`. Deux requêtes servies par deux isolats différents peuvent voir des données différentes, et un isolat recyclé repart du seed. Le store mémoire convient au développement et à la démonstration, **pas à la production**.
-- **Pas de transactions** : les opérations composées (réservation de budget, idempotence des publications) sont correctes dans un seul processus mono-thread JavaScript, mais devront être transactionnelles avec une base partagée.
-- **`list()` charge toute la collection** : acceptable pour le volume de démonstration, insuffisant pour l'épreuve de charge R13 du cahier des charges (100 000 signaux). Une implémentation SQL devra filtrer, trier et paginer en base.
+- **Pas de transactions ni de verrous** : chaque opération du `Repository` est une requête indépendante. Les opérations composées (réservation de budget dans `paidCall`, idempotence des publications, fusion de signaux) peuvent s'entrelacer entre deux requêtes simultanées, et `saveSettings` réécrit tout le JSON des réglages : deux écritures concurrentes peuvent s'écraser.
+- **`list()` charge toute la collection**, par pages de 1 000 lignes : chaque liste, chaque compteur du dashboard et chaque contrôle de doublon relit toutes les lignes de la collection concernée. Insuffisant pour l'épreuve de charge R13 (100 000 signaux).
+- **Fichiers importés dans le JSON** : l'original d'un import (`bytes`, un `Uint8Array`) est sérialisé dans `data`. `JSON.stringify` transforme un `Uint8Array` en objet `{"0": …, "1": …}` : le fichier occupe environ dix fois sa taille et ne se relit pas comme un `Uint8Array`.
+- **Requêtes non filtrées par espace** : la colonne d'espace du schéma cible n'existe pas dans `kora_records`.
 
-### Cible : PostgreSQL
+### Implémentation de test et de démonstration : mémoire
 
-Le schéma cible est dans [`db/postgres/schema.sql`](../db/postgres/schema.sql). Il n'est pas encore utilisé par le code. La correspondance entités/tables et les points d'attention pour écrire un `PostgresRepository` sont détaillés dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md).
+`MemoryRepository` est conservé comme singleton sur `globalThis` (clé `__koraNewsroomStore__`) pour survivre au rechargement à chaud du code serveur. Il est construit par `resetStore()` à partir de `buildSeed(now)` ([`seed.ts`](../src/server/store/seed.ts)). La constante `STORE_VERSION` doit être incrémentée quand la forme des enregistrements change : le store est alors reconstruit au prochain appel. Aucune durabilité : un redémarrage efface toutes les modifications.
+
+### Cible : schéma relationnel
+
+Le schéma relationnel cible est dans [`db/postgres/schema.sql`](../db/postgres/schema.sql) : une table par entité, clés étrangères, contraintes et colonne d'espace. Il n'est pas utilisé : le stockage actuel en JSONB a été retenu par Lovable pour persister les données sans réécrire le `Repository`. Passer au schéma relationnel permettra de filtrer, paginer et contraindre en base. La correspondance entités/tables et les points d'attention sont détaillés dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md).
 
 ## Adaptateurs et services tiers
 
@@ -159,7 +185,7 @@ Les adaptateurs sont regroupés dans [`adapters/index.ts`](../src/server/adapter
 |---|---|---|---|
 | Génération de textes (dossier factuel, brouillon, variantes LinkedIn, résumés, notes éditoriales) | `TextModel` ([`text-model.ts`](../src/server/adapters/text-model.ts)) | `TemplateTextModel` : gabarits déterministes à partir des données du signal. | Réel, sans IA. |
 | Amélioration IA des textes | `AiTextEnhancer` ([`openai.ts`](../src/server/adapters/openai.ts)) | `OpenAiEnhancer` (OpenAI `gpt-4o-mini`), actif seulement si `AI_API_KEY` est défini et hors Vitest ; sinon `null`. | Réel si clé configurée. |
-| Collecte des sources | `Collector` ([`collector.ts`](../src/server/adapters/collector.ts)) | `SimulatedCollector` : génère des observations plausibles et des échecs d'accès reproductibles. | Simulé. |
+| Collecte des sources | `Collector` ([`collector.ts`](../src/server/adapters/collector.ts)) | `RealCollector` : lit le flux RSS ou Atom de la source (découvert dans la page HTML au besoin) ou interroge Google News RSS avec le nom de l'entreprise ; délai de 15 s par requête. Sous Vitest : `SimulatedCollector` (observations plausibles et échecs reproductibles). | Réel (flux RSS et Google News, pas de lecture de pages HTML). |
 | WordPress | `WordPressClient` ([`channels.ts`](../src/server/adapters/channels.ts)) | `SimulatedWordPress` : crée des brouillons distants fictifs et sait les retrouver par clé d'idempotence. | Simulé. |
 | LinkedIn | `LinkedInClient` ([`channels.ts`](../src/server/adapters/channels.ts)) | `ExportOnlyLinkedIn` : API indisponible, export manuel uniquement. | Export seul (conforme au pilote). |
 
@@ -191,13 +217,15 @@ Points d'insertion actuels : résumé des signaux à la collecte ([`services/col
 
 ### Brancher un vrai fournisseur
 
-Les interfaces `TextModel`, `Collector` et `WordPressClient` sont aujourd'hui **synchrones** (par exemple `collect(input): CollectResult`). Un collecteur web ou un client WordPress réel fera des appels réseau : il faudra rendre ces méthodes asynchrones (`Promise<…>`) et ajouter `await` aux points d'appel (`services/collection.ts`, `handlers/articles.ts`). `AiTextEnhancer` est déjà asynchrone et peut servir de modèle. Le nouvel adaptateur s'enregistre dans `defaults()` de `adapters/index.ts`, avec ses secrets lus dans `process.env`.
+`Collector` accepte déjà un résultat asynchrone (`collect(input): CollectResult | Promise<CollectResult>`, attendu par `services/collection.ts`) : `RealCollector` sert de modèle pour un fournisseur de recherche payant. `TextModel` et `WordPressClient` sont encore **synchrones** : un client WordPress réel fera des appels réseau, il faudra rendre ses méthodes asynchrones (`Promise<…>`) et ajouter `await` aux points d'appel (`handlers/articles.ts`). `AiTextEnhancer` est asynchrone. Le nouvel adaptateur s'enregistre dans `defaults()` de `adapters/index.ts`, avec ses secrets lus dans `process.env`.
 
 ## Budget et appels payants
 
 Toute opération susceptible de coûter (collecte, génération de dossier, variantes LinkedIn, résumés de newsletter) est enveloppée par `paidCall()` de [`services/usage.ts`](../src/server/services/usage.ts). Avant l'appel, le coût estimé (constantes `COSTS` de [`domain/budget.ts`](../src/server/domain/budget.ts)) est **réservé** ; si le plafond mensuel serait dépassé, rien n'est appelé, les appels payants sont suspendus pour le mois, un événement d'audit et une notification sont créés, et l'API répond 402 `budget_exhausted`. Après l'appel, la consommation est enregistrée et les alertes à 80 % et 100 % sont vérifiées. La lecture et les exports ne passent jamais par `paidCall` et restent disponibles.
 
 Exception à corriger : les résumés réécrits par OpenAI via `enhanceSummary()` lors de l'ingestion des observations ([`services/collection.ts`](../src/server/services/collection.ts), après le `paidCall` de la collecte) et lors d'une défusion ([`handlers/signals.ts`](../src/server/handlers/signals.ts)) ne sont pas enveloppés par `paidCall` : ils ne sont ni réservés ni bloqués quand les appels payants sont suspendus. Les autres points d'insertion d'OpenAI (dossier d'article, variantes LinkedIn, résumés de newsletter) sont bien à l'intérieur d'un `paidCall`.
+
+La collecte reste facturée comme un appel payant (une recherche à 0,012 € plus jusqu'à trois observations à 0,021 € par source et par exécution), alors que les flux RSS et Google News lus par `RealCollector` sont gratuits : une collecte complète de 150 sources consomme environ 11 € du budget de 150 €.
 
 Le coût enregistré est l'**estimation** de `COSTS`, pas le coût réellement facturé par OpenAI. Pour un suivi exact, `OpenAiEnhancer` devra remonter l'usage en jetons de la réponse et le convertir en euros via le paramètre `actual` de `paidCall`. Les règles détaillées sont dans [Règles métier](05-regles-metier.md).
 
@@ -222,10 +250,10 @@ Le cahier des charges (§5) décrit une cible composée d'une API métier, de Po
 | Brique cible | État actuel | Travail restant |
 |---|---|---|
 | API métier KORA | En place : `/api`, contrôles transverses, droits, audit. | Authentification réelle (voir [Sécurité](06-securite-et-flux-tiers.md)). |
-| PostgreSQL | Schéma écrit, non branché ; données en mémoire. | Implémenter `Repository` sur PostgreSQL, migrations, sauvegardes. |
-| Stockage de fichiers | Les fichiers importés sont conservés en mémoire (champ `bytes` de l'import). | Stockage objet (par exemple R2 ou S3), avec la même règle : original conservé tel quel. |
+| PostgreSQL | Base Supabase de Lovable Cloud, stockage générique en JSONB (`kora_records`), sans transactions ; schéma relationnel écrit mais non branché. | Schéma relationnel, transactions, pagination en base, sauvegardes et restauration testée. |
+| Stockage de fichiers | Les originaux importés sont sérialisés dans le JSON de l'import (`bytes`). | Stockage objet (par exemple Supabase Storage, R2 ou S3), avec la même règle : original conservé tel quel. |
 | Traitements asynchrones | La collecte s'exécute pendant la requête HTTP, avec un nombre d'essais borné. | File de travaux et planification quotidienne par source (le cahier des charges prévoit une collecte quotidienne). |
-| Adaptateurs | En place ; OpenAI réel si clé ; collecte, WordPress et LinkedIn simulés. | Collecteur web réel, client WordPress REST, éventuellement API LinkedIn. |
+| Adaptateurs | En place ; OpenAI réel si clé ; collecte réelle par flux RSS et Google News ; WordPress simulé ; LinkedIn en export. | Lecture des pages sans flux et fournisseur de recherche, client WordPress REST, éventuellement API LinkedIn. |
 | Secrets hors navigateur | Respecté : clés lues côté serveur uniquement. | Rotation et révocation documentées. |
 
 La liste complète des écarts avec le cahier des charges, exigence par exigence, est dans la [Couverture du cahier des charges](10-couverture-cahier-des-charges.md).

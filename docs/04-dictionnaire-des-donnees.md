@@ -1,6 +1,6 @@
 # Dictionnaire des données
 
-**Objet.** Décrire toutes les données manipulées par KORA : entités, champs, relations, énumérations, identifiants, correspondance avec le schéma PostgreSQL cible, jeu de démonstration et formats d'export. Ce document répond à deux exigences du cahier des charges : le dictionnaire des données de la documentation (§10) et le « manifeste et dictionnaire [qui] décrivent les relations » de la réversibilité (§13). Public : ingénieurs back-end et data.
+**Objet.** Décrire toutes les données manipulées par KORA : entités, champs, relations, énumérations, stockage réel, identifiants, correspondance avec le schéma PostgreSQL cible, jeu de démonstration et formats d'export. Ce document répond à deux exigences du cahier des charges : le dictionnaire des données de la documentation (§10) et le « manifeste et dictionnaire [qui] décrivent les relations » de la réversibilité (§13). Public : ingénieurs back-end et data.
 
 Les endpoints, paramètres et corps de requête sont dans la [Référence API](03-reference-api.md) ; les règles qui font évoluer les données (scoring, workflows, droits, budget) sont dans les [Règles métier](05-regles-metier.md).
 
@@ -8,13 +8,14 @@ Les endpoints, paramètres et corps de requête sont dans la [Référence API](0
 
 1. [Conventions](#conventions)
 2. [Vue d'ensemble](#vue-densemble)
-3. [Identifiants](#identifiants)
-4. [Fiches des entités](#fiches-des-entités)
-5. [Énumérations](#énumérations)
-6. [Correspondance avec PostgreSQL](#correspondance-avec-postgresql)
-7. [Données de démonstration](#données-de-démonstration)
-8. [Formats d'export](#formats-dexport)
-9. [Incohérences du modèle relevées](#incohérences-du-modèle-relevées)
+3. [Stockage réel](#stockage-réel)
+4. [Identifiants](#identifiants)
+5. [Fiches des entités](#fiches-des-entités)
+6. [Énumérations](#énumérations)
+7. [Correspondance avec PostgreSQL](#correspondance-avec-postgresql)
+8. [Données de démonstration](#données-de-démonstration)
+9. [Formats d'export](#formats-dexport)
+10. [Incohérences du modèle relevées](#incohérences-du-modèle-relevées)
 
 ## Conventions
 
@@ -23,8 +24,8 @@ Les endpoints, paramètres et corps de requête sont dans la [Référence API](0
 | Niveau | Fichier | Rôle |
 |---|---|---|
 | DTO | [`src/lib/api/types.ts`](../src/lib/api/types.ts) | Ce que l'API renvoie, partagé par le serveur et le front. |
-| Enregistrement | [`src/server/store/records.ts`](../src/server/store/records.ts) | Ce que le `Repository` stocke. Un enregistrement est le DTO **moins** les champs calculés, **plus** des champs internes jamais exposés. |
-| Table | [`db/postgres/schema.sql`](../db/postgres/schema.sql) | Schéma cible, non utilisé par le code aujourd'hui. |
+| Enregistrement | [`src/server/store/records.ts`](../src/server/store/records.ts) | Ce que le `Repository` stocke. Un enregistrement est le DTO **moins** les champs calculés, **plus** des champs internes jamais exposés. En production, chaque enregistrement est une ligne JSONB de `kora_records` (voir [Stockage réel](#stockage-réel)). |
+| Table | [`db/postgres/schema.sql`](../db/postgres/schema.sql) | Schéma relationnel cible, non branché : aucun code ne l'utilise. Les lignes « SQL » des fiches renvoient à ce schéma, pas au stockage réel. |
 
 Le passage d'un enregistrement au DTO se fait dans [`services/view.ts`](../src/server/services/view.ts) (`toCompany`, `toSource`, `toSignal`, `toArticle`, `articleDetail`, `toImport`, `toLinkedIn`, `toNewsletter`, `toRule`, `toProposal`, `toPublication`) et, pour les grilles, dans `toGrid` de [`handlers/signals.ts`](../src/server/handlers/signals.ts). Les entités sans conversion (utilisateurs, exécutions de collecte, observations, exemples, journal, notifications) ont le même type des deux côtés.
 
@@ -135,7 +136,118 @@ erDiagram
   WORKSPACE ||--o{ NOTIFICATION : "notifications d'équipe"
 ```
 
-Aucune contrainte d'intégrité n'est vérifiée par le store en mémoire : ce sont les handlers qui maintiennent les références (détachement à la suppression d'une entreprise, déplacement à la fusion de signaux, etc.). Le schéma SQL, lui, pose de vraies clés étrangères ; les cas où le code et le schéma divergent sont listés dans [Écarts entre le code et le schéma](#écarts-entre-le-code-et-le-schéma).
+Aucune contrainte d'intégrité n'est vérifiée par le dépôt, ni en mémoire ni en base (voir [Stockage réel](#stockage-réel)) : ce sont les handlers qui maintiennent les références (détachement à la suppression d'une entreprise, déplacement à la fusion de signaux, etc.). Le schéma SQL cible, lui, pose de vraies clés étrangères ; les cas où le code et ce schéma divergent sont listés dans [Écarts entre le code et le schéma](#écarts-entre-le-code-et-le-schéma).
+
+## Stockage réel
+
+Le code n'accède aux données que par l'interface `Repository` de [`store/repository.ts`](../src/server/store/repository.ts) : 18 collections (`get`, `list`, `insert`, `update`, `remove`), `getSettings`, `saveSettings` et `nextId`. Deux implémentations existent, et `getRepository()` choisit à chaque requête API :
+
+```115:125:src/server/store/memory.ts
+export async function getRepository(): Promise<Repository> {
+  if (!process.env["VITEST"] && process.env["SUPABASE_URL"]) {
+    const g = globalThis as Record<string, unknown>;
+    const db = (g['__koraDb__'] ??= new DbRepository()) as DbRepository;
+    await db.ensureReady();
+    return db;
+  }
+  const h = holder();
+  if (h && h.version === STORE_VERSION) return h.repo;
+  return resetStore();
+}
+```
+
+| Implémentation | Fichier | Retenue quand | Contenu au départ | Durée de vie |
+|---|---|---|---|---|
+| `DbRepository` | [`store/db.ts`](../src/server/store/db.ts) | `VITEST` absent et `SUPABASE_URL` défini : application hébergée sur Lovable Cloud | Utilisateurs, grille, règles et réglages du seed (voir [Installation initiale](#installation-initiale)) | Persistante : un redémarrage ne remet rien à zéro |
+| `MemoryRepository` | [`store/memory.ts`](../src/server/store/memory.ts) | Sinon : tests, ou poste local lancé avec `SUPABASE_URL` vide | Jeu de démonstration complet (voir [Données de démonstration](#données-de-démonstration)) | Jusqu'à l'arrêt du processus ou au changement de `STORE_VERSION` |
+
+En local, le fichier `.env` commité définit `SUPABASE_URL` mais pas la clé de service : `DbRepository` est retenu, le client Supabase lève « Missing Supabase environment variable(s): SUPABASE_SERVICE_ROLE_KEY » et toutes les routes `/api` répondent 500 `internal_error`. `SUPABASE_URL= bun run dev` force le dépôt en mémoire (voir [Démarrage](01-demarrage.md)).
+
+Le schéma relationnel [`db/postgres/schema.sql`](../db/postgres/schema.sql) n'est pas ce stockage : il reste la cible, non branchée, décrite dans [Correspondance avec PostgreSQL](#correspondance-avec-postgresql).
+
+### Tables `kora_records` et `kora_settings`
+
+Les deux tables sont créées dans le schéma `public` de la base PostgreSQL (Supabase) de Lovable Cloud par la migration [`drizzle/migrations/0000_kora_records.sql`](../drizzle/migrations/0000_kora_records.sql). [`drizzle.config.ts`](../drizzle.config.ts) lit l'URL de migration dans `LOVABLE_DB_MIGRATION_URL` ; [`drizzle/schema.ts`](../drizzle/schema.ts) est vide (fichier généré) ; les types TypeScript des deux tables sont générés dans [`integrations/supabase/types.ts`](../src/integrations/supabase/types.ts).
+
+**`kora_records`** : une ligne par enregistrement, toutes collections confondues.
+
+| Colonne | Type SQL | Contraintes | Contenu |
+|---|---|---|---|
+| `collection` | `text` | `NOT NULL` ; clé primaire avec `id` | Nom de la collection (liste ci-dessous) |
+| `id` | `text` | `NOT NULL` | Identifiant de l'enregistrement, égal à `data->>'id'` |
+| `data` | `jsonb` | `NOT NULL` | Enregistrement complet, au format de [`records.ts`](../src/server/store/records.ts) |
+| `created_at` | `timestamptz` | `NOT NULL DEFAULT now()` | Instant d'insertion ; ordre de lecture de `list()` |
+| `updated_at` | `timestamptz` | `NOT NULL DEFAULT now()` | Écrit par `update()` côté application ; aucun déclencheur |
+
+La clé primaire est `(collection, id)`. L'index `kora_records_collection_idx` sur `collection` double celui de la clé primaire, qui commence par la même colonne.
+
+Les valeurs de `collection` sont les noms des propriétés du `Repository` : `users`, `companies`, `sources`, `runs`, `observations`, `signals`, `grids`, `articles`, `publications`, `imports`, `linkedin`, `newsletters`, `rules`, `examples`, `ruleProposals`, `usage`, `audit`, `notifications`.
+
+**`kora_settings`** : les réglages (`Settings`) de l'espace, une seule ligne.
+
+| Colonne | Type SQL | Contraintes | Contenu |
+|---|---|---|---|
+| `workspace_id` | `text` | Clé primaire | Toujours `kora` |
+| `data` | `jsonb` | `NOT NULL` | Objet `Settings` complet |
+| `updated_at` | `timestamptz` | `NOT NULL DEFAULT now()` | Écrit par `saveSettings()` |
+
+Exemple de ligne `kora_records` installée en production (`created_at` et `updated_at` omis) :
+
+```json
+{
+  "collection": "users",
+  "id": "u_claire",
+  "data": {
+    "id": "u_claire",
+    "name": "Claire Dubois",
+    "email": "claire.dubois@inovallee.com",
+    "team": "Direction",
+    "roles": ["validateur"],
+    "avatarUrl": null
+  }
+}
+```
+
+### Contenu de la colonne `data`
+
+- `data` contient l'enregistrement entier : champs internes compris (`fictional`, `runCount`, `simulation`, `signature` des propositions de règle, `bytes` des imports) et enfants imbriqués non normalisés (versions, dossier factuel, approbations, variantes, sujets, historique des règles).
+- Le client Supabase sérialise en JSON : une propriété optionnelle absente ou `undefined` n'apparaît pas. À la lecture, rien n'est validé (`data` est simplement typé `T`) : un enregistrement écrit avec une ancienne forme la conserve.
+- `ImportRecord.bytes` est un `Uint8Array`. Sérialisé en JSON, il devient un objet `{"0": 37, "1": 80, …}` environ douze fois plus gros que le fichier (près de 125 Mo de JSON pour un import de 10 Mo), relu à chaque `imports.list()` et rendu comme objet ordinaire, plus comme `Uint8Array`.
+
+### Espace de travail
+
+- `kora_records` n'a pas de colonne d'espace : une base correspond à un seul espace.
+- `DbRepository.workspaceId` vaut `kora`, la clé de `kora_settings`. `MemoryRepository.workspaceId` reprend `Settings.workspaceId` du seed, `ws_inovallee`.
+- Le JSON des réglages installés en base contient toujours `workspaceId: "ws_inovallee"`, et le manifeste d'export écrit la constante `WORKSPACE_ID` (`ws_inovallee`) quel que soit le dépôt. Aucun handler ne lit `Repository.workspaceId`.
+
+### Accès et sécurité
+
+- Seul le serveur accède aux tables, par `supabaseAdmin` ([`integrations/supabase/client.server.ts`](../src/integrations/supabase/client.server.ts)), qui exige `SUPABASE_URL` et `SUPABASE_SERVICE_ROLE_KEY`. La migration accorde `GRANT ALL` au rôle `service_role`, qui n'est pas soumis à la RLS.
+- La RLS est activée sur les deux tables **sans aucune policy** : les rôles `anon` et `authenticated`, ceux de la clé publiable présente dans `.env` et dans les variables `VITE_*`, n'y voient ni n'y écrivent aucune ligne.
+- Le client navigateur [`integrations/supabase/client.ts`](../src/integrations/supabase/client.ts) et `auth-middleware.ts`, générés par Lovable, ne sont utilisés nulle part.
+- Chaque opération est une requête HTTPS vers l'API REST de Supabase : `get` lit une ligne ; `list` lit toute la collection par pages de 1 000 lignes triées par `created_at` ; `insert`, `update` et `remove` font une requête chacune.
+
+### Cohérence : aucune transaction
+
+- Aucune transaction ni aucun verrou. Un handler qui écrit plusieurs enregistrements (collecte, fusion de signaux, approbation, suppression d'une entreprise…) laisse un état partiel s'il échoue en route, et deux requêtes simultanées qui lisent puis réécrivent le même enregistrement perdent l'une des deux écritures.
+- `saveSettings` réécrit tout le JSON des réglages. La réservation du budget (`reservedEur`), la suspension et les alertes notifiées peuvent s'écraser entre requêtes simultanées ; la base étant persistante, une réservation restée en suspens n'est plus effacée par un redémarrage.
+- Aucune clé étrangère, contrainte `CHECK` ni unicité autre que la clé primaire : l'intégrité repose sur les handlers, comme en mémoire. Le journal d'audit n'est pas protégé contre la modification (le déclencheur `audit_events_no_update` n'existe que dans `schema.sql`).
+- Différences avec `MemoryRepository` :
+  - `update` d'un identifiant absent réussit sans rien écrire, alors que le dépôt mémoire lève « Enregistrement absent » ;
+  - une insertion en double échoue sur la clé primaire avec le message de PostgreSQL, au lieu de « Doublon d'identifiant » ;
+  - `list()` suit `created_at`, et non l'ordre d'insertion ; les lignes installées ensemble ont le même `created_at` et leur ordre n'est pas garanti ;
+  - `STORE_VERSION` est sans effet : un changement de forme des enregistrements suppose de migrer les JSON existants.
+
+### Installation initiale
+
+`ensureReady()` s'exécute à la première requête de chaque processus serveur ; son résultat est mémorisé, et une installation en échec est retentée à la requête suivante. Si `kora_settings` n'a pas de ligne `kora` :
+
+1. le seed est construit avec l'heure courante (`buildSeed(new Date())`), mais seuls les 4 utilisateurs, la grille `grid_v1` et les règles `rule_01` à `rule_08` sont écrits dans `kora_records` (upsert) ;
+2. les réglages du seed sont écrits dans `kora_settings` avec `reservedEur: 0` et `notifiedAlerts: []` : plafonds `DEFAULT_LIMITS`, `storageBaseGb` de 2,4 Go, aucune suspension.
+
+Aucune autre collection n'est remplie : la production démarre sans entreprise, source, signal, article, post, newsletter, exemple éditorial, proposition de règle, consommation ni événement de journal. Les dates de la grille et des règles sont relatives à l'instant d'installation (grille « créée » 120 jours plus tôt, `rule_02` en version 2 avec une version 1 datée de 110 jours plus tôt, tout signé Sophie Martin).
+
+Supprimer la ligne `kora` de `kora_settings` provoque une nouvelle installation au démarrage suivant du processus. L'upsert remplace alors les utilisateurs, `grid_v1` et `rule_01` à `rule_08` par leur version d'origine : les règles modifiées perdent leurs modifications, et `grid_v1` redevient active même si une grille plus récente l'est aussi. Les autres enregistrements restent en place.
 
 ## Identifiants
 
@@ -143,46 +255,62 @@ Les identifiants sont des chaînes. Le préfixe indique l'entité.
 
 ### Mécanisme `nextId`
 
-`Repository.nextId(prefix)` est **synchrone**. Dans [`store/memory.ts`](../src/server/store/memory.ts), un compteur unique, partagé par tous les préfixes, démarre à 1000 et s'incrémente à chaque appel :
+`Repository.nextId(prefix)` est **synchrone** dans les deux implémentations, mais le suffixe diffère.
 
-```32:35:src/server/store/memory.ts
-  nextId(prefix: string): string {
+En base ([`store/db.ts`](../src/server/store/db.ts)), le suffixe juxtapose l'horodatage en millisecondes écrit en base 36 et les six premiers caractères hexadécimaux d'un UUID aléatoire :
+
+```153:155:src/server/store/db.ts
+  nextId(prefix: string) {
+    return `${prefix}_${Date.now().toString(36)}${crypto.randomUUID().slice(0, 6)}`;
+  }
+```
+
+Un signal créé le 12 octobre 2026 à 23 h (heure de Paris) reçoit par exemple `sig_mv5qk2o03f9a1c`. L'horodatage occupe 8 caractères jusqu'en 2059 : les identifiants se trient donc à peu près par date de création. Ils restent uniques d'un redémarrage ou d'un processus à l'autre, avec 24 bits d'aléa par milliseconde.
+
+En mémoire ([`store/memory.ts`](../src/server/store/memory.ts)), un compteur unique, partagé par tous les préfixes, démarre à 1000 et s'incrémente à chaque appel :
+
+```94:97:src/server/store/memory.ts
+  nextId(prefix: string) {
     this.counter += 1;
     return `${prefix}_n${this.counter}`;
   }
 ```
 
-Le premier identifiant créé par l'API est donc `<préfixe>_n1001`, le suivant `<autre préfixe>_n1002`, etc. Le compteur n'est pas persisté : il repart à 1000 à chaque reconstruction du store. La lettre `n` évite toute collision avec les identifiants du seed, qui sont numérotés sans lettre (`art_0001`) ou nommés (`art_pasqal`).
+Le premier identifiant créé par l'API est donc `<préfixe>_n1001`, le suivant `<autre préfixe>_n1002`, etc. Le compteur n'est pas persisté, ce qui reste sans conséquence puisque le dépôt mémoire ne l'est pas non plus : il repart à 1000 à chaque reconstruction. La lettre `n` évite toute collision avec les identifiants du seed, qui sont numérotés sans lettre (`art_0001`) ou nommés (`art_pasqal`).
+
+Dans le tableau ci-dessous, `<s>` désigne ce suffixe : `<horodatage><aléa>` en base, `n<k>` en mémoire.
 
 ### Préfixes
 
 | Entité | Créée par l'API | Créée par le seed | Remarque |
 |---|---|---|---|
-| Espace de travail | — | `ws_inovallee` | Unique dans le pilote. |
-| Utilisateur | — | `u_sophie`, `u_lucas`, `u_claire`, `u_marc` | Pas de création par l'API. |
-| Entreprise | `co_<slug du nom>` ; à défaut `co_n<k>` | `co_pasqal`… et `co_<slug>` | Slug : `normalize(name)` (minuscules, sans accents, ponctuation en espaces), espaces en tirets, 40 caractères au plus. Si l'identifiant existe déjà, `nextId("co")`. |
-| Source | `src_n<k>` | `src_0001`… | |
-| Exécution de collecte | `run_n<k>` | `run_0001`… | |
-| Observation | `obs_n<k>` | `obs_0001`… | |
-| Signal | `sig_n<k>` | `sig_pasqal`…, `sig_0006` à `sig_0248` | Les signaux créés par défusion utilisent aussi `nextId("sig")`. |
-| Grille de score | `grid_v<version>` | `grid_v1` | Pas de `nextId`. |
-| Article | `art_n<k>` | `art_0001`…, `art_pasqal`, `art_draft2`, `art_draft3`, `art_review`, `art_contra`, `art_rejected`, `art_import` | |
+| Espace de travail | — | `ws_inovallee` | Unique dans le pilote ; `kora` dans `kora_settings` (voir [Espace de travail](#espace-de-travail)). |
+| Utilisateur | — | `u_sophie`, `u_lucas`, `u_claire`, `u_marc` | Pas de création par l'API ; installés aussi en production. |
+| Entreprise | `co_<slug du nom>` ; à défaut `co_<s>` | `co_pasqal`… et `co_<slug>` | Slug : `normalize(name)` (minuscules, sans accents, ponctuation en espaces), espaces en tirets, 40 caractères au plus. Si l'identifiant existe déjà, `nextId("co")`. |
+| Source | `src_<s>` | `src_0001`… | |
+| Exécution de collecte | `run_<s>` | `run_0001`… | |
+| Observation | `obs_<s>` | `obs_0001`… | |
+| Signal | `sig_<s>` | `sig_pasqal`…, `sig_0006` à `sig_0248` | Les signaux créés par défusion utilisent aussi `nextId("sig")`. |
+| Grille de score | `grid_v<version>` | `grid_v1` | Pas de `nextId` ; `grid_v1` est installée aussi en production. |
+| Article | `art_<s>` | `art_0001`…, `art_pasqal`, `art_draft2`, `art_draft3`, `art_review`, `art_contra`, `art_rejected`, `art_import` | |
 | Élément du dossier factuel | `fc_<articleId>_<i>` | `fc_<articleId>_<i>` | `i` commence à 1. |
-| Approbation | `apv_n<k>` | `appr_0001`… | Préfixes différents (voir [Incohérences](#incohérences-du-modèle-relevées)). |
-| Tentative de diffusion | `pub_n<k>` | `pub_0001`… | |
-| Import humain | `imp_n<k>` | `imp_0001`, `imp_0002` | |
+| Approbation | `apv_<s>` | `appr_0001`… | Préfixes différents (voir [Incohérences](#incohérences-du-modèle-relevées)). |
+| Tentative de diffusion | `pub_<s>` | `pub_0001`… | |
+| Import humain | `imp_<s>` | `imp_0001`, `imp_0002` | |
 | Proposition d'import | `<importId>_p<i>` | `prop_<importId>_<i>` | |
-| Post LinkedIn | `li_n<k>` | `li_pasqal`, `li_0002`… | |
+| Post LinkedIn | `li_<s>` | `li_pasqal`, `li_0002`… | |
 | Variante LinkedIn | `<postId>_v<i>` | `<postId>_v<i>` | En modification, l'identifiant d'une variante est fourni par le client. |
-| Édition de newsletter | `nl_n<k>` | `nl_current`, `nl_0001`… | |
-| Sujet de newsletter | `nli_n<k>` | `<editionId>_i<n>` | |
-| Règle éditoriale | `rule_n<k>` | `rule_01`… | |
+| Édition de newsletter | `nl_<s>` | `nl_current`, `nl_0001`… | |
+| Sujet de newsletter | `nli_<s>` | `<editionId>_i<n>` | |
+| Règle éditoriale | `rule_<s>` | `rule_01`… | `rule_01` à `rule_08` sont installées aussi en production. |
 | Exemple éditorial | — | `ex_01`… | Pas de création par l'API. |
-| Proposition de règle | `rp_n<k>` | `rp_01`… | |
-| Ligne de consommation | `use_n<k>` | `use_00001`… | |
-| Événement d'audit | `aud_n<k>` | `aud_0001`… | |
-| Notification | `notif_n<k>` | `notif_0001`… | |
+| Proposition de règle | `rp_<s>` | `rp_01`… | |
+| Ligne de consommation | `use_<s>` | `use_00001`… | |
+| Événement d'audit | `aud_<s>` | `aud_0001`… | |
+| Notification | `notif_<s>` | `notif_0001`… | |
 | Brouillon WordPress distant | `wp-<1000 à 9999>` | `wp-4821`, `wp-3001`… | Calculé par `SimulatedWordPress` à partir de la clé d'idempotence du premier envoi (`1000 + hash32(clé) % 9000`) ; les versions suivantes mettent à jour le même brouillon. |
+
+En production, les seuls identifiants issus du seed sont ceux des utilisateurs, de `grid_v1` et de `rule_01` à `rule_08` ; tous les autres enregistrements portent un identifiant créé par l'API.
 
 ### Clé d'idempotence
 
@@ -196,7 +324,7 @@ Le premier identifiant créé par l'API est donc `<préfixe>_n1001`, le suivant 
 
 **Rôle.** Périmètre d'isolation des données d'un client : dans le pilote, l'espace unique d'Inovallée.
 
-Il n'existe pas d'entité `Workspace` en TypeScript : seul `Repository.workspaceId` (`ws_inovallee`) et `Settings.workspaceId` le portent. En SQL, la table `workspaces (id, name, created_at)` est la racine de toutes les clés composites `(workspace_id, id)`.
+Il n'existe pas d'entité `Workspace` en TypeScript : seuls `Repository.workspaceId` et `Settings.workspaceId` le portent. Ils valent `ws_inovallee` en mémoire ; en base, `Repository.workspaceId` vaut `kora` alors que `Settings.workspaceId` reste `ws_inovallee` (voir [Espace de travail](#espace-de-travail)). Dans le schéma cible, la table `workspaces (id, name, created_at)` est la racine de toutes les clés composites `(workspace_id, id)`.
 
 #### Utilisateur (`User`)
 
@@ -212,7 +340,7 @@ Il n'existe pas d'entité `Workspace` en TypeScript : seul `Repository.workspace
 | `avatarUrl` | `string \| null` | nullable | Photo | `null` dans le seed |
 
 - **Enregistrement.** Identique au DTO.
-- **Intégrité.** Lecture seule : l'API ne permet ni de créer, ni de modifier, ni de supprimer un utilisateur. La session de démonstration est choisie par cookie (`POST /api/me`).
+- **Intégrité.** Lecture seule : l'API ne permet ni de créer, ni de modifier, ni de supprimer un utilisateur. Les quatre utilisateurs du seed sont installés en production ; les changer suppose de modifier directement les lignes `users` de `kora_records`. La session est choisie par cookie (`POST /api/me`).
 - **SQL.** `users` (plus `created_at`) et `user_roles (user_id, role)` avec PK `(workspace_id, user_id, role)`.
 
 #### Paramètres de l'espace (`Settings`)
@@ -221,15 +349,15 @@ Il n'existe pas d'entité `Workspace` en TypeScript : seul `Repository.workspace
 
 | Champ | Type TS | Présence | Description | Contraintes et valeurs |
 |---|---|---|---|---|
-| `workspaceId` | `string` | oui | Espace | `ws_inovallee` |
+| `workspaceId` | `string` | oui | Espace | `ws_inovallee`, y compris en base où la ligne est rangée sous `kora` |
 | `quotaLimits` | `Record<QuotaKey, number>` | oui | Plafond de chaque compteur | Valeurs de `DEFAULT_LIMITS`, voir tableau ci-dessous |
 | `paidCallsSuspended` | `boolean` | oui | Appels payants suspendus | Passe à `true` quand une réservation dépasserait le budget |
 | `suspendedMonth` | `string \| null` | nullable | Mois de la suspension | `AAAA-MM` ; la suspension ne vaut que pour ce mois |
-| `reservedEur` | `number` | oui | Montant réservé par les appels en cours | ≥ 0 ; revient à 0 hors appel |
+| `reservedEur` | `number` | oui | Montant réservé par les appels en cours | ≥ 0 ; revient à 0 hors appel, sauf écriture concurrente perdue (voir [Cohérence](#cohérence--aucune-transaction)) |
 | `notifiedAlerts` | `string[]` | oui | Seuils déjà signalés | Clés `<AAAA-MM>:<compteur>:<seuil_80 \| atteint>` |
-| `storageBaseGb` | `number` | oui | Volume client hors imports | 2,4 Go dans le seed |
+| `storageBaseGb` | `number` | oui | Volume client hors imports | 2,4 Go dans le seed, valeur installée telle quelle en production |
 
-- **Enregistrement uniquement** : pas de DTO, l'API expose `UsageSnapshot`. Il n'existe aucun endpoint pour modifier les plafonds : un changement suppose une modification de `DEFAULT_LIMITS` ([`domain/budget.ts`](../src/server/domain/budget.ts)) et un redémarrage.
+- **Enregistrement uniquement** : pas de DTO, l'API expose `UsageSnapshot`. Stocké dans `kora_settings.data` en production. Il n'existe aucun endpoint pour modifier les plafonds. En mémoire, ils sont recopiés de `DEFAULT_LIMITS` ([`domain/budget.ts`](../src/server/domain/budget.ts)) à chaque reconstruction ; en base, ils sont figés à l'installation, et modifier `DEFAULT_LIMITS` n'a plus d'effet : il faut modifier `quotaLimits` dans `kora_settings.data`.
 - **SQL.** `workspace_settings` aplatit `quotaLimits` en colonnes `limit_*` dont les valeurs par défaut reprennent `DEFAULT_LIMITS` ; `notifiedAlerts` devient la table `quota_alerts (month, meter, level)`.
 
 Plafonds et compteurs (`METERS` et `DEFAULT_LIMITS` de [`domain/budget.ts`](../src/server/domain/budget.ts), calcul dans `usageSnapshot` de [`services/usage.ts`](../src/server/services/usage.ts)) :
@@ -261,7 +389,8 @@ Plafonds et compteurs (`METERS` et `DEFAULT_LIMITS` de [`domain/budget.ts`](../s
 
 - **Enregistrement uniquement.** Exposé de façon agrégée par `GET /api/usage`.
 - **Coûts unitaires** (`COSTS` de [`domain/budget.ts`](../src/server/domain/budget.ts)) : article 0,45 €, post LinkedIn 0,08 €, résumé 0,02 €, recherche web 0,012 €, observation 0,021 €. Ce sont des estimations, pas le coût facturé par le fournisseur.
-- **Intégrité.** `paidCall` réserve l'estimation dans `Settings.reservedEur` avant l'appel, la libère dans un `finally`, puis insère les lignes et vérifie les seuils d'alerte. Une ligne sans unité ni coût n'est pas insérée. Une collecte réserve 0,075 € (une recherche et trois observations), puis enregistre une ligne `search_query` et, si la source a renvoyé des publications, une ligne `observation` par publication renvoyée (trois au plus, doublons compris).
+- **Intégrité.** `paidCall` réserve l'estimation dans `Settings.reservedEur` avant l'appel, la libère dans un `finally`, puis insère les lignes et vérifie les seuils d'alerte. Une ligne sans unité ni coût n'est pas insérée. Une collecte réserve 0,075 € (une recherche et trois observations), puis enregistre une ligne `search_query` et, si la source a renvoyé des publications, une ligne `observation` dont `units` compte les publications renvoyées (trois au plus, doublons compris).
+- **Collecte réelle.** Le collecteur réel lit des flux RSS et Google News gratuits, mais chaque exécution reste comptée comme un appel payant estimé. Un flux Google News renvoyant presque toujours au moins trois entrées, une collecte complète de 150 sources consomme environ 11,25 € : le budget de 150 € couvre environ 13 collectes complètes par mois.
 - **SQL.** `usage_ledger`, avec `cost_eur numeric(10,4)`.
 
 #### Compteurs de quotas (`QuotaMeter`, `UsageSnapshot`)
@@ -303,11 +432,12 @@ Aucun stockage : tout est recalculé à partir de `usage`, des collections et de
 | `sourceCount` | `number` | calculé | Nombre de sources | |
 | `failingSourceCount` | `number` | calculé | Sources dont `access = "erreur"` | |
 | `signalCount` | `number` | calculé | Signaux rattachés | |
-| `fictional` | `boolean` | interne | Entreprise inventée pour la démonstration | `false` pour toute entreprise créée par l'API |
+| `fictional` | `boolean` | interne | Entreprise inventée pour la démonstration | `false` pour toute entreprise créée par l'API ; lu seulement par le collecteur simulé des tests |
 
 - **Clés étrangères.** Aucune.
 - **Intégrité.**
   - Création refusée si le nom normalisé ou le domaine existe déjà (409 `duplicate_company`) ou si le quota `companies` est atteint (422 `quota_exceeded`).
+  - La création (`createCompany` dans [`handlers/registry.ts`](../src/server/handlers/registry.ts)) insère aussi une source `recherche_web` « Google News — <nom> » : URL `googleNewsUrl(nom)`, fréquence `quotidienne`, accès `en_attente`, `simulation: { mode: "auto" }`. La réponse 201 porte donc `sourceCount: 1`. Cette source ne passe pas par le contrôle du quota `sources` ni par l'audit `source.create`, et son URL garde l'ancien nom si l'entreprise est renommée.
   - La suppression (`deleteCompany`) supprime les sources de l'entreprise ; détache ses signaux (`companyId = null`, revue `homonymie` « Entreprise « X » retirée du registre : à rattacher »), ses observations, ses articles et ses posts LinkedIn. Les exécutions de collecte sont conservées.
 - **DTO et enregistrement.** `toCompany` retire `fictional` et ajoute les trois compteurs.
 - **SQL.** `companies`, avec `brand_initials`, `brand_bg`, `brand_fg` (couleurs hexadécimales vérifiées), `UNIQUE (workspace_id, domain)` et un index unique sur `lower(name)`. Il n'y a pas de colonne `fictional`.
@@ -323,16 +453,16 @@ Aucun stockage : tout est recalculé à partir de `usage`, des collections et de
 | `type` | `SourceType` | oui | Nature de la source | 6 valeurs, voir [Énumérations](#registre-et-collecte) |
 | `label` | `string` | oui | Libellé | 1 à 120 caractères |
 | `url` | `string` | oui | Adresse surveillée | 2 048 caractères au plus ; `http` ou `https` ; adresses internes refusées (`validateSourceUrl`) ; unique par entreprise |
-| `frequency` | `SourceFrequency` | oui | Fréquence prévue | Par défaut `hebdomadaire` pour `recherche_web`, `quotidienne` sinon |
+| `frequency` | `SourceFrequency` | oui | Fréquence prévue | Par défaut `hebdomadaire` pour `recherche_web`, `quotidienne` sinon ; `quotidienne` pour la source Google News créée avec l'entreprise |
 | `access` | `SourceAccess` | oui | État d'accès | `en_attente` à la création ; `erreur` posé seulement par la collecte |
 | `lastRunAt` | `string \| null` | nullable | Dernière exécution | |
 | `lastSuccessAt` | `string \| null` | nullable | Dernière réussite | |
-| `failureCode` | `string \| null` | nullable | Code d'échec | Par exemple `HTTP_403`, `TIMEOUT`, `HTTP_404`, `TLS_ERROR` |
-| `failureReason` | `string \| null` | nullable | Motif lisible | |
+| `failureCode` | `string \| null` | nullable | Code d'échec | Collecteur réel : `TIMEOUT` (15 s), `HTTP_<statut>` ou `NETWORK` ; le seed contient aussi `TLS_ERROR` |
+| `failureReason` | `string \| null` | nullable | Motif lisible | Message de l'erreur réseau, par exemple « Réponse HTTP 404 » |
 | `attempts` | `number` | oui | Essais de la dernière exécution en échec | 0 à 3 (`MAX_ATTEMPTS`) ; 0 après un succès |
 | `createdAt` | `string` | interne | Création | |
-| `runCount` | `number` | interne | Nombre d'exécutions | Sert au collecteur simulé |
-| `simulation` | `SourceSimulation` | interne | Comportement simulé | `{ mode }` parmi `auto`, `news`, `empty`, `transient`, `fail` (ce dernier avec `code` et `reason`) |
+| `runCount` | `number` | interne | Nombre d'exécutions | Lu seulement par le collecteur simulé des tests |
+| `simulation` | `SourceSimulation` | interne | Comportement simulé | `{ mode }` parmi `auto`, `news`, `empty`, `transient`, `fail` (ce dernier avec `code` et `reason`) ; ignoré par le collecteur réel |
 
 - **Clés étrangères.** `companyId` → `Company`.
 - **Intégrité.**
@@ -356,11 +486,11 @@ Aucun stockage : tout est recalculé à partir de `usage`, des collections et de
 | `finishedAt` | `string \| null` | nullable | Fin | Toujours renseigné aujourd'hui |
 | `status` | `CollectionRunStatus` | oui | Résultat | `succes`, `succes_sans_actualite`, `echec`, `bloque_quota` |
 | `newObservations` | `number` | oui | Observations nouvelles | Après dédoublonnage ; 3 au plus (`MAX_ITEMS`) |
-| `errorCode` | `string \| null` | nullable | Code d'erreur | Code du collecteur, ou `budget_exhausted` |
+| `errorCode` | `string \| null` | nullable | Code d'erreur | Code du collecteur (`TIMEOUT`, `HTTP_<statut>`, `NETWORK` pour le collecteur réel), ou `budget_exhausted` |
 | `errorMessage` | `string \| null` | nullable | Message | « Budget API atteint : collecte suspendue » en cas de blocage |
 
 - **Clés étrangères.** `sourceId` → `Source` ; `companyId` → `Company` (non vérifiée).
-- **Intégrité.** Insertion seule. Une exécution créée par l'API a `startedAt === finishedAt`, car l'horloge est lue une fois par requête (`ctx.now`). La collecte d'une source désactivée est refusée (409 `source_disabled`). Une exécution `bloque_quota` ne modifie pas la source. Seule la collecte globale (`POST /api/collect`) laisse un événement d'audit (`collect.all`).
+- **Intégrité.** Insertion seule. Une exécution créée par l'API a `startedAt === finishedAt`, car l'horloge est lue une fois par requête (`ctx.now`) : la durée réelle des appels réseau (jusqu'à trois essais de 15 s) n'est pas enregistrée. La collecte d'une source désactivée est refusée (409 `source_disabled`). Une exécution `bloque_quota` ne modifie pas la source. Seule la collecte globale (`POST /api/collect`) laisse un événement d'audit (`collect.all`).
 - **SQL.** `collection_runs`, avec `CHECK (finished_at >= started_at)` et `CHECK (status NOT IN ('echec','bloque_quota') OR error_code IS NOT NULL)`. La FK vers `sources` est en `ON DELETE CASCADE`.
 
 ### Signal Engine : observations, signaux, scores
@@ -375,7 +505,7 @@ Aucun stockage : tout est recalculé à partir de `usage`, des collections et de
 | `domain` | `string` | oui | Domaine | Sert à compter les corroborations indépendantes |
 | `brand` | `{ initials; bg; fg }` | oui | Monogramme | Même forme que `Company.brand` |
 
-Pas de collection : les médias connus sont dans `OUTLETS` ([`catalog.ts`](../src/server/store/catalog.ts)) ; une observation directe reprend le monogramme de l'entreprise.
+Pas de collection : l'émetteur est recopié dans chaque observation. Le seed et le collecteur simulé puisent dans `OUTLETS` ([`catalog.ts`](../src/server/store/catalog.ts)). Le collecteur réel (`parseFeed` dans [`adapters/collector.ts`](../src/server/adapters/collector.ts)) prend la balise `<source>` de Google News : nom du média, domaine de son attribut `url`, monogramme gris calculé. À défaut, il prend l'entreprise de la source, avec son domaine et son monogramme, même pour un flux généraliste filtré sur son nom ; si la source n'a pas d'entreprise, il prend le nom d'hôte du flux.
 
 #### Observation (`Observation`)
 
@@ -393,11 +523,12 @@ Pas de collection : les médias connus sont dans `OUTLETS` ([`catalog.ts`](../sr
 | `excerpt` | `string` | oui | Extrait | HTML retiré, instructions neutralisées, 1 200 caractères au plus |
 | `collectedAt` | `string` | oui | Date de collecte | |
 | `publishedAt` | `string \| null` | nullable | Date de publication | Jamais inventée |
-| `eventDate` | `string \| null` | nullable | Date de l'événement | Jamais inventée |
+| `eventDate` | `string \| null` | nullable | Date de l'événement | Jamais inventée ; toujours `null` avec le collecteur réel |
 | `matchConfidence` | `number` | oui | Confiance du rattachement | 0 à 100 ; ce n'est pas une probabilité de véracité |
 | `isSyndicated` | `boolean` | oui | Reprise d'un même communiqué | Recalculé à chaque ingestion (similarité ≥ 0,8 avec une publication antérieure d'un autre domaine) |
 
-- **Valeurs de `matchConfidence` à la collecte** (`matchCompany` de [`domain/clustering.ts`](../src/server/domain/clustering.ts)) : 97 si l'URL est sur le domaine officiel ; 92 ou 84 si l'entreprise de la source est nommée par sa raison sociale ou par un alias ; 82 ou 66 pour une autre entreprise du registre ; 70 si plusieurs candidates mais l'entreprise de la source en fait partie ; 52, 45 ou 20 sans rattachement. Un rattachement manuel la fixe à 100.
+- **Collecte réelle.** Pour une entrée Google News, `url` est le lien de redirection `https://news.google.com/rss/articles/…`, et non l'adresse chez le média ; le suffixe « - <média> » est retiré du titre. `excerpt` vient de `<description>`, `<summary>` ou `<content>` ; `publishedAt` de `<pubDate>`, `<published>` ou `<updated>` ; `eventDate` vaut toujours `null`. Les entrées datées de plus de 180 jours sont ignorées, et seules les trois plus récentes de chaque exécution sont ingérées (`MAX_ITEMS`).
+- **Valeurs de `matchConfidence` à la collecte** (`matchCompany` de [`domain/clustering.ts`](../src/server/domain/clustering.ts)) : 97 si l'URL est sur le domaine officiel (jamais le cas d'un lien Google News) ; 92 ou 84 si l'entreprise de la source est nommée par sa raison sociale ou par un alias ; 82 ou 66 pour une autre entreprise du registre ; 70 si plusieurs candidates mais l'entreprise de la source en fait partie ; 52, 45 ou 20 sans rattachement. Un rattachement manuel la fixe à 100.
 - **Clés étrangères.** `signalId` → `Signal`, `sourceId` → `Source`, `companyId` → `Company`.
 - **Intégrité.** Rattachement, détachement, fusion et défusion de signaux modifient `signalId`, `companyId` et `matchConfidence`.
 - **SQL.** `observations`, avec l'émetteur aplati en `outlet_name`, `outlet_domain`, `outlet_brand jsonb`, une colonne supplémentaire `url_canonical` et `UNIQUE (workspace_id, url_canonical)`.
@@ -419,10 +550,10 @@ Pas de collection : les médias connus sont dans `OUTLETS` ([`catalog.ts`](../sr
 | `statusReason` | `string \| null` | nullable | Motif de la décision | 500 caractères au plus ; obligatoire pour passer à `rejete` (422 `reason_required`) ; remis à `null` à chaque changement de statut sans motif |
 | `observationIds` | `string[]` | oui | Observations regroupées | Recalculé dans le DTO à partir de `Observation.signalId` |
 | `primaryOutlet` | `Outlet` | oui | Émetteur principal | |
-| `primaryUrl` | `string` | oui | Lien principal | |
+| `primaryUrl` | `string` | oui | Lien principal | URL de l'observation principale ; lien `news.google.com` si elle vient de Google News |
 | `collectedAt` | `string` | oui | Première collecte | |
 | `publishedAt` | `string \| null` | nullable | Date de publication | |
-| `eventDate` | `string \| null` | nullable | Date de l'événement | |
+| `eventDate` | `string \| null` | nullable | Date de l'événement | Toujours `null` pour un signal issu du collecteur réel |
 | `matchConfidence` | `number` | oui | Confiance du rattachement | 0 à 100 |
 | `score` | `ScoreResult` | oui | Score éditorial | Voir fiche dédiée |
 | `evidence` | `EvidenceState` | calculé | Indicateur documentaire | `computeEvidence` à chaque lecture |
@@ -507,7 +638,7 @@ Exemple : extrait du DTO `sig_pasqal` du seed (champs textuels, dates et lien pr
 | `note` | `string \| null` | nullable | Motif du changement | |
 | `id` | `string` | interne | Identifiant | `grid_v<version>` |
 
-- **Intégrité.** Créer une grille désactive les précédentes ; les grilles ne sont jamais modifiées ni supprimées. Les poids par défaut sont 30 / 20 / 20 / 20 / 10 (`DEFAULT_WEIGHTS` de [`domain/scoring.ts`](../src/server/domain/scoring.ts)).
+- **Intégrité.** Créer une grille désactive les précédentes ; les grilles ne sont jamais modifiées ni supprimées par l'API. Les poids par défaut sont 30 / 20 / 20 / 20 / 10 (`DEFAULT_WEIGHTS` de [`domain/scoring.ts`](../src/server/domain/scoring.ts)). `grid_v1` est installée en production ; une réinstallation la remet active (voir [Installation initiale](#installation-initiale)).
 - **SQL.** `scoring_grids`, clé `(workspace_id, version)`, poids en colonnes `w_importance` … `w_diffusion` avec `CHECK` de somme à 100, index unique partiel `scoring_grids_one_active`. La colonne `id` n'existe pas.
 
 #### Résultat de score (`ScoreResult`)
@@ -773,6 +904,7 @@ Calcul dans `computeEvidence` de [`domain/evidence.ts`](../src/server/domain/evi
 | `history` | `RuleRevision[]` | interne | Versions précédentes | `{ version, text, active, updatedAt, updatedBy }` |
 
 - **DTO et enregistrement.** `toRule` retire `history`.
+- **Production.** Les huit règles du seed (`rule_01` à `rule_08`) sont installées avec leur historique ; `GET /api/editorial-dna` les trie par identifiant.
 - **SQL.** `editorial_rules` et `editorial_rule_revisions`.
 
 #### Exemple éditorial (`EditorialExample`)
@@ -787,7 +919,7 @@ Calcul dans `computeEvidence` de [`domain/evidence.ts`](../src/server/domain/evi
 | `url` | `string \| null` | nullable | Lien | |
 | `publishedAt` | `string \| null` | nullable | Date de publication | |
 
-Lecture seule (seed uniquement). SQL : `editorial_examples`.
+Lecture seule (seed uniquement). Les exemples ne sont pas installés en production et aucun endpoint ne permet d'en créer : la collection y reste vide. SQL : `editorial_examples`.
 
 #### Proposition de règle (`RuleProposal`)
 
@@ -920,14 +1052,16 @@ Le détail des droits par action est dans la matrice `MATRIX` de [`domain/permis
 
 **`SourceType`**
 
-| Valeur | Libellé | Signification |
-|---|---|---|
-| `site_officiel` | Site officiel | Site de l'entreprise. |
-| `actualites` | Page actualités | Rubrique d'actualités du site. |
-| `communiques` | Communiqués | Salle de presse. |
-| `rss` | Flux RSS | Flux de syndication. |
-| `recherche_web` | Recherche web | Requête de recherche sur le nom de l'entreprise. |
-| `newsletter_import` | Newsletter importée | Lettre d'information importée (pas de connexion à une boîte mail). |
+| Valeur | Libellé | Signification | Lecture par le collecteur réel |
+|---|---|---|---|
+| `site_officiel` | Site officiel | Site de l'entreprise. | URL lue ; flux découvert dans la page si ce n'en est pas un. |
+| `actualites` | Page actualités | Rubrique d'actualités du site. | Google News si l'URL ne contient ni `rss`, ni `feed`, ni `atom`, ni `xml` ; sinon lue comme un flux. |
+| `communiques` | Communiqués | Salle de presse. | Comme `site_officiel`. |
+| `rss` | Flux RSS | Flux de syndication. | Comme `site_officiel`. |
+| `recherche_web` | Recherche web | Requête Google News sur le nom de l'entreprise. | Google News, nom entre guillemets (`googleNewsUrl`, `hl=fr&gl=FR`) ; une URL `news.google.com` déjà enregistrée est lue telle quelle. |
+| `newsletter_import` | Newsletter importée | Lettre d'information importée (pas de connexion à une boîte mail). | Comme `site_officiel`. |
+
+Le collecteur réel (`RealCollector`, nom `collecteur-rss-google-v1`, dans [`adapters/collector.ts`](../src/server/adapters/collector.ts)) sert hors des tests. Une page qui n'est pas un flux RSS ou Atom et ne déclare aucun `<link type="application/rss+xml">` (ou `atom+xml`) donne une exécution réussie sans publication. Sauf pour Google News et pour le flux du domaine de l'entreprise, seules les entrées qui citent le nom ou un alias de l'entreprise sont gardées.
 
 **`SourceFrequency`** (libellés de [`veille/labels.ts`](../src/components/veille/labels.ts))
 
@@ -936,7 +1070,7 @@ Le détail des droits par action est dans la matrice `MATRIX` de [`domain/permis
 | `quotidienne` | Quotidienne | Collecte prévue chaque jour. |
 | `hebdomadaire` | Hebdomadaire | Collecte prévue chaque semaine. |
 
-La collecte planifiée n'est pas implémentée : la fréquence est informative.
+La collecte planifiée n'est pas implémentée : la fréquence est informative, et toute collecte est déclenchée à la main (`POST /api/collect` ou `POST /api/sources/:id/collect`).
 
 **`SourceAccess`**
 
@@ -944,7 +1078,7 @@ La collecte planifiée n'est pas implémentée : la fréquence est informative.
 |---|---|---|
 | `ok` | Opérationnelle | Dernière exécution réussie. |
 | `erreur` | En échec | Trois essais infructueux lors de la dernière exécution ; `failureCode` renseigné. Valeur posée par la collecte seulement. |
-| `en_attente` | En attente | Jamais exécutée, ou URL modifiée. |
+| `en_attente` | En attente | Jamais exécutée (y compris la source Google News créée avec l'entreprise), ou URL modifiée. |
 | `desactivee` | Désactivée | Exclue de la collecte. |
 
 **`CollectionRunStatus`**
@@ -952,11 +1086,11 @@ La collecte planifiée n'est pas implémentée : la fréquence est informative.
 | Valeur | Libellé | Signification |
 |---|---|---|
 | `succes` | Succès | Au moins une observation nouvelle. |
-| `succes_sans_actualite` | Succès · aucune actualité | Accès réussi, rien de nouveau. |
-| `echec` | Échec | Accès impossible après les essais. |
+| `succes_sans_actualite` | Succès · aucune actualité | Accès réussi, rien de nouveau ; aussi une page sans flux. |
+| `echec` | Échec | Accès impossible après trois essais, quelle que soit l'erreur (le champ `transient` du collecteur est ignoré). |
 | `bloque_quota` | Bloquée (quota) | Budget API atteint, collecte non tentée. |
 
-**`SourceSimulation.mode`** (interne, [`records.ts`](../src/server/store/records.ts) ; comportement de `SimulatedCollector` dans [`collector.ts`](../src/server/adapters/collector.ts) ; sans libellé)
+**`SourceSimulation.mode`** (interne, [`records.ts`](../src/server/store/records.ts) ; comportement de `SimulatedCollector` dans [`collector.ts`](../src/server/adapters/collector.ts) ; sans libellé). Le collecteur simulé ne sert que sous Vitest : hors des tests, ce champ est écrit mais jamais lu.
 
 | Valeur | Signification |
 |---|---|
@@ -966,7 +1100,7 @@ La collecte planifiée n'est pas implémentée : la fréquence est informative.
 | `transient` | Échoue au premier essai (`TIMEOUT`) puis réussit. |
 | `fail` | Échoue toujours avec `code` et `reason`. |
 
-Une entreprise réelle (`fictional: false`) ne reçoit jamais d'événement inventé : le collecteur simulé ne lui renvoie que des reprises d'événements déjà connus.
+Dans les tests, une entreprise réelle (`fictional: false`) ne reçoit jamais d'événement inventé : le collecteur simulé ne lui renvoie que des reprises d'événements déjà connus.
 
 ### Signaux et scoring
 
@@ -1208,7 +1342,7 @@ Une entreprise réelle (`fictional: false`) ne reçoit jamais d'événement inve
 
 ## Correspondance avec PostgreSQL
 
-Le schéma [`db/postgres/schema.sql`](../db/postgres/schema.sql) cible PostgreSQL 14 ou plus, dans le schéma `kora`, et s'exécute en une transaction. Il n'est branché sur aucun code.
+Le schéma [`db/postgres/schema.sql`](../db/postgres/schema.sql) cible PostgreSQL 14 ou plus, dans le schéma `kora`, et s'exécute en une transaction. Il reste la **cible relationnelle**, branchée sur aucun code : la production stocke chaque enregistrement en JSONB dans `public.kora_records` (voir [Stockage réel](#stockage-réel)), sans les clés, contraintes, index ni politiques décrits ici. Cette section sert à passer un jour de ce stockage au schéma relationnel.
 
 ### Principes du schéma
 
@@ -1219,6 +1353,8 @@ Le schéma [`db/postgres/schema.sql`](../db/postgres/schema.sql) cible PostgreSQ
 - **Contraintes différables** pour les références croisées (`signals.article_id` ↔ `articles.signal_id`) et l'ordre des sujets de newsletter.
 
 ### Collections, enregistrements et tables
+
+La première colonne est aussi la valeur de `kora_records.collection` dans le stockage réel ; les réglages sont la ligne `kora` de `kora_settings`.
 
 | Collection du `Repository` | Enregistrement | Tables | Notes de correspondance |
 |---|---|---|---|
@@ -1247,7 +1383,7 @@ Le schéma [`db/postgres/schema.sql`](../db/postgres/schema.sql) cible PostgreSQ
 | Élément | Code | `schema.sql` | Conséquence pour une implémentation SQL |
 |---|---|---|---|
 | `CompanyRecord.fictional` | Présent | Absent | Ajouter une colonne ou accepter de perdre l'information (sans effet fonctionnel). |
-| `SourceRecord.runCount`, `simulation` | Présents | Absents | Propres au collecteur simulé ; à abandonner avec le vrai collecteur. |
+| `SourceRecord.runCount`, `simulation` | Présents | Absents | Lus seulement par le collecteur simulé des tests, ignorés par le collecteur réel : peuvent être abandonnés. |
 | `SignalRecord.observationIds` | Stocké, ordonné | Absent | Le reconstruire par `observations.signal_id` ; l'ordre d'origine est perdu (trier par `collected_at`). |
 | `Signal.primaryOutlet.brand` | Présent | Absent | Reprendre `outlet_brand` de l'observation correspondante, ou ajouter une colonne. |
 | `GridRecord.id` | `grid_v<n>` | Absent (clé `version`) | Le recalculer à la lecture. |
@@ -1263,10 +1399,16 @@ Le schéma [`db/postgres/schema.sql`](../db/postgres/schema.sql) cible PostgreSQ
 | `linkedin_variants` | Identifiant fourni par le client en modification, unique dans le post seulement | Clé `(workspace_id, id)` sur tout l'espace | Un client peut provoquer un conflit de clé avec une variante d'un autre post ; préfixer ou régénérer les identifiants. |
 | `Settings.notifiedAlerts` | Chaînes `AAAA-MM:<compteur>:<niveau>` | `quota_alerts (month, meter, level, notified_at)` | Découper la chaîne ; `notified_at` n'a pas d'équivalent. |
 | `quota_alerts.meter` | Alertes émises sur 7 compteurs (`ALERT_METERS`) | `CHECK` sur les 9 | Sans effet. |
+| Identifiant d'espace | `kora` en clé de `kora_settings` ; `ws_inovallee` dans `Settings.workspaceId` et le manifeste d'export | `workspace_id` sur chaque ligne | Choisir une seule valeur à la migration. |
+| `ImportRecord.bytes` | `Uint8Array`, devenu un objet JSON à clés numériques dans `kora_records` | `original_file bytea` | Reconstruire les octets à partir des clés `"0"`, `"1"`… |
 
 ### Implémenter un `Repository` PostgreSQL
 
-**Interface.** Une implémentation fournit `workspaceId`, les 18 collections, `getSettings`, `saveSettings` et `nextId`. Chaque `Collection<T>` expose `get(id)`, `list()`, `insert(record)` (erreur « Doublon d'identifiant » si l'identifiant existe), `update(record)` (erreur « Enregistrement absent » sinon) et `remove(id)`. Le code actuel n'appelle `remove` que sur `companies`, `sources` et `signals`, et n'appelle jamais `update` sur `audit`, `usage`, `runs` ni `users`.
+`DbRepository` implémente déjà l'interface sur PostgreSQL, mais en stockage clé-valeur JSONB ; ce qui suit décrit une implémentation sur le schéma relationnel.
+
+**Interface.** Une implémentation fournit `workspaceId`, les 18 collections, `getSettings`, `saveSettings` et `nextId`. Chaque `Collection<T>` expose `get(id)`, `list()`, `insert(record)` (erreur « Doublon d'identifiant » si l'identifiant existe), `update(record)` (erreur « Enregistrement absent » sinon, ce que `DbRepository` ne fait pas) et `remove(id)`. Le code actuel n'appelle `remove` que sur `companies`, `sources` et `signals`, et n'appelle jamais `update` sur `audit`, `usage`, `runs` ni `users`.
+
+**Accès depuis Supabase.** Le client `supabase-js` passe par l'API REST de Supabase : chaque requête HTTP est une transaction distincte, et seuls les schémas exposés (par défaut `public`) sont accessibles. Les transactions décrites ci-dessous demandent donc des fonctions SQL appelées par `rpc()`, ou une connexion PostgreSQL directe ; le schéma `kora` doit être exposé ou rester réservé à cette connexion.
 
 **Agrégats.** `insert` et `update` reçoivent l'enregistrement complet. Pour les agrégats, l'`update` doit synchroniser les tables enfants dans la même transaction :
 
@@ -1293,7 +1435,7 @@ Comme le store en mémoire, renvoyer des copies : un objet lu puis modifié ne d
 
 Les contrôles de version (`version_mismatch`) doivent être protégés contre les écritures concurrentes : `SELECT … FOR UPDATE` sur le contenu, ou mise à jour conditionnelle `WHERE current_version = $version`.
 
-**Réservation de budget.** `paidCall` ([`services/usage.ts`](../src/server/services/usage.ts)) réserve, appelle le fournisseur (jusqu'à 30 s pour OpenAI), puis libère et enregistre. Ne pas garder une transaction ouverte pendant l'appel. Proposition :
+**Réservation de budget.** `paidCall` ([`services/usage.ts`](../src/server/services/usage.ts)) réserve, appelle le fournisseur (jusqu'à 30 s pour OpenAI, jusqu'à 3 × 15 s pour une collecte), puis libère et enregistre. Avec `DbRepository`, la réservation est une lecture suivie d'une réécriture complète de `kora_settings.data`, sans verrou : deux appels simultanés peuvent tous deux passer le contrôle du plafond, ou laisser un `reservedEur` faux en base. Ne pas garder une transaction ouverte pendant l'appel. Proposition :
 
 ```sql
 -- 1. Réservation (transaction courte)
@@ -1319,48 +1461,68 @@ Un processus interrompu entre les étapes 1 et 3 laisse une réservation orpheli
 
 **Idempotence des envois.** L'index unique partiel sur `idempotency_key` (statuts `succes` et `verification_requise`) garantit qu'un même contenu, à la même version et sur le même canal, n'est envoyé qu'une fois. Pour WordPress, insérer d'abord une tentative `verification_requise` (ce qui réserve la clé), appeler le canal, puis passer la tentative à `succes`. En cas de conflit (`INSERT … ON CONFLICT (workspace_id, idempotency_key) WHERE status IN ('succes','verification_requise') DO NOTHING`), relire la tentative existante et la rejouer ; une tentative restée `verification_requise` se réconcilie avec `findDraftByKey`. L'incrément de `attempts` pour un blocage répété doit être un `UPDATE … SET attempts = attempts + 1`.
 
-**Identifiants.** `nextId` est synchrone et son compteur n'est pas persisté : il produirait des doublons après un redémarrage. Utiliser des identifiants générés sans aller-retour (ULID ou UUID préfixés), ou réserver des blocs dans une séquence au démarrage.
+**Identifiants.** `nextId` est synchrone : il ne peut pas interroger une séquence. Le compteur du dépôt mémoire produirait des doublons après un redémarrage ; le format de `DbRepository` (horodatage en base 36 et aléa, voir [Mécanisme `nextId`](#mécanisme-nextid)) convient et se reprend tel quel. Les identifiants déjà en base se migrent sans changement.
 
-**Lectures.** `list()` charge toute la collection et les handlers filtrent en mémoire. Pour l'épreuve de charge R13 (100 000 signaux), ajouter à l'interface des méthodes de requête (filtre, tri, pagination) qui s'appuient sur les index `signals_status_idx`, `signals_company_idx`, `signals_score_idx` et `signals_created_idx`.
+**Lectures.** `list()` charge toute la collection et les handlers filtrent en mémoire ; avec `DbRepository`, cela représente une requête HTTP par tranche de 1 000 lignes. Pour l'épreuve de charge R13 (100 000 signaux), ajouter à l'interface des méthodes de requête (filtre, tri, pagination) qui s'appuient sur les index `signals_status_idx`, `signals_company_idx`, `signals_score_idx` et `signals_created_idx`.
 
 **Types.** Le pilote `pg` renvoie les `numeric` en chaînes (à convertir pour `costEur`, `reservedEur`, plafonds), `bytea` en `Buffer` (à convertir en `Uint8Array`), `timestamptz` en `Date` (à reconvertir en ISO). Fixer `TZ=Europe/Paris` côté serveur pour que les mois et semaines restent ceux d'Inovallée.
 
-**Branchement.** `getRepository()` ([`store/memory.ts`](../src/server/store/memory.ts)) renvoie aujourd'hui toujours le store mémoire. Il faudra une fabrique qui choisit l'implémentation selon la configuration, et un script de chargement du seed qui corrige d'abord les URL en double.
+**Branchement.** `getRepository()` ([`store/memory.ts`](../src/server/store/memory.ts)) choisit déjà entre le dépôt mémoire et `DbRepository` selon `VITEST` et `SUPABASE_URL`. Brancher le schéma relationnel suppose de remplacer `DbRepository` (ou d'ajouter une troisième implémentation), et d'écrire une migration des données de `kora_records` vers les tables `kora.*`. Par exemple, pour les entreprises :
+
+```sql
+INSERT INTO kora.companies (workspace_id, id, name, aliases, domain, sector, territory, priority, themes,
+                            brand_initials, brand_bg, brand_fg, created_at)
+SELECT 'ws_inovallee', data->>'id', data->>'name',
+       ARRAY(SELECT jsonb_array_elements_text(data->'aliases')),
+       data->>'domain', data->>'sector', data->>'territory', data->>'priority',
+       ARRAY(SELECT jsonb_array_elements_text(data->'themes')),
+       data->'brand'->>'initials', data->'brand'->>'bg', data->'brand'->>'fg',
+       (data->>'createdAt')::timestamptz
+FROM public.kora_records
+WHERE collection = 'companies';
+```
+
+Les agrégats (articles, posts, éditions, règles, imports) se répartissent de la même façon entre la table parente et les tables enfants, avec `jsonb_array_elements`. Les écarts listés plus haut (signal rejeté sans motif, plusieurs articles par signal, sources orphelines) doivent être corrigés avant l'insertion. Le seed n'est plus chargé en production ; pour une base de démonstration, corriger d'abord ses URL en double.
 
 ## Données de démonstration
 
-Le jeu de démonstration est construit par `buildSeed(now)` ([`store/seed.ts`](../src/server/store/seed.ts)).
+Le jeu de démonstration est construit par `buildSeed(now)` ([`store/seed.ts`](../src/server/store/seed.ts)). Il ne sert plus qu'au dépôt en mémoire, c'est-à-dire :
+
+- aux tests (`bun run test`), toujours en mémoire, avec le collecteur simulé et sans OpenAI ;
+- au mode local lancé sans `SUPABASE_URL` (`SUPABASE_URL= bun run dev`). Dans ce mode, le collecteur est quand même le collecteur réel : une collecte interroge les vrais sites et Google News, les domaines des entreprises fictives échouent, et OpenAI est actif si `AI_API_KEY` est définie.
+
+**En production, aucune donnée de démonstration n'est installée.** Seuls les 4 utilisateurs, la grille `grid_v1`, les règles `rule_01` à `rule_08` et les réglages sont repris du seed (voir [Installation initiale](#installation-initiale)) ; le registre, les sources, les signaux, les contenus, le journal et la consommation partent de zéro et se remplissent avec le registre réel et les collectes. Les captures d'écran de la documentation montrent le jeu de démonstration.
 
 ### Déterminisme et dates relatives
 
 - Le générateur pseudo-aléatoire est `createRng(20261012)` (mulberry32) ; les choix stables par nom utilisent `hash32` (FNV-1a) ([`store/prng.ts`](../src/server/store/prng.ts)). Le contenu est donc identique d'un démarrage à l'autre.
-- Toutes les dates sont **relatives à `now`**, l'instant de construction du store, c'est-à-dire le premier appel à `getRepository()` (première requête API après le démarrage). Les jours sont calculés en heure locale ; un événement passé n'est jamais daté de moins de 3 h avant `now`.
+- Toutes les dates sont **relatives à `now`**, l'instant de construction du store, c'est-à-dire le premier appel à `getRepository()` (première requête API après le démarrage). En production, les dates de la grille et des règles sont relatives à l'instant d'installation. Les jours sont calculés en heure locale ; un événement passé n'est jamais daté de moins de 3 h avant `now`.
 - Quelques volumes dépendent du jour du mois (lignes de consommation, historique de collecte, journal) ; les autres sont fixes.
 
 ### Volumes
 
-Mesurés à l'instant de référence des tests (12 octobre 2026, 10 h 30) :
+Mesurés dans le dépôt mémoire à l'instant de référence des tests (12 octobre 2026, 10 h 30). La dernière colonne donne le contenu installé en production.
 
-| Collection | Volume | Détail |
-|---|---|---|
-| `users` | 4 | Voir ci-dessous. |
-| `companies` | 150 | 5 réelles et 145 fictives ; priorité 24 haute, 100 normale, 26 basse ; 16 ajoutées dans les 30 derniers jours. |
-| `sources` | 260 | 82 `site_officiel`, 69 `actualites`, 45 `communiques`, 36 `rss`, 28 `recherche_web` ; 250 `ok`, 5 `en_attente`, 4 `erreur`, 1 `desactivee`. |
-| `runs` | 254 | 244 `succes_sans_actualite`, 6 `succes`, 4 `echec`. |
-| `observations` | 476 | 134 reprises (`isSyndicated`) ; 260 sans source (reprises média) ; 4 non rattachées. |
-| `signals` | 248 | 12 `nouveau`, 14 `a_traiter`, 6 `en_revue`, 22 `surveille`, 68 `traite`, 126 `rejete` ; 2 homonymies et 1 fusion incertaine. |
-| `grids` | 1 | `grid_v1`, poids 30 / 20 / 20 / 20 / 10, créée 120 jours plus tôt par Sophie Martin. |
-| `articles` | 155 | 148 publiés (`art_0001` à `art_0148`) et 7 articles nommés ; 111 `kora`, 44 `import_humain` ; 167 versions ; 79 éléments de dossier factuel (74 étayés, 4 non corroborés, 1 contradictoire) ; 152 approbations dont 149 valides. |
-| `publications` | 11 | 3 brouillons WordPress, 1 envoi WordPress bloqué, 4 exports LinkedIn, 3 exports newsletter. |
-| `imports` | 2 | `imp_0001` (7 propositions décidées, converti en `art_import`) et `imp_0002` (5 propositions en attente). |
-| `linkedin` | 10 | 5 `a_valider`, 1 `approuve`, 4 `exporte`. |
-| `newsletters` | 4 | `nl_current` (`composition`, version 6, 12 sujets) et `nl_0001` à `nl_0003` (`exportee`, 8 sujets chacune). |
-| `rules` | 8 | `rule_01` à `rule_08` ; `rule_02` en version 2 avec historique. |
-| `examples` | 8 | `ex_01` à `ex_08`. |
-| `ruleProposals` | 3 | `rp_01` (longueur des titres, sur `rule_02`), `rp_02` (vocabulaire « start-up »), `rp_03` (terme interdit « révolutionnaire »). |
-| `usage` | 57 | Le 12 du mois ; 5 lignes le 1er, 116 le 31. Coût total fixe : 112,40 €. |
-| `audit` | 38 | Entre 36 et 38 selon l'heure. |
-| `notifications` | 5 | `notif_0001` à `notif_0005`, dont 4 non lues. |
+| Collection | Volume | Détail | Production au départ |
+|---|---|---|---|
+| `users` | 4 | Voir ci-dessous. | 4 |
+| `companies` | 150 | 5 réelles et 145 fictives ; priorité 24 haute, 100 normale, 26 basse ; 16 ajoutées dans les 30 derniers jours. | 0 |
+| `sources` | 260 | 82 `site_officiel`, 69 `actualites`, 45 `communiques`, 36 `rss`, 28 `recherche_web` ; 250 `ok`, 5 `en_attente`, 4 `erreur`, 1 `desactivee`. | 0 |
+| `runs` | 254 | 244 `succes_sans_actualite`, 6 `succes`, 4 `echec`. | 0 |
+| `observations` | 476 | 134 reprises (`isSyndicated`) ; 260 sans source (reprises média) ; 4 non rattachées. | 0 |
+| `signals` | 248 | 12 `nouveau`, 14 `a_traiter`, 6 `en_revue`, 22 `surveille`, 68 `traite`, 126 `rejete` ; 2 homonymies et 1 fusion incertaine. | 0 |
+| `grids` | 1 | `grid_v1`, poids 30 / 20 / 20 / 20 / 10, créée 120 jours plus tôt par Sophie Martin. | 1 |
+| `articles` | 155 | 148 publiés (`art_0001` à `art_0148`) et 7 articles nommés ; 111 `kora`, 44 `import_humain` ; 167 versions ; 79 éléments de dossier factuel (74 étayés, 4 non corroborés, 1 contradictoire) ; 152 approbations dont 149 valides. | 0 |
+| `publications` | 11 | 3 brouillons WordPress, 1 envoi WordPress bloqué, 4 exports LinkedIn, 3 exports newsletter. | 0 |
+| `imports` | 2 | `imp_0001` (7 propositions décidées, converti en `art_import`) et `imp_0002` (5 propositions en attente). | 0 |
+| `linkedin` | 10 | 5 `a_valider`, 1 `approuve`, 4 `exporte`. | 0 |
+| `newsletters` | 4 | `nl_current` (`composition`, version 6, 12 sujets) et `nl_0001` à `nl_0003` (`exportee`, 8 sujets chacune). | 0 |
+| `rules` | 8 | `rule_01` à `rule_08` ; `rule_02` en version 2 avec historique. | 8 |
+| `examples` | 8 | `ex_01` à `ex_08`. | 0 |
+| `ruleProposals` | 3 | `rp_01` (longueur des titres, sur `rule_02`), `rp_02` (vocabulaire « start-up »), `rp_03` (terme interdit « révolutionnaire »). | 0 |
+| `usage` | 57 | Le 12 du mois ; 5 lignes le 1er, 116 le 31. Coût total fixe : 112,40 €. | 0 |
+| `audit` | 38 | Entre 36 et 38 selon l'heure. | 0 |
+| `notifications` | 5 | `notif_0001` à `notif_0005`, dont 4 non lues. | 0 |
 
 ### Utilisateurs
 
@@ -1371,9 +1533,11 @@ Mesurés à l'instant de référence des tests (12 octobre 2026, 10 h 30) :
 | `u_claire` | Claire Dubois | `validateur` | Approuve et envoie. |
 | `u_marc` | Marc Lefèvre | `lecteur` | Lecture et exports. |
 
+Ces quatre comptes de démonstration existent aussi en production, avec les mêmes rôles. Faute d'authentification, tout visiteur agit par défaut en tant que Sophie Martin, administratrice, et peut passer sur un autre compte par `POST /api/me`.
+
 ### Entreprises réelles et signaux de la maquette
 
-Les cinq entreprises réelles sont en priorité haute, sur le territoire de Grenoble, et entrées au registre entre 360 et 420 jours avant `now`. Les 145 autres sont fictives (`fictional: true`), générées en combinant `NAME_PREFIXES` et `NAME_SUFFIXES` de [`catalog.ts`](../src/server/store/catalog.ts).
+Cette partie ne concerne que le dépôt en mémoire. Les cinq entreprises réelles sont en priorité haute, sur le territoire de Grenoble, et entrées au registre entre 360 et 420 jours avant `now`. Les 145 autres sont fictives (`fictional: true`), générées en combinant `NAME_PREFIXES` et `NAME_SUFFIXES` de [`catalog.ts`](../src/server/store/catalog.ts).
 
 | Signal | Entreprise | Créé | Statut | Score |
 |---|---|---|---|---|
@@ -1396,17 +1560,24 @@ Les 243 autres signaux sont numérotés de `sig_0006` à `sig_0248`. Articles no
 
 ### Quotas au démarrage
 
-`Settings` reprend `DEFAULT_LIMITS`, `storageBaseGb` vaut 2,4 Go, aucune suspension, aucune alerte notifiée. Consommation du mois : 112,40 € sur 150 € (75 %), 1 840 recherches, 3 920 observations, 14 articles, 9 posts LinkedIn. Le quota **entreprises est plein (150 sur 150)** : la création d'une entreprise renvoie 422 `quota_exceeded` tant qu'aucune n'est supprimée.
+Dans les deux dépôts, `Settings` reprend `DEFAULT_LIMITS`, `storageBaseGb` vaut 2,4 Go, sans suspension ni alerte notifiée.
+
+- **En mémoire**, la consommation du mois vaut 112,40 € sur 150 € (75 %), avec 1 840 recherches, 3 920 observations, 14 articles et 9 posts LinkedIn. Le quota **entreprises est plein (150 sur 150)** : la création d'une entreprise renvoie 422 `quota_exceeded` tant qu'aucune n'est supprimée.
+- **En production**, tous les compteurs partent de zéro, sauf le stockage, qui affiche d'emblée les 2,4 Go fictifs de `storageBaseGb`. Chaque entreprise créée consomme une place du quota `companies` et ajoute une source Google News.
 
 ### Réinitialiser les données
+
+Dépôt en mémoire :
 
 - Redémarrer le serveur de développement : le store est reconstruit à la première requête.
 - Incrémenter `STORE_VERSION` dans [`store/memory.ts`](../src/server/store/memory.ts) : le store est reconstruit au prochain appel, sans redémarrage. C'est nécessaire dès que la forme d'un enregistrement change, car le singleton sur `globalThis` survit au rechargement à chaud.
 - Dans le code (tests, scripts) : `resetStore({ now })`.
 
+Production : les données persistent, un redémarrage ou un changement de `STORE_VERSION` ne remet rien à zéro. Aucun endpoint ne vide la base ; il faut supprimer les lignes de `kora_records` dans Supabase. Supprimer aussi la ligne `kora` de `kora_settings` provoque la réinstallation des utilisateurs, de la grille et des règles (voir [Installation initiale](#installation-initiale)).
+
 ### Tests
 
-[`src/test/server/helpers.ts`](../src/test/server/helpers.ts) fige l'horloge : `setup()` appelle `setClock(NOW)` avec `NOW = new Date(2026, 9, 12, 10, 30, 0)` (12 octobre 2026, 10 h 30, heure locale), réinitialise les adaptateurs et reconstruit le store avec `resetStore({ now: NOW })`. Les volumes ci-dessus sont donc stables dans les tests. `USERS` associe chaque rôle à l'identifiant d'un utilisateur du seed.
+[`src/test/server/helpers.ts`](../src/test/server/helpers.ts) fige l'horloge : `setup()` appelle `setClock(NOW)` avec `NOW = new Date(2026, 9, 12, 10, 30, 0)` (12 octobre 2026, 10 h 30, heure locale), réinitialise les adaptateurs et reconstruit le store avec `resetStore({ now: NOW })`. Sous Vitest, `getRepository()` renvoie toujours le dépôt mémoire et les adaptateurs utilisent le collecteur simulé, sans OpenAI : les volumes ci-dessus sont donc stables dans les tests. `USERS` associe chaque rôle à l'identifiant d'un utilisateur du seed.
 
 ## Formats d'export
 
@@ -1444,7 +1615,7 @@ Les colonnes sont aplaties : certains objets du modèle sont réduits à une val
 | `articles` | `id`, `signalId`, `companyId`, `origin`, `author`, `status`, `currentVersion`, `versions` (nombre), `title`, `wordpressRemoteId`, `wordpressStatus`, `createdAt`, `updatedAt`, `publishedAt` | Ordre de stockage |
 | `audit` | `id`, `at`, `actor`, `action`, `entity`, `entityId`, `details` | `at` croissant |
 
-Les colonnes sont fixes, sauf pour `signals` où elles reprennent les clés de la première ligne : sans aucun signal, l'en-tête se réduit à `id`. En JSON, chaque objet porte les mêmes clés que les colonnes CSV, avec les valeurs non aplaties (tableaux, `null`).
+« Ordre du registre » et « Ordre de stockage » désignent l'ordre de `list()`, sans tri : ordre d'insertion en mémoire, ordre de `created_at` en base. Les colonnes sont fixes, sauf pour `signals` où elles reprennent les clés de la première ligne : sans aucun signal, ce qui est le cas d'une production qui démarre, l'en-tête se réduit à `id`. En JSON, chaque objet porte les mêmes clés que les colonnes CSV, avec les valeurs non aplaties (tableaux, `null`).
 
 L'export `decisions` réunit deux types de lignes :
 
@@ -1460,7 +1631,7 @@ L'export `decisions` réunit deux types de lignes :
 | `detail` | Motif d'invalidation ; sinon « Programmée le <date> » ou vide | Message de la tentative |
 | `idempotencyKey` | Vide | Clé d'idempotence |
 
-Les approbations LinkedIn et newsletter remplacées ne sont plus stockées et n'apparaissent donc pas. Exemples de lignes JSON issues du seed (les dates dépendent de l'instant de construction du store) :
+Les approbations LinkedIn et newsletter remplacées ne sont plus stockées et n'apparaissent donc pas. Exemples de lignes JSON tirées du jeu de démonstration, en mémoire (les dates dépendent de l'instant de construction du store) :
 
 ```json
 [
@@ -1469,7 +1640,7 @@ Les approbations LinkedIn et newsletter remplacées ne sont plus stockées et n'
 ]
 ```
 
-Début du fichier `companies` en CSV, après le BOM :
+Début du fichier `companies` en CSV, après le BOM, sur le même jeu :
 
 ```text
 id,name,aliases,domain,sector,territory,priority,themes,createdAt,sourceCount,failingSourceCount,signalCount
@@ -1483,7 +1654,7 @@ co_verkor,Verkor,Verkor SAS,verkor.com,Batteries bas carbone,Grenoble,haute,tran
 
 | Champ | Contenu |
 |---|---|
-| `workspaceId` | `ws_inovallee` |
+| `workspaceId` | `ws_inovallee` (constante `WORKSPACE_ID`, y compris en production où l'espace est rangé sous `kora`) |
 | `generatedAt` | Date de génération |
 | `generatedBy` | Nom de l'utilisateur |
 | `encoding` | « UTF-8 (CSV avec BOM, séparateur virgule, fins de ligne CRLF) » |
@@ -1544,20 +1715,42 @@ Liste établie à la lecture du code, sans correction. Les numéros de ligne son
 1. **URL en double dans le seed** ([`seed.ts`](../src/server/store/seed.ts), vers les lignes 558 à 566) : `obs_0022` et `obs_0033`, `obs_0269` et `obs_0428` ont la même URL canonique, car l'URL directe est dérivée du titre. Contraire à `UNIQUE (workspace_id, url_canonical)`.
 2. **Motif de rejet effaçable** ([`handlers/signals.ts`](../src/server/handlers/signals.ts), vers les lignes 186 à 189) : `PATCH` accepte `statusReason: null` sur un signal rejeté.
 3. **Plusieurs articles par signal après fusion** ([`handlers/signals.ts`](../src/server/handlers/signals.ts), vers les lignes 272 à 276), contraire à `articles_signal_uq`.
-4. **Références orphelines à la suppression d'une entreprise** ([`handlers/registry.ts`](../src/server/handlers/registry.ts), vers les lignes 154 et 155) : les sources sont supprimées sans remettre `observations.sourceId` à `null`, contrairement à `deleteSource`.
+4. **Références orphelines à la suppression d'une entreprise** ([`handlers/registry.ts`](../src/server/handlers/registry.ts), vers les lignes 173 et 174) : les sources sont supprimées sans remettre `observations.sourceId` à `null`, contrairement à `deleteSource`.
 5. **Historique d'approbation perdu** pour LinkedIn et newsletter ([`handlers/distribution.ts`](../src/server/handlers/distribution.ts), vers les lignes 218 à 223 et 450 à 455) : la nouvelle approbation écrase l'objet précédent, valide ou invalidé, dont il ne reste trace que dans le journal d'audit.
 6. **Exports LinkedIn classés comme décisions d'article** : `publishLinkedIn` ([`handlers/distribution.ts`](../src/server/handlers/distribution.ts), vers la ligne 253) renseigne `articleId`, alors que le seed le laisse à `null` ; l'export `decisions` ([`handlers/ops.ts`](../src/server/handlers/ops.ts), vers les lignes 333 et 334) et le détail d'article les rangent alors du côté de l'article.
 7. **Préfixes différents entre seed et API** : `appr_` et `apv_` (approbations), `prop_<imp>_<i>` et `<imp>_p<i>` (propositions d'import), `<nl>_i<n>` et `nli_` (sujets de newsletter).
 8. **Actions d'audit différentes entre seed et API** : le seed emploie `publication.bloque`, `publication.brouillon_distant`, `publication.export`, `signal.reject`, `collect.echec` ; l'API `publication.blocked`, `publication.success`, `signal.status`, `collect.all`. Le seed met aussi l'identifiant de l'article en `entityId` des événements `publication`, là où l'API met celui de la tentative, et range ses exports sous les entités `linkedin` et `newsletter`.
 9. **Commentaire faux** sur `Settings.notifiedAlerts` ([`records.ts`](../src/server/store/records.ts), vers la ligne 114) : l'exemple `…:0.8` ne correspond pas au format réel `…:seuil_80`.
 10. **Valeurs jamais produites par l'API** : `PublicationStatus` `echec` et `verification_requise`, mode `publication`, `ArticleStatus` `publie`, `LinkedInStatus` `publie`, `wordpress.status` `programme` et `publie` ; `ArticleRecord.publishedAt` n'est jamais renseigné.
-11. **Durée de collecte non mesurée** : `startedAt` et `finishedAt` sont identiques pour les exécutions de l'API.
-12. **Compteur « Nouvelles observations » surévalué** ([`services/collection.ts`](../src/server/services/collection.ts), vers les lignes 285 à 291) : la ligne de consommation compte les publications renvoyées par la source (trois au plus), avant dédoublonnage, alors que `CollectionRun.newObservations` ne compte que les nouvelles.
+11. **Durée de collecte non mesurée** : `startedAt` et `finishedAt` sont identiques pour les exécutions de l'API, alors que la collecte réelle peut durer jusqu'à trois fois 15 s par source.
+12. **Compteur « Nouvelles observations » surévalué** ([`services/collection.ts`](../src/server/services/collection.ts), vers les lignes 285 à 291) : la ligne de consommation compte les publications renvoyées par la source (trois au plus), avant dédoublonnage, alors que `CollectionRun.newObservations` ne compte que les nouvelles. Un flux Google News renvoyant presque toujours plus de trois entrées, chaque exécution compte trois observations.
 13. **Lien de fusion incertaine non exploitable** ([`services/collection.ts`](../src/server/services/collection.ts), vers la ligne 152) : la note contient le titre du signal proche, alors que `ReviewPanel` cherche un identifiant `sig_…` dans la note.
 14. **Neutralisation des formules incomplète** ([`domain/csv.ts`](../src/server/domain/csv.ts), ligne 10) : les éléments d'un tableau (par exemple un alias commençant par `=`) ne sont pas préfixés.
 15. **`weekOf` et `week_of`** : instant UTC de minuit local d'un côté, `date` de l'autre (décalage d'un jour si la conversion se fait en UTC).
-16. **`nextId` non persistant** et **personnes désignées par leur nom** : un renommage d'utilisateur casserait le lien avec les décisions passées.
+16. **Personnes désignées par leur nom** : un renommage d'utilisateur casserait le lien avec les décisions passées, désormais conservées en base. Le compteur de `nextId` n'est pas persistant en mémoire seulement ; en base, les identifiants sont horodatés.
 17. **Libellés** : « Prêt à publier » dans l'interface, « Approuvé » côté serveur pour `approuve`. Les descriptions des exports dans [`parametres/labels.ts`](../src/components/parametres/labels.ts) annoncent plus que le contenu réel (propositions et décisions pour les règles, versions pour les articles, rejets pour les décisions).
 18. **Signature de la v1 d'un import** : l'API signe la v1 du nom de l'auteur importé, le seed (`art_import`) du nom de l'utilisateur qui a importé.
 19. **Identifiant d'entreprise** : le slug conserve `€` et `%` (`normalize` les garde), alors que `slugify` les retire.
 20. **Fuseau horaire** : mois de quota, semaines de newsletter et nom des fichiers d'export dépendent du fuseau du serveur.
+
+Points apparus avec le stockage Supabase et le collecteur réel :
+
+21. **Aucune transaction ni verrou** ([`store/db.ts`](../src/server/store/db.ts)) : écritures partielles en cas d'erreur, écritures perdues entre requêtes simultanées. `saveSettings` (lignes 146 à 151) réécrit tout le JSON des réglages : la réservation du budget n'est pas atomique, et un `reservedEur` faussé reste en base.
+22. **`update` silencieux** ([`store/db.ts`](../src/server/store/db.ts), lignes 55 à 63) : la mise à jour d'un enregistrement absent ne fait rien et ne lève pas d'erreur, contrairement au dépôt mémoire.
+23. **Fichiers importés gonflés** : `ImportRecord.bytes` (`Uint8Array`, [`records.ts`](../src/server/store/records.ts) ligne 72) est sérialisé en objet JSON à clés numériques, environ douze fois plus gros que le fichier, et relu à chaque `imports.list()`.
+24. **Deux identifiants d'espace** : `kora` ([`store/db.ts`](../src/server/store/db.ts), ligne 76) contre `ws_inovallee` dans les réglages stockés et dans le manifeste ([`store/seed.ts`](../src/server/store/seed.ts) ligne 120, [`handlers/ops.ts`](../src/server/handlers/ops.ts) ligne 441). `kora_records` n'a pas de colonne d'espace.
+25. **Installation initiale** ([`store/db.ts`](../src/server/store/db.ts), lignes 111 à 128) :
+    - une réinstallation écrase les règles `rule_01` à `rule_08` et réactive `grid_v1`, ce qui peut laisser deux grilles actives ;
+    - les exemples éditoriaux ne sont pas installés et aucun endpoint ne permet d'en créer ;
+    - le compteur de stockage part des 2,4 Go fictifs de `storageBaseGb` ([`store/seed.ts`](../src/server/store/seed.ts), ligne 2163) ;
+    - la grille et les règles portent un historique daté avant l'installation et signé Sophie Martin.
+26. **Source Google News automatique** ([`handlers/registry.ts`](../src/server/handlers/registry.ts), lignes 120 à 137) : elle n'est ni décomptée du quota `sources` ni journalisée, et `updateCompany` (lignes 148 à 166) ne met pas à jour son URL quand l'entreprise est renommée. Le collecteur relit alors l'URL `news.google.com` enregistrée ([`adapters/collector.ts`](../src/server/adapters/collector.ts), lignes 235 à 237).
+27. **Flux généraliste pris pour une source directe** ([`adapters/collector.ts`](../src/server/adapters/collector.ts), lignes 239 à 241) : sans balise `<source>`, l'émetteur d'une entrée est l'entreprise elle-même, même quand le flux est celui d'un média filtré sur son nom. `outlet.domain` vaut alors le domaine de l'entreprise : l'indicateur documentaire ([`domain/evidence.ts`](../src/server/domain/evidence.ts), lignes 60 et 61) et le dossier factuel ([`adapters/text-model.ts`](../src/server/adapters/text-model.ts), lignes 85 et 86) y voient une source directe.
+28. **Test de domaine sans point** ([`adapters/collector.ts`](../src/server/adapters/collector.ts), ligne 256) : `hostOf(url).endsWith(company.domain)` considère `notpasqal.com` comme le site de `pasqal.com`, alors que `matchCompany` exige `.<domaine>` ([`domain/clustering.ts`](../src/server/domain/clustering.ts), ligne 62).
+29. **URL non revalidées** ([`adapters/collector.ts`](../src/server/adapters/collector.ts), lignes 248 à 250 et 283) : l'URL de flux découverte dans une page n'est pas passée à `validateSourceUrl`, et les redirections sont suivies sans contrôle.
+30. **`transient` ignoré** ([`services/collection.ts`](../src/server/services/collection.ts), lignes 266 à 275) : un 403 ou un 404, marqué non transitoire par le collecteur, est quand même réessayé trois fois.
+31. **Publications perdues** ([`services/collection.ts`](../src/server/services/collection.ts), lignes 32 et 334) : seules les trois entrées les plus récentes sont lues à chaque exécution. Au-delà de trois nouveautés entre deux collectes manuelles, les suivantes ne sont jamais ingérées ; les entrées sans date, triées en dernier ([`adapters/collector.ts`](../src/server/adapters/collector.ts), ligne 266), ne le sont presque jamais.
+32. **Lien Google News au lieu de l'article** ([`adapters/collector.ts`](../src/server/adapters/collector.ts), lignes 197 à 212) : `Observation.url` et `Signal.primaryUrl` pointent vers une redirection `news.google.com`. Le même article lu dans le flux du média puis par Google News n'est pas reconnu comme doublon d'URL.
+33. **Coût fictif de la collecte** : chaque exécution est comptée 0,075 € alors que les flux RSS et Google News sont gratuits ; 150 sources consomment environ 11,25 € par collecte complète.
+34. **Ordre de lecture instable** ([`store/db.ts`](../src/server/store/db.ts), lignes 38 et 39) : `list()` trie sur `created_at` seul ; les lignes installées dans une même requête ont la même valeur, et la pagination par tranches de 1 000 peut alors sauter ou répéter une ligne.
+35. **Typage perdu** ([`store/db.ts`](../src/server/store/db.ts), lignes 80 à 97) : les collections sont déclarées `DbCollection<any>`, sans contrôle de type par rapport au `Repository`. L'index `kora_records_collection_idx` ([`0000_kora_records.sql`](../drizzle/migrations/0000_kora_records.sql), ligne 9) double la clé primaire.

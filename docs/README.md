@@ -13,7 +13,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 | [01 — Démarrage rapide](01-demarrage.md) | Installation, commandes, variables d'environnement, comptes de démonstration, règles de travail avec Lovable, dépannage. | Tout nouvel arrivant |
 | [02 — Architecture](02-architecture.md) | Blocs, arborescence, trajet d'une requête, couches serveur, persistance, adaptateurs (dont OpenAI), écart avec l'architecture cible. | Ingénieurs |
 | [03 — Référence API](03-reference-api.md) | Tous les endpoints `/api` : rôles, paramètres, corps, réponses, erreurs, exports. | Ingénieurs back et front |
-| [04 — Dictionnaire des données](04-dictionnaire-des-donnees.md) | Entités, champs, énumérations, identifiants, schéma PostgreSQL cible, données de démonstration, formats d'export. | Ingénieurs back, data |
+| [04 — Dictionnaire des données](04-dictionnaire-des-donnees.md) | Entités, champs, énumérations, identifiants, stockage Supabase et schéma relationnel cible, données de démonstration, formats d'export. | Ingénieurs back, data |
 | [05 — Règles métier](05-regles-metier.md) | Scoring, indicateur documentaire, workflows WF1 à WF6, approbation et publication, droits, quotas et budget. | Ingénieurs, chef de projet |
 | [06 — Sécurité et flux tiers](06-securite-et-flux-tiers.md) | Contrôles en place, inventaire des flux vers les services tiers, secrets, écarts à combler avant production. | Ingénieurs, référent sécurité et données |
 | [07 — Frontend](07-frontend.md) | Organisation du code front, routage, accès aux données, design system de la maquette, recettes. | Ingénieurs front |
@@ -35,13 +35,13 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 1. Monolithe TanStack Start (React 19) : pages et API métier `/api` dans le même projet ; build Nitro pour Cloudflare Workers ; synchronisé avec Lovable.
 2. Contrat front/back figé dans `src/lib/api/` (types, client, hooks).
 3. API dans `src/server/` : routeur, handlers, services, domaine pur, repository, adaptateurs.
-4. Données **en mémoire**, reconstruites au démarrage depuis un jeu de démonstration qui reproduit la maquette. Schéma PostgreSQL prêt, non branché.
+4. Données **persistantes** dans la base Supabase (PostgreSQL) de Lovable Cloud, en JSONB ; la production démarre vide. Le jeu de démonstration qui reproduit la maquette ne sert plus qu'aux tests et à la démonstration locale (`SUPABASE_URL= bun run dev`).
 5. Textes générés par gabarits, réécrits par OpenAI (`gpt-4o-mini`) si `AI_API_KEY` est définie, avec repli automatique.
-6. Collecte web et WordPress **simulés** ; LinkedIn et newsletter en export, conformément au pilote.
+6. Collecte **réelle** par flux RSS et Google News, déclenchée à la main ; WordPress **simulé** ; LinkedIn et newsletter en export, conformément au pilote. Le flux Google News est réservé par ses conditions à un usage personnel et non commercial : à faire valider avant production.
 7. Score éditorial 0–100 (affiché sur 10) issu d'une grille versionnée ; indicateur documentaire distinct.
 8. Toute diffusion exige une approbation valide de la version courante ; une modification l'invalide ; publication idempotente.
 9. Quatre rôles contrôlés côté serveur ; budget API réservé avant chaque appel payant, suspension à 100 %.
-10. Avant production : PostgreSQL, authentification, collecteur et WordPress réels, sauvegardes, recette R01 à R13.
+10. Avant production : **authentification** (urgent, la base est aujourd'hui modifiable par quiconque connaît l'adresse), collecte sortie du budget API (elle l'épuise en une douzaine de passages), transactions et sauvegardes, client WordPress réel, recette R01 à R13. Liste complète dans [Anomalies connues](11-anomalies-connues.md).
 
 ## Références
 

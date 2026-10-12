@@ -19,10 +19,12 @@ git clone https://github.com/Makk7709/koraino.git
 cd koraino
 nvm use 24
 bun install
-bun run dev
+SUPABASE_URL= bun run dev   # mode démonstration en mémoire, voir ci-dessous
 ```
 
 L'application est servie sur **http://localhost:8080** (port imposé par la configuration Lovable, voir [`vite.config.ts`](../vite.config.ts)). Le premier chargement d'une page prend quelques secondes, le temps que Vite compile ; les suivants sont instantanés. L'API métier répond sous http://localhost:8080/api (par exemple `curl http://localhost:8080/api/me`).
+
+**Pourquoi `SUPABASE_URL=` ?** Le fichier [`.env`](../.env), versionné par Lovable, fournit l'adresse de la base Supabase du projet. Dès que `SUPABASE_URL` est définie, le serveur utilise cette base, ce qui exige aussi la clé secrète `SUPABASE_SERVICE_ROLE_KEY`, fournie uniquement par Lovable Cloud à l'application hébergée. Avec un simple `bun run dev`, toutes les routes `/api` répondent donc `500` en local. Vider la variable au lancement bascule sur le dépôt en mémoire avec les données de démonstration (voir [Données de démonstration](#données-de-démonstration)).
 
 ## Commandes
 
@@ -32,7 +34,7 @@ L'application est servie sur **http://localhost:8080** (port imposé par la conf
 | `bun run test` | Lance toute la suite Vitest une fois (76 tests au 12 octobre 2026). |
 | `bun run test:watch` | Vitest en mode surveillance. |
 | `npx tsc --noEmit -p .` | Vérification TypeScript stricte (aucun script npm dédié). |
-| `bun run lint` | ESLint sur tout le dépôt (les 6 avertissements `react-refresh` dans `src/components/ui` viennent de shadcn et sont connus). |
+| `bun run lint` | ESLint sur tout le dépôt. Les 6 avertissements `react-refresh` dans `src/components/ui` viennent de shadcn et sont connus. Depuis l'intégration Supabase, ESLint signale aussi des erreurs de formatage Prettier dans les fichiers générés par Lovable (`src/integrations/supabase/`, marqués « ne pas modifier », à exclure de la configuration ESLint) et dans quelques fichiers serveur ajoutés par Lovable (`store/db.ts`, `store/memory.ts`, `adapters/collector.ts`, `adapters/openai.ts`). |
 | `bun run format` | Prettier sur tout le dépôt (largeur 100, guillemets doubles, virgules finales). |
 | `bun run build` | Build de production (Vite + Nitro, cible Cloudflare Workers) dans `.output/`. |
 | `bun run preview` | Sert le build de production localement. |
@@ -44,19 +46,23 @@ Avant chaque commit, la routine attendue est : `npx tsc --noEmit -p .`, `bun run
 | Variable | Obligatoire | Lue par | Effet |
 |---|---|---|---|
 | `AI_API_KEY` | Non | [`adapters/index.ts`](../src/server/adapters/index.ts), [`adapters/openai.ts`](../src/server/adapters/openai.ts) | Clé OpenAI. Si elle est définie, les résumés, brouillons d'articles et variantes LinkedIn produits par les gabarits sont réécrits par `gpt-4o-mini`. Sans clé, l'application fonctionne entièrement avec les gabarits déterministes. |
-| `VITEST` | Non (positionnée automatiquement par Vitest) | `adapters/index.ts` | Désactive l'appel OpenAI pendant les tests, pour qu'ils restent déterministes et hors réseau. |
+| `SUPABASE_URL` | Oui en production | [`store/memory.ts`](../src/server/store/memory.ts) (`getRepository`), [`client.server.ts`](../src/integrations/supabase/client.server.ts) | Adresse de la base Supabase (PostgreSQL) de Lovable Cloud. Définie : les données sont lues et écrites en base. Vide ou absente : dépôt en mémoire avec les données de démonstration. Valeur publique, versionnée dans `.env`. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Oui si `SUPABASE_URL` est définie | `client.server.ts` | Clé de service Supabase, qui contourne la sécurité par ligne : **secret**, fourni par Lovable Cloud à l'application hébergée, absent du dépôt. |
+| `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID`, `VITE_SUPABASE_*` | Non | Client Supabase navigateur généré par Lovable ([`client.ts`](../src/integrations/supabase/client.ts)) | Valeurs publiques versionnées dans `.env`. Le client navigateur n'est utilisé par aucun écran aujourd'hui. |
+| `LOVABLE_DB_MIGRATION_URL` | Non | [`drizzle.config.ts`](../drizzle.config.ts) | Chaîne de connexion utilisée par Lovable pour appliquer les migrations de [`drizzle/migrations/`](../drizzle/migrations). |
+| `VITEST` | Non (positionnée automatiquement par Vitest) | `adapters/index.ts`, `store/memory.ts` | Pendant les tests : dépôt en mémoire avec le seed, collecteur simulé et pas d'appel OpenAI, pour que les tests restent déterministes et hors réseau. |
 
-La clé n'est lue que côté serveur (`process.env["AI_API_KEY"]`) ; elle n'est jamais envoyée au navigateur. Pour l'activer en local, exportez-la dans le shell qui lance le serveur :
+La clé OpenAI n'est lue que côté serveur (`process.env["AI_API_KEY"]`) ; elle n'est jamais envoyée au navigateur. Pour l'activer en local, exportez-la dans le shell qui lance le serveur :
 
 ```bash
-AI_API_KEY="sk-..." bun run dev
+AI_API_KEY="sk-..." SUPABASE_URL= bun run dev
 ```
 
-Ne placez jamais la clé dans le code ni dans un fichier commité. Attention : `.gitignore` ignore `*.local` mais pas `.env` ; un fichier `.env` créé à la racine serait proposé au commit. Sur l'environnement hébergé par Lovable, elle est enregistrée comme secret du projet. Le détail des données envoyées à OpenAI figure dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
+Ne placez jamais un secret dans le code ni dans un fichier commité. En particulier, **`.env` est versionné** (Lovable y écrit les valeurs publiques de Supabase) : n'y ajoutez ni `AI_API_KEY` ni `SUPABASE_SERVICE_ROLE_KEY`. `.gitignore` ignore en revanche `*.local`. Sur l'environnement hébergé par Lovable, les secrets sont enregistrés dans le projet (Lovable Cloud). Le détail des données envoyées à OpenAI figure dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
 
 ## Comptes de démonstration
 
-Il n'y a pas encore d'authentification : l'utilisateur courant est porté par le cookie `kora_uid`, et Sophie Martin est utilisée par défaut. On change de profil depuis le menu utilisateur en haut à droite de l'écran (appel `POST /api/me`).
+Il n'y a pas encore d'authentification : l'utilisateur courant est porté par le cookie `kora_uid`, et Sophie Martin est utilisée par défaut. On change de profil depuis le menu utilisateur en haut à droite de l'écran (appel `POST /api/me`). Ces quatre comptes existent aussi **en production** : ils sont installés dans la base au premier démarrage. Comme l'application hébergée n'a pas d'authentification, toute personne qui connaît son adresse agit en administratrice sur les données réelles.
 
 | Identifiant | Nom | Rôles | Usage typique en test |
 |---|---|---|---|
@@ -69,20 +75,27 @@ La matrice complète des droits est dans [Règles métier](05-regles-metier.md).
 
 ## Données de démonstration
 
-Les données vivent **en mémoire** dans le processus serveur. Elles sont générées au démarrage par [`seed.ts`](../src/server/store/seed.ts), avec des dates calculées par rapport à l'instant du démarrage : le dashboard affiche donc toujours une activité « récente ». Le jeu reproduit exactement les chiffres de la maquette (150 entreprises suivies, 24 signaux détectés sur 7 jours, 8 sujets prioritaires, 3 brouillons WordPress, 5 posts LinkedIn à valider, signal Pasqal noté 9.2/10…).
+Le serveur choisit son dépôt de données au démarrage ([`getRepository`](../src/server/store/memory.ts)) :
 
-Conséquences pratiques :
+| Mode | Quand | Données |
+|---|---|---|
+| Base Supabase | `SUPABASE_URL` définie, hors tests (application hébergée par Lovable) | Persistantes. Au premier démarrage, seuls les quatre utilisateurs, la grille de score, les règles éditoriales et les réglages sont installés : **la production démarre vide** et se remplit avec le registre réel et les collectes. |
+| Mémoire avec démonstration | Tests Vitest, ou `SUPABASE_URL=` vide au lancement en local | Générées au démarrage par [`seed.ts`](../src/server/store/seed.ts) et perdues à l'arrêt. |
+
+Le jeu de démonstration calcule ses dates par rapport à l'instant du démarrage : le dashboard affiche donc toujours une activité « récente ». Il reproduit exactement les chiffres de la maquette (150 entreprises suivies, 24 signaux détectés sur 7 jours, 8 sujets prioritaires, 3 brouillons WordPress, 5 posts LinkedIn à valider, signal Pasqal noté 9.2/10…). En mode démonstration :
 
 - **Redémarrer le serveur remet les données à zéro.** C'est le moyen le plus simple de retrouver l'état de la maquette après des essais.
-- Les modifications faites dans l'interface ou par `curl` sont visibles immédiatement, mais ne survivent pas à un redémarrage.
-- Le quota d'entreprises du jeu de démonstration est plein (150/150) : la création d'une entreprise est refusée tant que le quota n'est pas relevé ou qu'une entreprise n'est pas supprimée.
+- Le quota d'entreprises est plein (150/150) : la création d'une entreprise est refusée tant qu'une entreprise n'est pas supprimée.
+- La collecte n'est **pas** simulée : hors tests, le serveur utilise le collecteur réel (flux RSS et Google News), et les sources fictives de la démonstration échouent. OpenAI est actif si `AI_API_KEY` est définie.
+
+Fournir `SUPABASE_SERVICE_ROLE_KEY` sur un poste local le connecterait à la **même base que la production** : toute écriture faite en local modifierait les données réelles.
 
 Le détail du jeu de données est dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md).
 
 ## Vérifier qu'une installation fonctionne
 
 1. `bun run test` affiche « 9 passed » pour les fichiers de test et aucun échec.
-2. `curl -s http://localhost:8080/api/me` renvoie l'utilisateur Sophie Martin.
+2. Serveur lancé avec `SUPABASE_URL= bun run dev` : `curl -s http://localhost:8080/api/me` renvoie l'utilisateur Sophie Martin.
 3. Le dashboard (http://localhost:8080/) affiche les cinq cartes KPI, le graphique « Activité éditoriale » et le tableau « Actualités détectées par l'IA » avec Pasqal en tête.
 4. Les huit entrées de la barre latérale ouvrent chacune une page sans erreur.
 
@@ -101,7 +114,9 @@ Le dépôt est connecté à [Lovable](https://lovable.dev) : chaque commit pouss
 | Symptôme | Cause probable | Solution |
 |---|---|---|
 | Le port 8080 est déjà utilisé | Un ancien serveur tourne encore. | `lsof -ti tcp:8080 \| xargs kill`, puis relancer `bun run dev`. |
-| Les chiffres du dashboard ne correspondent plus à la maquette | Des essais ont modifié les données en mémoire. | Redémarrer le serveur. |
+| Toutes les routes `/api` répondent `500` ; la console affiche « Missing Supabase environment variable(s): SUPABASE_SERVICE_ROLE_KEY » | `SUPABASE_URL` vient de `.env`, mais la clé de service n'existe que chez Lovable Cloud. | Lancer `SUPABASE_URL= bun run dev` (mode démonstration en mémoire). |
+| Les chiffres du dashboard ne correspondent plus à la maquette | Mode démonstration : des essais ont modifié les données en mémoire. | Redémarrer le serveur. |
+| L'application hébergée est vide | Normal : la production ne contient pas de données de démonstration. | Créer les entreprises du registre, puis lancer la collecte. |
 | Lignes « Error: aborted » dans la console du serveur | Requêtes annulées par le navigateur lors d'une navigation rapide. | Sans conséquence. |
 | Avertissement `vite-tsconfig-paths` au démarrage | Plugin fourni en double par la configuration Lovable. | Sans conséquence. |
 | Avertissement React « A tree hydrated but some attributes… » | Une extension de navigateur (ou un outil d'automatisation) a modifié le HTML avant React. | Sans conséquence si l'avertissement disparaît en navigation privée. |

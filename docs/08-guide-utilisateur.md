@@ -4,7 +4,7 @@
 
 Ce guide est le mode d'emploi de KORA Newsroom IA, l'espace éditorial d'Inovallée. Il présente chaque écran : à quoi il sert, comment lire ce qu'il affiche et comment réaliser les actions courantes, puis enchaîne les parcours types de l'équipe. Il s'adresse à l'équipe éditoriale et aux ingénieurs qui doivent comprendre l'usage pour tester ou dépanner l'application.
 
-Le guide décrit la version pilote telle qu'elle est codée. Les fonctions simulées ou absentes sont signalées comme telles. Les libellés entre « » sont ceux qui s'affichent à l'écran. Pour installer l'application, voir [Démarrage rapide](01-demarrage.md) ; pour le détail des règles appliquées par le serveur, voir [Règles métier](05-regles-metier.md).
+Le guide décrit la version pilote telle qu'elle est codée. Les fonctions simulées ou absentes sont signalées comme telles. Les libellés entre « » sont ceux qui s'affichent à l'écran. Les captures d'écran ont été prises sur les données de démonstration : en production, l'application démarre vide et se remplit avec votre registre et vos collectes (voir [Premiers pas sur une application vide](#premiers-pas-sur-une-application-vide)). Pour installer l'application, voir [Démarrage rapide](01-demarrage.md) ; pour le détail des règles appliquées par le serveur, voir [Règles métier](05-regles-metier.md).
 
 ## Sommaire
 
@@ -45,8 +45,8 @@ flowchart LR
     E --> H["Newsletter : export HTML et texte"]
 ```
 
-1. Vous tenez à jour le registre des entreprises et de leurs sources (sites officiels, pages d'actualités, flux RSS…).
-2. La collecte rapporte des **observations** : un article, une page, un communiqué, avec son URL, son média et ses dates.
+1. Vous tenez à jour le registre des entreprises et de leurs sources (sites officiels, pages d'actualités, flux RSS…). Chaque entreprise ajoutée reçoit automatiquement une source Google News.
+2. La collecte lit les flux RSS et Atom des sources et les résultats de Google News, puis rapporte des **observations** : un article, une page, un communiqué, avec son URL, son média et ses dates.
 3. Les observations qui décrivent le même événement sont regroupées en un **signal**, qui reçoit un **score IA** sur 10 et un **indicateur documentaire**.
 4. À partir d'un signal, KORA prépare un **dossier factuel** (faits, sources, contradictions), des angles et un brouillon. Vous pouvez aussi importer un article rédigé par l'équipe.
 5. Un validateur approuve une version précise pour un canal précis.
@@ -62,14 +62,19 @@ flowchart LR
 
 ### Ce qui est simulé au pilote
 
+La collecte et la conservation des données sont réelles ; la diffusion reste simulée ou limitée à des exports.
+
 | Élément | Comportement au pilote |
 |---|---|
-| Collecte web | Simulée : aucune page réelle n'est lue ([`SimulatedCollector`](../src/server/adapters/collector.ts)). |
+| Collecte web | Réelle : lecture des flux RSS et Atom des sources et recherche Google News sur le nom de l'entreprise ([`RealCollector`](../src/server/adapters/collector.ts)). Déclenchée à la main uniquement. |
 | WordPress | Simulé : un brouillon distant reçoit un identifiant `wp-NNNN`, rien n'est mis en ligne ([`SimulatedWordPress`](../src/server/adapters/channels.ts)). |
 | LinkedIn | Export uniquement : l'API n'est pas branchée ([`ExportOnlyLinkedIn`](../src/server/adapters/channels.ts)). |
 | Newsletter | Export HTML et texte ; KORA n'envoie jamais la newsletter. |
 | Textes générés | Gabarits déterministes, réécrits par un modèle OpenAI si l'exploitant l'a configuré ([`text-model.ts`](../src/server/adapters/text-model.ts)). |
-| Données | En mémoire : tout revient à l'état de démonstration à chaque redémarrage du serveur. |
+| Données | Conservées dans une base de données : un redémarrage du serveur ne remet plus rien à zéro. |
+| Budget API | Estimé : chaque appel est décompté à un coût forfaitaire, y compris les collectes, alors que les flux RSS et Google News sont gratuits. |
+
+**Production et démonstration.** En production, l'application démarre vide : ni entreprise, ni source, ni signal, ni article. Seuls existent les quatre profils, la grille de score et les règles éditoriales de départ. Les données de démonstration, que montrent les captures de ce guide, ne sont chargées que sur une installation sans base de données, par exemple le poste d'un développeur. Elles y reviennent à leur état initial à chaque redémarrage du serveur, et la collecte y est également réelle : son résultat dépend de ce que répondent les adresses, souvent fictives, de ces données.
 
 ## Prise en main
 
@@ -104,6 +109,8 @@ Le badge à côté de « Signaux » indique le nombre de signaux au statut « No
 
 Le pilote n'a pas d'écran de connexion. Quatre comptes de démonstration sont disponibles ; vous arrivez par défaut sous le profil de Sophie Martin. Pour changer, ouvrez le menu utilisateur en haut à droite et choisissez un nom sous « Changer de profil ». Le message « Connecté en tant que … » confirme le changement, et le journal d'audit le consigne.
 
+Ces quatre comptes sont aussi les seuls comptes de la production, sans mot de passe. Toute personne qui ouvre l'adresse de l'application arrive donc sous le profil de Sophie Martin, avec les droits d'administrateur, et ce qu'elle modifie ou supprime est conservé. Ne communiquez l'adresse qu'aux personnes concernées. Le journal d'audit indique le profil utilisé, pas la personne réelle.
+
 | Compte | Équipe | Rôles |
 |---|---|---|
 | Sophie Martin (par défaut) | Équipe Communication | Administrateur, Rédacteur, Validateur |
@@ -130,6 +137,18 @@ Les droits sont contrôlés par le serveur ([`permissions.ts`](../src/server/dom
 - **Messages de confirmation** : chaque action réussie ou refusée affiche un message temporaire en bas de l'écran. En cas de refus, le message est celui du serveur et explique la règle appliquée.
 - **Erreur de chargement** : un panneau d'erreur propose « Réessayer ». Une adresse inconnue affiche « Page introuvable » avec « Retour au dashboard » ; une erreur inattendue affiche « Cette page n'a pas pu se charger » avec « Réessayer » et « Dashboard ».
 - **Modifications non enregistrées** : les zones d'édition affichent « Modifications non enregistrées » ; tant que vous n'avez pas enregistré, les actions de circuit (soumettre, approuver, diffuser) restent bloquées.
+
+### Premiers pas sur une application vide
+
+En production, l'application démarre sans aucune donnée. Avant la première collecte, le Dashboard et les écrans Signaux, Articles, LinkedIn et Newsletter sont vides ; les compteurs de consommation sont à zéro, sauf « Stockage », qui part d'une base fixe de 2,4 Go. Pour démarrer la veille :
+
+1. **Choisir un profil de rédaction**. Restez sous Sophie Martin ou passez sous Lucas Bernard : l'ajout d'entreprises et de sources demande le rôle rédacteur ou administrateur.
+2. **Créer les entreprises**. Dans Entreprises, cliquez sur « Ajouter une entreprise » pour chacune des entreprises à suivre (150 au maximum ; voir [Ajouter une entreprise](#ajouter-une-entreprise)). Soignez la raison sociale, les alias et le domaine officiel : la recherche Google News porte sur la raison sociale, et le rattachement des publications s'appuie sur les noms et le domaine. KORA crée pour chaque entreprise la source « Google News — » suivie de la raison sociale.
+3. **Compléter les sources**, si vous le souhaitez. Dans Veille, « Ajouter une source » permet d'ajouter le flux RSS d'un site officiel ou d'un média (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
+4. **Lancer la collecte**. Dans Veille, cliquez sur « Lancer la collecte ». Le bouton affiche « Collecte en cours… » ; pour un registre complet, comptez plusieurs minutes. Le message « Collecte terminée sur N sources » donne le bilan, et chaque collecte consomme une part du budget API (voir [Lancer une collecte](#lancer-une-collecte)).
+5. **Qualifier les premiers signaux**. Ouvrez Signaux. Les premières collectes rapportent des publications qui peuvent dater de plusieurs mois (jusqu'à 180 jours) : leur note « Nouveauté » est alors basse.
+
+Le « Corpus d'exemples historiques » de l'onglet « Editorial DNA » reste vide en production (« Aucun exemple dans le corpus ») : aucun écran ne permet d'y ajouter des exemples.
 
 ## Dashboard
 
@@ -205,20 +224,40 @@ L'écran Veille (« KORA Radar ») gère les sources approuvées, lance les coll
 3. Saisissez un « Libellé » et l'« URL » complète, commençant par `https://` ou `http://`.
 4. Cliquez sur « Ajouter la source ». Le message « Source « … » ajoutée au registre » confirme l'ajout ; la source démarre au statut « En attente ».
 
-Le serveur refuse une URL déjà suivie pour la même entreprise (« Cette URL est déjà suivie pour cette entreprise. »), une URL interne ou non publique (« URL de source refusée : … »), et toute création au-delà de 300 sources (« Quota de sources atteint »).
+Le serveur refuse une URL déjà suivie pour la même entreprise (« Cette URL est déjà suivie pour cette entreprise. »), une URL interne ou non publique (« URL de source refusée : … »), et toute création au-delà de 300 sources (« Quota de sources atteint »). Les sources Google News créées avec les entreprises comptent parmi ces 300 sources.
+
+Le type de source détermine ce que la collecte lit réellement (voir ci-dessous). Pour un site officiel ou un média, indiquez de préférence l'adresse de son flux RSS.
+
+### Ce que lit la collecte
+
+| Type de source | Ce que KORA interroge |
+|---|---|
+| « Recherche web » | Google News, sur la raison sociale. |
+| « Page actualités » | Google News, sauf si l'adresse est celle d'un flux. |
+| « Site officiel », « Communiqués », « Flux RSS », « Newsletter importée » | L'adresse saisie. |
+
+**Google News.** KORA recherche la raison sociale entre guillemets ; les alias ne sont pas interrogés. Pour une source « Recherche web », l'adresse saisie n'est utilisée que si c'est une adresse Google News ; sinon, KORA interroge Google News sous la raison sociale actuelle. La source créée avec l'entreprise garde le nom saisi à la création : si vous renommez l'entreprise, elle continue de chercher l'ancien nom. Une « Page actualités » n'est lue directement que si son adresse contient « rss », « feed », « atom » ou « xml ». Le lien d'une observation trouvée par Google News pointe vers une adresse `news.google.com` qui redirige vers l'article du média ; le nom du média est celui qu'indique Google News.
+
+**Adresse saisie.** Un flux RSS ou Atom est lu directement. Pour une page web, KORA cherche le flux que la page déclare et lit celui-ci ; il ne lit pas le contenu de la page elle-même. Une page qui ne déclare aucun flux ne rapporte aucune publication, et la collecte est affichée « Succès · aucune actualité » alors que rien n'a pu être lu.
+
+**Filtres.** Lorsqu'un flux n'appartient pas au domaine officiel de l'entreprise, par exemple celui d'un média, seules les publications qui citent la raison sociale ou un alias sont retenues. Les publications de plus de 180 jours sont ignorées ; celles qui n'ont pas de date sont conservées et affichées « Date inconnue ».
 
 ### Lancer une collecte
 
-« Lancer la collecte » interroge toutes les sources actives ; le message « Collecte terminée sur N sources » donne le bilan. Pour une seule source, utilisez l'icône « Collecter maintenant » du registre, « Réessayer » dans l'encadré des échecs, ou le bouton de la fiche entreprise. Le résultat s'affiche alors en clair :
+« Lancer la collecte » interroge toutes les sources actives, l'une après l'autre ; le bouton affiche « Collecte en cours… » et le message « Collecte terminée sur N sources » donne le bilan. Une collecte complète peut durer plusieurs minutes : chaque essai attend jusqu'à 15 secondes la réponse de la source. Pour une seule source, utilisez l'icône « Collecter maintenant » du registre, « Réessayer » dans l'encadré des échecs, ou le bouton de la fiche entreprise. Le résultat s'affiche alors en clair :
 
 | Message | Signification |
 |---|---|
 | « Collecte réussie » | De nouvelles observations ont été rattachées. |
-| « Succès · aucune actualité » | La source répond mais n'a rien publié de nouveau. |
-| « Échec de collecte · CODE » | La source n'a pas répondu après au plus trois essais. |
+| « Succès · aucune actualité » | La source a répondu, mais aucune publication nouvelle n'a été retenue. |
+| « Échec de collecte · CODE » | La source n'a pas pu être lue après trois essais. |
 | « Budget API atteint : la collecte est suspendue… » | Le budget API du mois est épuisé. |
 
-Chaque collecte rattache au plus trois nouveaux éléments par source. Les nouvelles observations sont dédoublonnées, regroupées avec les signaux existants quand elles décrivent le même événement, ou forment un nouveau signal. Un signal d'au moins 8/10 déclenche la notification « Nouveau signal prioritaire ».
+Les codes d'échec et la conduite à tenir sont décrits dans le [parcours F](#f-traiter-une-source-en-échec).
+
+**Trois publications par source.** À chaque passage, KORA ne retient que les trois publications les plus récentes de chaque source. Si une source publie davantage entre deux collectes, les plus anciennes de ces publications ne seront jamais rattachées : collectez plus souvent les sources très actives. Les publications déjà connues sont écartées ; si les trois sont déjà connues, la collecte est « Succès · aucune actualité ». Les nouvelles observations sont regroupées avec les signaux existants quand elles décrivent le même événement, ou forment un nouveau signal. Un signal d'au moins 8/10 déclenche la notification « Nouveau signal prioritaire ».
+
+**Coût d'une collecte.** Chaque passage sur une source est décompté du budget API comme un appel payant estimé : 0,012 € pour l'interrogation, plus 0,021 € par publication retenue, soit au plus 0,075 € par source. Une collecte complète de 150 sources coûte ainsi jusqu'à environ 11 €, et le budget mensuel de 150 € permet une douzaine de collectes complètes. Chaque passage compte aussi une unité dans « Recherches web ». Les publications retenues sont décomptées dans « observations ce mois » et dans le compteur « Nouvelles observations », même lorsqu'elles étaient déjà connues. Une source en échec ne coûte que l'interrogation, quel que soit le nombre d'essais.
 
 ### Désactiver, réactiver ou supprimer une source
 
@@ -515,7 +554,9 @@ Chaque carte montre le domaine, le secteur, la priorité, le territoire, les ali
 2. Renseignez « Raison sociale », « Alias » (noms commerciaux, sigles, anciennes dénominations, séparés par une virgule), « Domaine officiel » (par exemple `pasqal.com`), « Secteur », « Territoire », « Priorité éditoriale » et « Thématiques » (elles servent aux regroupements du Dashboard).
 3. Cliquez sur « Ajouter au registre ».
 
-Le serveur refuse un nom ou un domaine déjà présents (« Entreprise déjà présente dans le registre ») et toute création au-delà de 150 entreprises (« Quota d'entreprises atteint »). Les données de démonstration occupent déjà les 150 places : voir [Quota d'entreprises atteint](#quota-dentreprises-atteint).
+KORA crée en même temps la source « Google News — » suivie de la raison sociale, de type « Recherche web », à fréquence quotidienne et au statut « En attente » : la fiche compte donc une source dès sa création, collectée au prochain « Lancer la collecte ». La fenêtre d'ajout indique encore « Les sources se rattachent ensuite depuis la fiche. » ; ajoutez-y les autres sources utiles.
+
+Le serveur refuse un nom ou un domaine déjà présents (« Entreprise déjà présente dans le registre ») et toute création au-delà de 150 entreprises (« Quota d'entreprises atteint »). En production, le registre démarre vide ; seules les données de démonstration occupent déjà les 150 places (voir [Quota d'entreprises atteint](#quota-dentreprises-atteint)).
 
 ### La fiche entreprise
 
@@ -573,7 +614,7 @@ Le panneau « Budget API » montre la consommation du mois en euros et en pource
 | Sources configurées | 300 |
 | Stockage | 10 Go |
 
-Le moteur réserve le coût maximal estimé avant chaque appel payant. Une alerte est notifiée à 80 % puis à 100 %. À 100 % du budget, les appels payants sont suspendus ; la consultation et les exports restent accessibles. Les plafonds ne se modifient pas depuis l'interface.
+Le moteur réserve le coût maximal estimé avant chaque appel payant. Les collectes en font partie : voir [Lancer une collecte](#lancer-une-collecte) pour leur coût. Une alerte est notifiée à 80 % puis à 100 %. À 100 % du budget, les appels payants sont suspendus ; la consultation et les exports restent accessibles. Les plafonds ne se modifient pas depuis l'interface.
 
 ### Exports & réversibilité
 
@@ -640,12 +681,24 @@ Si vous modifiez l'article après l'étape 7, l'approbation est invalidée : sou
 ### F. Traiter une source en échec
 
 1. **Repérer**. La notification « Source en échec : … », le compteur « sources en échec » et l'encadré des échecs de la page Veille signalent la source. Le filtre « Avec source en échec » de l'écran Entreprises permet aussi de les retrouver.
-2. **Lire le diagnostic**. Notez le code (par exemple `HTTP_403` ou `TIMEOUT`), le motif et le nombre d'essais. L'onglet « Historique des collectes » montre depuis quand la source échoue.
-3. **Réessayer**. Cliquez sur « Réessayer ». Une erreur passagère se résout souvent ainsi ; la source repasse alors « Opérationnelle ».
-4. **Corriger**. Si l'échec persiste, vérifiez l'URL dans votre navigateur. Si l'adresse a changé, supprimez la source (« Supprimer la source ») et recréez-la avec la bonne URL (« Ajouter une source »).
+2. **Lire le diagnostic**. Notez le code, le motif et le nombre d'essais (voir le tableau ci-dessous). L'onglet « Historique des collectes » montre depuis quand la source échoue.
+3. **Réessayer**. Cliquez sur « Réessayer » : KORA refait jusqu'à trois essais. Une erreur passagère (`TIMEOUT`, `NETWORK`, `HTTP_429`, `HTTP_5xx`) se résout souvent ainsi, éventuellement quelques heures plus tard ; la source repasse alors « Opérationnelle ».
+4. **Corriger**. Si l'échec persiste, ouvrez l'URL dans votre navigateur. Si l'adresse a changé, supprimez la source (« Supprimer la source ») et recréez-la avec la bonne URL (« Ajouter une source »). Si le site refuse la collecte mais publie un flux RSS, ajoutez ce flux comme source.
 5. **Mettre en pause**. Si la source est durablement indisponible, cliquez sur « Désactiver la source ». Réactivez-la plus tard avec « Réactiver la source ».
 
-Avec le collecteur simulé du pilote, les sources en échec des données de démonstration échouent à chaque essai : « Réessayer » ne les rétablit pas. Une source désactivée puis réactivée repasse « En attente » et sort de la liste des échecs jusqu'à la collecte suivante, qui échouera de nouveau.
+| Code | Signification | Que faire |
+|---|---|---|
+| `HTTP_403` | Le site refuse l'accès au collecteur. | Chercher un flux RSS public ou une autre source. |
+| `HTTP_404` | L'adresse n'existe plus. | Recréer la source avec la bonne URL. |
+| `HTTP_429` | Le site limite le nombre de requêtes. | Réessayer plus tard. |
+| `HTTP_5xx` (500, 502, 503…) | Le site est en panne. | Réessayer plus tard. |
+| Autre `HTTP_xxx` | Le site renvoie le statut HTTP indiqué. | Vérifier l'URL dans le navigateur. |
+| `TIMEOUT` | Pas de réponse en 15 secondes. | Réessayer, puis désactiver si l'échec dure. |
+| `NETWORK` | Site injoignable : domaine inconnu, connexion refusée ou certificat invalide. | Vérifier le domaine et l'URL. |
+
+Le motif accompagne le code : « Réponse HTTP » suivi du statut pour les codes `HTTP_xxx`, « Délai de réponse dépassé » pour `TIMEOUT`, et le message technique transmis par le serveur, parfois en anglais, pour `NETWORK`. Plus rarement, un autre code technique peut apparaître tel quel. Un site peut s'afficher normalement dans votre navigateur et refuser malgré tout le collecteur de KORA, d'où l'intérêt de passer par son flux RSS.
+
+Une source désactivée puis réactivée repasse « En attente » et sort de la liste des échecs, même si le problème n'est pas réglé, jusqu'à la collecte suivante.
 
 ## Comprendre les indicateurs
 
@@ -722,16 +775,17 @@ Lorsqu'aucune date de publication ni d'événement n'est connue, l'application a
 
 ## Ce que l'application ne fait pas au pilote
 
-- **Elle ne collecte pas le web réel.** La collecte est simulée et ne se déclenche que sur votre demande : il n'existe pas de collecte planifiée, la « Fréquence » d'une source est indicative.
+- **Elle ne collecte pas d'elle-même.** La collecte lit réellement les flux RSS et Google News, mais seulement lorsque vous cliquez sur « Lancer la collecte », « Collecter maintenant » ou « Réessayer » : il n'existe pas de collecte planifiée, la « Fréquence » d'une source est indicative.
+- **Elle ne lit pas le contenu des pages web.** Seuls les flux RSS et Atom, déclarés ou saisis, et les résultats de Google News sont exploités, à raison des trois publications les plus récentes par source et par collecte (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
 - **Elle ne publie rien publiquement.** WordPress reçoit un brouillon distant (simulé) ; LinkedIn et la newsletter passent par un export que vous publiez ou envoyez vous-même. Aucune page LinkedIn tierce n'est collectée.
 - **Elle n'exécute pas les programmations.** « Programmer la diffusion » enregistre une date et fait passer l'article « Programmé », mais aucun envoi ne part à cette date.
 - **Elle ne fait jamais passer un article au statut « Publié ».** Ce statut n'existe que dans les données de démonstration.
 - **Elle n'envoie pas la newsletter** et ne gère ni contacts ni délivrabilité.
 - **Elle ne lit pas les PDF, les .doc ni les images** : pas d'OCR, seulement DOCX et texte UTF-8.
 - **Elle n'apprend pas seule.** Aucun modèle n'est entraîné sur vos textes ; les corrections produisent des propositions de règles que vous acceptez ou refusez.
-- **Elle ne gère pas les comptes.** Pas d'écran de connexion, pas de création de compte ni de modification de rôle : quatre profils de démonstration, que chacun peut emprunter.
+- **Elle ne gère pas les comptes et ne protège pas l'accès.** Pas d'écran de connexion, pas de création de compte ni de modification de rôle : quatre profils de démonstration, que chacun peut emprunter. En production, toute personne qui connaît l'adresse agit en administratrice sur des données conservées.
 - **Elle ne permet pas de modifier les plafonds** de quotas et de budget, ni l'URL d'une source existante, depuis l'interface.
-- **Elle ne conserve pas les données.** Tout est stocké en mémoire : au redémarrage du serveur, les entreprises, sources, signaux, articles, approbations, imports, éditions, consommations et le journal reviennent à l'état de démonstration. Ce que vous avez saisi pendant une session de test est perdu. Exportez ce que vous souhaitez garder (voir [Exploitation](09-exploitation.md)).
+- **Elle ne propose ni corbeille ni restauration.** Les données sont conservées dans une base, mais une suppression est définitive, et le projet ne prévoit ni sauvegarde documentée ni procédure de restauration. Exportez régulièrement ce que vous souhaitez garder (voir [Exports & réversibilité](#exports--réversibilité) et [Exploitation](09-exploitation.md)).
 
 ## FAQ et dépannage
 
@@ -766,7 +820,7 @@ Une approbation n'est jamais supprimée : elle est **invalidée**, et reste visi
 - l'article a été rejeté ;
 - pour un post LinkedIn, la variante retenue a changé ;
 - pour une newsletter, un sujet a été ajouté, retiré ou déplacé, ou le titre, l'introduction ou un résumé a changé ;
-- le serveur a redémarré, et toutes les données sont revenues à l'état de démonstration.
+- sur une installation de démonstration sans base de données, le serveur a redémarré et les données sont revenues à leur état initial ; en production, un redémarrage ne change rien.
 
 Ouvrez l'onglet « Versions » ou le « Journal de l'article » pour savoir qui a modifié quoi, puis faites approuver la version courante.
 
@@ -788,11 +842,17 @@ Chaque blocage est consigné dans l'« Historique des tentatives » au statut «
 
 Lorsque le budget API du mois est épuisé, les actions qui appellent le modèle de texte ou le collecteur sont refusées avec le message « Plafond budgétaire API atteint (… € consommés sur 150 €) : les appels payants sont suspendus. Consultation et exports restent disponibles. » ou « Les appels payants sont suspendus : plafond budgétaire API du mois atteint. ». Sont concernés la création d'un article, la préparation d'un post LinkedIn, l'ajout d'un sujet à la newsletter (son résumé est généré) et la collecte. Le refus peut survenir un peu avant 150 € : le coût estimé de l'action est réservé avant l'appel, et l'action est refusée si cette réservation dépasse le plafond.
 
-Restent disponibles : la consultation, les exports, la rédaction et l'enregistrement de versions, les approbations, la diffusion WordPress et les exports LinkedIn et newsletter. La carte « Moteur d'analyse IA » passe « En pause » et l'onglet « Quotas & budget » affiche « Budget API atteint ». Le plafond ne se modifie pas depuis l'interface ; au pilote, un redémarrage du serveur remet la consommation à son niveau de démonstration (environ 112 €).
+Restent disponibles : la consultation, les exports, la rédaction et l'enregistrement de versions, les approbations, la diffusion WordPress et les exports LinkedIn et newsletter. La carte « Moteur d'analyse IA » passe « En pause » et l'onglet « Quotas & budget » affiche « Budget API atteint ». Le plafond ne se modifie pas depuis l'interface. La consommation est comptée par mois : les appels payants redeviennent possibles le mois suivant. En production, un redémarrage du serveur ne remet pas la consommation à zéro ; sur une installation de démonstration, il la ramène à son niveau initial (environ 112 €).
+
+Les collectes pèsent lourd dans ce budget : une collecte complète de 150 sources coûte jusqu'à environ 11 € (voir [Lancer une collecte](#lancer-une-collecte)). Si le budget s'épuise en cours de collecte, les sources suivantes sont marquées « Bloquée (quota) » dans l'historique.
 
 ### Quota d'entreprises atteint
 
-Le registre est limité à 150 entreprises, et les données de démonstration en comptent déjà 150 : toute création échoue avec « Quota mensuel atteint : Entreprises suivies (150 maximum). ». La fenêtre d'ajout l'annonce d'avance (« Quota de 150 entreprises atteint »). Pour tester l'ajout, un administrateur doit d'abord retirer une entreprise depuis sa fiche. Les autres quotas fonctionnent de même avec leur propre libellé, par exemple « Quota mensuel atteint : Dossiers et articles (25 maximum). ».
+Le registre est limité à 150 entreprises. Au-delà, toute création échoue avec « Quota mensuel atteint : Entreprises suivies (150 maximum). », et la fenêtre d'ajout l'annonce d'avance (« Quota de 150 entreprises atteint »). Pour ajouter une entreprise, un administrateur doit d'abord en retirer une depuis sa fiche.
+
+En production, le registre démarre vide : ce message n'apparaît qu'une fois 150 entreprises enregistrées. Il ne concerne d'emblée que les installations de démonstration, dont les données comptent déjà 150 entreprises : pour y tester l'ajout, retirez d'abord une entreprise.
+
+Les autres quotas fonctionnent de même avec leur propre libellé, par exemple « Quota mensuel atteint : Dossiers et articles (25 maximum). ».
 
 ### Autres messages fréquents
 
@@ -810,10 +870,17 @@ Le registre est limité à 150 entreprises, et les données de démonstration en
 | « Cette URL est déjà suivie pour cette entreprise. » | La source existe déjà dans le registre. |
 | « URL de source refusée : … » | Utilisez une adresse publique complète. |
 | « La date de programmation doit être dans le futur. » | Choisissez une date et une heure à venir. |
+| « Erreur interne du serveur. » | Réessayez ; si le message s'affiche sur tous les écrans, prévenez l'équipe technique (base de données injoignable, par exemple). |
 
 ### Mes saisies ont disparu après une pause
 
-Si le serveur a redémarré (mise à jour, relance par l'équipe technique), toutes les données sont revenues à l'état de démonstration. Ce n'est pas une erreur de votre part. Voir [Ce que l'application ne fait pas au pilote](#ce-que-lapplication-ne-fait-pas-au-pilote).
+En production, ce que vous avez enregistré est conservé dans la base de données, même si le serveur redémarre. Les causes possibles sont les suivantes :
+
+- **Vos modifications n'étaient pas enregistrées.** Le texte saisi dans un article ou un post n'existe que dans la page ouverte tant que vous n'avez pas cliqué sur « Enregistrer la version N+1 ». Il est perdu si vous rechargez ou quittez la page. Il est aussi remplacé, sans avertissement, si un collègue enregistre une nouvelle version du même contenu : l'application rafraîchit les données lorsque vous revenez sur la fenêtre après une pause.
+- **Quelqu'un d'autre a modifié ou supprimé les données.** Sans écran de connexion, toute personne qui dispose de l'adresse peut agir sous n'importe quel profil. Le « Journal d'audit » de l'onglet Paramètres et l'onglet « Versions » d'un article indiquent ce qui a changé, et sous quel profil.
+- **Vous travaillez sur une installation de démonstration.** Sans base de données, par exemple sur le poste d'un développeur, chaque redémarrage du serveur ramène les données à leur état initial.
+
+Voir aussi [Ce que l'application ne fait pas au pilote](#ce-que-lapplication-ne-fait-pas-au-pilote).
 
 ## Pour aller plus loin
 

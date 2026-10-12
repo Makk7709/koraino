@@ -9,7 +9,7 @@ Le cahier des charges précise lui-même (§2 et §14) qu'« inclus » désigne 
 | Statut | Signification |
 |---|---|
 | **Fait** | Implémenté de bout en bout (API, interface, tests). |
-| **Simulé** | Le parcours complet fonctionne, mais le service tiers est remplacé par un adaptateur simulé (collecte web, WordPress). |
+| **Simulé** | Le parcours complet fonctionne, mais le service tiers est remplacé par un adaptateur simulé (WordPress). |
 | **Partiel** | Une partie de l'exigence est implémentée ; le manque est décrit dans la colonne de droite. |
 | **Non fait** | Absent du code. |
 | **Hors périmètre** | Exclu par le cahier des charges lui-même. |
@@ -20,8 +20,8 @@ Le cahier des charges précise lui-même (§2 et §14) qu'« inclus » désigne 
 |---|---|---|---|
 | 3.1 Registre des entreprises : raison sociale, alias, domaine officiel, secteur, territoire, priorités, sources rattachées | Écran Entreprises ; `/api/companies` ; [`handlers/registry.ts`](../src/server/handlers/registry.ts) | Fait | Quota de 150 entreprises appliqué ; domaine officiel filtré contre les adresses internes. |
 | 3.1 Source : type, URL, fréquence, statut d'accès, dernière réussite, motif d'échec | Écran Veille, onglet « Registre des sources » ; `/api/sources` | Fait | Six types : site officiel, actualités, communiqués, RSS, recherche web, import de newsletter. |
-| 3.1 Collecte des sites, pages d'actualités, communiqués, flux RSS et recherche web | `SimulatedCollector` ([`collector.ts`](../src/server/adapters/collector.ts)) | Simulé | Aucun appel réseau réel. Un collecteur web et un fournisseur de recherche sont à brancher (voir [Architecture](02-architecture.md#brancher-un-vrai-fournisseur)). |
-| 3.1 Aucun contournement d'accès | Filtrage des URL ([`domain/security.ts`](../src/server/domain/security.ts)) | Fait | Le collecteur réel devra respecter la même règle (pas de contournement de protection, pas de connexion à une boîte mail). |
+| 3.1 Collecte des sites, pages d'actualités, communiqués, flux RSS et recherche web | `RealCollector` ([`collector.ts`](../src/server/adapters/collector.ts)) : flux RSS et Atom (découverts dans la page au besoin), Google News RSS comme recherche web ; une source Google News créée automatiquement pour chaque nouvelle entreprise | Partiel | Les pages sans flux ne sont pas lues (collecte réussie avec zéro publication) ; seules les 3 publications les plus récentes sont retenues par source et par exécution ; pas de fournisseur de recherche au sens du §5 (Google News uniquement). Voir [Architecture](02-architecture.md#brancher-un-vrai-fournisseur). |
+| 3.1 Aucun contournement d'accès | Filtrage des URL ([`domain/security.ts`](../src/server/domain/security.ts)) ; user-agent identifié `KORA-Newsroom/1.0` | Partiel | Pas de contournement de protection ni de connexion à une boîte mail. Les redirections et l'URL de flux découverte dans une page ne sont pas revalidées ; `robots.txt` n'est pas consulté. Le flux Google News, utilisé pour chaque entreprise, est réservé par ses conditions à un usage personnel et non commercial (voir [P1-12](11-anomalies-connues.md#p1--avant-toute-ouverture-à-des-utilisateurs-réels)). |
 | 3.2 Date de collecte, de publication et d'événement ; « Date inconnue » affichée comme telle | Observations et signaux ; `formatDate` ([`labels.ts`](../src/components/kora/labels.ts)) | Fait | Testé : une date inconnue reste `null`, jamais inventée. |
 | 3.2 Rapprochement des alias, regroupement des sources d'un même événement | [`domain/clustering.ts`](../src/server/domain/clustering.ts), [`services/collection.ts`](../src/server/services/collection.ts) | Fait | Rattachement de confiance inférieure à 60 laissé « à rattacher ». |
 | 3.2 Homonymies et fusions incertaines soumises à revue ; regroupement réversible | Fusion et défusion (`/api/signals/:id/merge`, `/split`) ; panneau de revue de l'écran Signaux | Fait | Fusion interdite entre entreprises différentes. |
@@ -53,13 +53,13 @@ Le cahier des charges précise lui-même (§2 et §14) qu'« inclus » désigne 
 
 ## §5 — Architecture
 
-Voir [Architecture](02-architecture.md#architecture-actuelle-et-architecture-cible). En résumé : API métier et adaptateurs en place ; PostgreSQL, stockage de fichiers et traitements asynchrones restent à construire ; les secrets ne transitent jamais par le navigateur. La conservation du modèle, des paramètres, du gabarit de requête et du coût de chaque appel fournisseur (§5, « Fournisseurs ») n'est pas implémentée : seule une ligne de consommation estimée est enregistrée.
+Voir [Architecture](02-architecture.md#architecture-actuelle-et-architecture-cible). En résumé : API métier et adaptateurs en place ; données persistées dans la base PostgreSQL de Supabase (Lovable Cloud), sous forme générique JSONB et sans transactions ; schéma relationnel, stockage de fichiers et traitements asynchrones restent à construire ; les secrets ne transitent jamais par le navigateur. La conservation du modèle, des paramètres, du gabarit de requête et du coût de chaque appel fournisseur (§5, « Fournisseurs ») n'est pas implémentée : seule une ligne de consommation estimée est enregistrée.
 
 ## §6 — Workflows et contrôles
 
 | Exigence | Implémentation | Statut | Remarques |
 |---|---|---|---|
-| WF1 collecte et classement | Collecte par source ou globale ; historique des collectes | Simulé | Collecteur simulé ; pas de planification automatique. |
+| WF1 collecte et classement | Collecte par source ou globale ; historique des collectes | Partiel | Collecteur réel (flux RSS et Google News) ; pas de planification automatique. |
 | WF2 sujet sélectionné vers brouillon sourcé | Création d'article depuis un signal | Fait | |
 | WF3 import d'un article humain | Imports | Fait | |
 | WF4 post LinkedIn d'un article approuvé | Écran LinkedIn | Partiel | La préparation d'un post n'exige pas que l'article source soit approuvé (`createLinkedIn`, [`handlers/distribution.ts`](../src/server/handlers/distribution.ts)). L'export du post, lui, exige bien l'approbation de sa propre version. |
@@ -78,13 +78,13 @@ Voir [Architecture](02-architecture.md#architecture-actuelle-et-architecture-cib
 
 | Exigence | Implémentation | Statut | Remarques |
 |---|---|---|---|
-| Comptes nominatifs, MFA pour l'administration | Cookie de session sans authentification | Non fait | Le changement de profil libre est un outil de démonstration à retirer. |
+| Comptes nominatifs, MFA pour l'administration | Cookie de session sans authentification | Non fait | Le changement de profil libre est un outil de démonstration à retirer. Écart devenu critique : les données sont désormais persistées en base de production, modifiables par quiconque connaît l'adresse de l'application. |
 | Rôles administrateur, rédacteur, validateur, lecteur (cumul possible) | [`domain/permissions.ts`](../src/server/domain/permissions.ts), contrôles côté serveur | Fait | Testé, y compris les refus. Côté interface, deux hooks `usePermissions` divergent ([`articles/hooks.ts`](../src/components/articles/hooks.ts) et [`veille/kit/hooks.ts`](../src/components/veille/kit/hooks.ts), qui ne bloque que le lecteur) : certains boutons restent actifs pour des profils que le serveur refuse ensuite (voir [Guide utilisateur](08-guide-utilisateur.md#le-bouton-est-grisé)). |
-| Contenus externes non fiables : nettoyage HTML, contrôle des formats et tailles, filtrage des URL et blocage des adresses internes (SSRF), instructions des pages ignorées | [`domain/security.ts`](../src/server/domain/security.ts), [`domain/text.ts`](../src/server/domain/text.ts), imports | Fait | Testé. À revalider avec le collecteur réel (résolution DNS, redirections). |
+| Contenus externes non fiables : nettoyage HTML, contrôle des formats et tailles, filtrage des URL et blocage des adresses internes (SSRF), instructions des pages ignorées | [`domain/security.ts`](../src/server/domain/security.ts), [`domain/text.ts`](../src/server/domain/text.ts), imports | Partiel | Testé sur l'URL saisie. Le collecteur réel ne revalide ni les redirections ni l'URL de flux découverte dans une page, et ne résout pas le DNS avant l'appel (voir [Anomalies connues](11-anomalies-connues.md)). |
 | Secrets hors code | `AI_API_KEY` en variable d'environnement serveur | Fait | Rotation et révocation à documenter avec l'hébergeur. |
 | Écritures protégées contre les requêtes intersites | En-tête `x-kora-request` exigé sur toute méthode autre que `GET` | Partiel | `GET /api/newsletters/:id/export` modifie l'état (édition marquée exportée, tentative de publication, audit) et échappe donc à ce contrôle. À transformer en `POST` ou à protéger autrement. |
 | Journaux techniques sans textes complets ni secrets | Console : erreurs internes uniquement | Partiel | Pas de politique de journalisation formalisée. |
-| TLS, chiffrement du stockage et des sauvegardes | Dépend de l'hébergement | Non fait | À établir avec la base de données. |
+| TLS, chiffrement du stockage et des sauvegardes | Supabase (Lovable Cloud) : connexions HTTPS ; chiffrement et sauvegardes selon l'offre | Partiel | Garanties de chiffrement et politique de sauvegarde de l'offre Supabase à vérifier et à consigner. |
 | Rétention : journaux 90 jours, signaux et décisions 12 mois, sauvegardes 30 jours | — | Non fait | Voir [Exploitation](09-exploitation.md#rétention-des-données). |
 | Séparation logique de l'espace Inovallée, tests d'accès croisé | Espace unique `ws_inovallee` | Partiel | Un seul espace existe ; le contrôle d'appartenance devra être ajouté avec la base. |
 
@@ -107,7 +107,7 @@ Le détail des contrôles et l'inventaire des flux tiers (dont les données envo
 | Export CSV/JSON : entreprises, sources, signaux, scores, règles, décisions | `/api/export/:entity` (neuf entités, dont observations, articles et audit) | Partiel | CSV UTF-8 avec BOM, formules neutralisées. L'export des articles ne contient ni le texte ni l'historique des versions ; les grilles de score, les posts LinkedIn, les éditions de newsletter et les imports ne sont pas exportables en lot. |
 | Export HTML/TXT des contenus | Newsletter (HTML et texte), post LinkedIn (texte) | Partiel | Les articles sont exportés en CSV/JSON, pas en fichiers HTML individuels. |
 | Manifeste et dictionnaire des relations | `/api/export/manifest` ; [Dictionnaire des données](04-dictionnaire-des-donnees.md) | Fait | |
-| Fichiers client dans leur format d'origine | Original des imports conservé en mémoire | Partiel | Pas d'export des fichiers originaux. |
+| Fichiers client dans leur format d'origine | Original des imports sérialisé dans le JSON de l'import (`kora_records`) | Partiel | Pas d'export des fichiers originaux ; en base, le `Uint8Array` est converti en objet JSON et ne se relit pas tel quel. |
 
 ## Épreuves de recette R01 à R13 (§9)
 
@@ -115,7 +115,7 @@ Ce tableau indique ce qui est déjà vérifié automatiquement sur les données 
 
 | Épreuve | Déjà couvert | Reste à faire pour la recette |
 |---|---|---|
-| R01 Registre pilote puis production | Registre, quotas, collecte par source. | Charger les 30 puis 150 entreprises réelles ; collecteur réel ; au moins une collecte réussie par fiche. |
+| R01 Registre pilote puis production | Registre, quotas, collecte par source ; collecteur réel et source Google News automatique par entreprise. | Charger les 30 puis 150 entreprises réelles ; au moins une collecte réussie par fiche (attention au budget : une collecte complète coûte environ 11 € estimés). |
 | R02 100 observations du jeu de recette | Identifiant, URL, date de collecte, entreprise ou « à rattacher », aucune date inventée (tests `signals.test.ts`). | Exécuter sur le jeu de recette réel. |
 | R03 30 groupes de doublons et 20 événements distincts | Dédoublonnage, regroupement, défusion (tests). | Mesurer les seuils (27/30 groupes réunis, au plus 1/20 fusion à tort) sur le corpus annoté. |
 | R04 30 sujets scorés, dont incomplets et contradictoires | Grille et version, motifs, indicateur documentaire, contradictions visibles (tests). | Exécuter sur les 30 sujets annotés. |
@@ -133,9 +133,9 @@ Ce tableau indique ce qui est déjà vérifié automatiquement sur les données 
 
 Par ordre de priorité pour une mise en production :
 
-1. **Persistance PostgreSQL** (implémentation de `Repository`, migrations, sauvegardes, restauration) : condition de toute utilisation réelle.
-2. **Authentification nominative** et MFA pour l'administration ; gestion des comptes.
-3. **Collecteur web réel** et fournisseur de recherche, avec file de travaux, planification quotidienne et concurrence bornée.
+1. **Authentification nominative** et MFA pour l'administration ; gestion des comptes. Désormais prioritaire : la base de production est ouverte à quiconque connaît l'adresse.
+2. **Fiabiliser la persistance** : transactions sur les opérations composées, schéma relationnel et pagination en base, stockage des fichiers hors JSON, sauvegardes et restauration testée. Fait : données persistées dans Supabase avec migrations versionnées.
+3. **Compléter la collecte** : fournisseur de recherche sous licence commerciale à la place du flux Google News, lecture des pages sans flux, file de travaux, planification quotidienne, concurrence bornée et facturation au coût réel. Fait : collecteur réel par flux RSS et Google News.
 4. **Client WordPress réel** (REST API, brouillon sur le site de test), avec champ média.
 5. **Traçabilité fournisseur** : coût réel des appels OpenAI dans le budget, conservation du modèle et des paramètres, journalisation des échecs sans contenu sensible.
 6. **Editorial DNA** : chargement du corpus d'Inovallée, transmission des exemples pertinents au générateur.

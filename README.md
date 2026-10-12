@@ -9,8 +9,10 @@ Espace éditorial d'Inovallée : veille des entreprises de l'écosystème, signa
 ```bash
 nvm use 24
 bun install
-bun run dev        # http://localhost:8080
+SUPABASE_URL= bun run dev   # http://localhost:8080, données de démonstration en mémoire
 ```
+
+Sans `SUPABASE_URL=`, le serveur local tente d'utiliser la base Supabase du projet (adresse lue dans `.env`) et répond `500`, faute de la clé de service fournie uniquement par Lovable Cloud. Voir [Démarrage rapide](docs/01-demarrage.md).
 
 | Commande | Effet |
 |---|---|
@@ -19,11 +21,11 @@ bun run dev        # http://localhost:8080
 | `bun run lint` | ESLint et Prettier |
 | `bun run build` | Build de production (Cloudflare Workers) |
 
-Variable d'environnement facultative : `AI_API_KEY` (clé OpenAI, lue côté serveur uniquement) pour améliorer les textes générés.
+En production (Lovable Cloud), les données sont stockées dans la base Supabase du projet et la collecte lit réellement les flux RSS et Google News. Secrets lus côté serveur uniquement : `SUPABASE_SERVICE_ROLE_KEY` (fournie par Lovable Cloud) et, facultative, `AI_API_KEY` (clé OpenAI) pour améliorer les textes générés. Le fichier `.env` versionné ne contient que des valeurs publiques.
 
 ## Documentation
 
-Toute la documentation est dans [`docs/`](docs/README.md) : démarrage, architecture, référence API, dictionnaire des données, règles métier, sécurité, frontend, guide utilisateur, exploitation, et couverture du cahier des charges.
+Toute la documentation est dans [`docs/`](docs/README.md) : démarrage, architecture, référence API, dictionnaire des données, règles métier, sécurité, frontend, guide utilisateur, exploitation, couverture du cahier des charges et anomalies connues.
 
 ## Lovable
 

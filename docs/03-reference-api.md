@@ -4,7 +4,12 @@
 
 Source de vérité : la table `ROUTES` de [`router.ts`](../src/server/router.ts) (65 routes), les handlers de [`src/server/handlers/`](../src/server/handlers/), les schémas de [`validation.ts`](../src/server/validation.ts) et le contrat [`types.ts`](../src/lib/api/types.ts). Les comportements cités sont couverts par les tests [`src/test/server/`](../src/test/server/).
 
-> L'API fonctionne sur un **store en mémoire** réinitialisé à chaque redémarrage du serveur à partir du seed déterministe ([`seed.ts`](../src/server/store/seed.ts)) : les identifiants de démonstration cités (`sig_pasqal`, `art_pasqal`, `li_pasqal`, `nl_current`…) existent au démarrage, et toute écriture est perdue au redémarrage. La collecte, WordPress et LinkedIn sont **simulés** par des adaptateurs (voir [Sécurité et flux tiers](06-securite-et-flux-tiers.md)).
+> L'API lit et écrit dans le dépôt renvoyé par `getRepository()` ([`memory.ts`](../src/server/store/memory.ts)), qui dépend de l'environnement :
+>
+> - hors tests et si `SUPABASE_URL` est définie, c'est `DbRepository` ([`db.ts`](../src/server/store/db.ts)) : les données sont **persistantes** dans la base Supabase (PostgreSQL) de Lovable Cloud et survivent aux redémarrages. La production démarre **vide** : `ensureReady()` n'y installe que les quatre utilisateurs, la grille de score, les règles éditoriales et les réglages du seed, sans aucune donnée de démonstration ;
+> - sinon (tests Vitest, ou poste local lancé avec `SUPABASE_URL` vide), c'est un **store en mémoire** réinitialisé à chaque redémarrage depuis le seed déterministe ([`seed.ts`](../src/server/store/seed.ts)).
+>
+> Les identifiants de démonstration cités dans ce document (`sig_pasqal`, `art_pasqal`, `li_pasqal`, `nl_current`, `co_pasqal`…) et les extraits de réponses réelles n'existent que dans le second mode, celui de l'instance locale interrogée pour cette référence. En local, `.env` fournit `SUPABASE_URL` sans la clé de service : lancé tel quel, le serveur répond `500 internal_error` sur toutes les routes, et il faut vider la variable (`SUPABASE_URL= bun run dev`) pour obtenir le store mémoire (voir [Démarrage](01-demarrage.md)). Dans ce mode, le collecteur reste le collecteur réel, et OpenAI est actif si `AI_API_KEY` est définie. Hors tests, la collecte est **réelle** (flux RSS/Atom et Google News, voir [Collecteur réel](#collecte-reelle)) ; WordPress et LinkedIn restent **simulés** (voir [Sécurité et flux tiers](06-securite-et-flux-tiers.md)).
 
 ## Sommaire
 
@@ -16,6 +21,7 @@ Source de vérité : la table `ROUTES` de [`router.ts`](../src/server/router.ts)
 - [4. Exports et téléchargements](#exports)
 - [5. Entreprises](#entreprises)
 - [6. Sources et collecte](#sources)
+  - [Collecteur réel](#collecte-reelle)
 - [7. Signaux et grilles de score](#signaux)
 - [8. Articles, dossier factuel et publication](#articles)
 - [9. Imports humains](#imports)
@@ -53,7 +59,7 @@ Tous les chemins sont préfixés par `/api`. La colonne « Rôles » indique les
 | POST | [`/api/sources`](#post-sources) | admin, rédacteur | Ajouter une source |
 | PATCH | [`/api/sources/:id`](#patch-source) | admin, rédacteur | Modifier une source |
 | DELETE | [`/api/sources/:id`](#delete-source) | admin, rédacteur | Supprimer une source |
-| POST | [`/api/sources/:id/collect`](#post-source-collect) | admin, rédacteur | Collecter une source (simulé, payant) |
+| POST | [`/api/sources/:id/collect`](#post-source-collect) | admin, rédacteur | Collecter une source (réseau réel hors tests, payant) |
 | POST | [`/api/collect`](#post-collect) | admin, rédacteur | Collecter toutes les sources actives |
 | GET | [`/api/collection-runs`](#get-collection-runs) | tous | Historique des exécutions de collecte |
 | GET | [`/api/signals`](#get-signals) | tous | Liste filtrée et paginée des signaux |
@@ -119,7 +125,8 @@ flowchart TD
   F -- oui --> O204[204 + en-tête allow]
   F -- non --> E405[405 method_not_allowed + allow]
   D -- "chemin inconnu" --> E404[404 not_found]
-  D -- oui --> G[Utilisateur : cookie kora_uid, sinon u_sophie]
+  D -- oui --> R["Dépôt : await getRepository()<br/>base Supabase ou store mémoire"]
+  R --> G[Utilisateur : cookie kora_uid, sinon u_sophie]
   G --> H[Corps : JSON 1 Mo pour POST / PATCH / DELETE, multipart pour POST /imports]
   H --> I[Handler : droits, validation, règles, persistance, audit]
   I --> J[Réponse JSON ou fichier]
@@ -127,7 +134,9 @@ flowchart TD
   I -. autre exception .-> L[500 internal_error]
 ```
 
-Le handler reçoit un contexte [`Ctx`](../src/server/context.ts) : `request`, `url`, `params` (paramètres de chemin décodés), `query` (`URLSearchParams`), `repo` (le [`Repository`](../src/server/store/repository.ts)), `user` (utilisateur courant), `now` (horloge de [`clock.ts`](../src/server/clock.ts), figeable dans les tests), `body` (JSON ou `undefined`) et `form` (`FormData` pour la route multipart, sinon `null`).
+Le handler reçoit un contexte [`Ctx`](../src/server/context.ts) : `request`, `url`, `params` (paramètres de chemin décodés), `query` (`URLSearchParams`), `repo` (le [`Repository`](../src/server/store/repository.ts) : `DbRepository` ou `MemoryRepository`), `user` (utilisateur courant), `now` (horloge de [`clock.ts`](../src/server/clock.ts), figeable dans les tests), `body` (JSON ou `undefined`) et `form` (`FormData` pour la route multipart, sinon `null`).
+
+Le dépôt n'est obtenu qu'après la résolution de la route : les réponses `403 csrf_header_missing`, `404`, `405` et `204` (`OPTIONS`) ne touchent pas la base. Avec `DbRepository`, chaque appel `get`, `list`, `insert`, `update` ou `remove` est une requête Supabase distincte, sans transaction : un handler qui écrit plusieurs enregistrements peut laisser un état partiel si l'une des écritures échoue.
 
 <a id="routage"></a>
 
@@ -156,7 +165,7 @@ curl -s -i -X OPTIONS http://localhost:8080/api/signals/sig_pasqal
 - **Multipart** : seule la route `POST /api/imports` (drapeau `multipart: true` dans `ROUTES`) attend `multipart/form-data` avec les champs `file` et `author`. Une requête non multipart y reçoit `400 multipart_required`, un corps illisible `400 invalid_multipart`. Le fichier est limité à 10 Mio (`MAX_IMPORT_BYTES` de [`imports.ts`](../src/server/domain/imports.ts)) : refus `413 file_too_large` si `content-length` dépasse 10 Mio + 64 Kio, puis si la taille du fichier dépasse 10 Mio.
 - **Réponses JSON** : produites par `json()` de [`http.ts`](../src/server/http.ts), avec `content-type: application/json` et `cache-control: no-store`. Statuts de succès : `200` (lecture, modification), `201` (création, nouvelle version, publication effective), `204` sans corps (suppressions, `POST /api/notifications/read`).
 - **Fichiers** (exports CSV/JSON, newsletter HTML/texte, post LinkedIn) : produits par `fileResponse()`, statut `200`, en-têtes `content-disposition: attachment; filename="…"; filename*=UTF-8''…`, `cache-control: no-store`, `x-content-type-options: nosniff`. Les CSV commencent par un BOM UTF-8.
-- **Identifiants** : les enregistrements créés reçoivent un identifiant `<préfixe>_n<compteur>` (`Repository.nextId`), par exemple `sig_n1042`, `art_n…`, `pub_n…`. Exceptions : entreprises (`co_<nom-normalisé>`), grilles (`grid_v<version>`), faits du dossier (`fc_<articleId>_<i>`), propositions d'import (`<importId>_p<i>`), variantes LinkedIn (`<postId>_v<i>`).
+- **Identifiants** : les enregistrements créés reçoivent un identifiant produit par `Repository.nextId(préfixe)`, dont la forme dépend du dépôt. En base, c'est `<préfixe>_<horodatage en base 36><6 premiers caractères d'un UUID>` (ex. `sig_mgo4k2x1a3f9c2`) ; en mémoire, `<préfixe>_n<compteur>` (ex. `sig_n1042`). Un client doit traiter les identifiants comme des chaînes opaques. Exceptions : entreprises (`co_<nom-normalisé>`, ou `nextId("co")` si cet identifiant existe déjà), grilles (`grid_v<version>`), faits du dossier (`fc_<articleId>_<i>`), propositions d'import (`<importId>_p<i>`), variantes LinkedIn (`<postId>_v<i>`).
 
 <a id="csrf"></a>
 
@@ -174,7 +183,7 @@ Toute requête dont la méthode n'est ni `GET` (ni `HEAD`) ni `OPTIONS` doit por
 
 - L'utilisateur courant est lu dans le cookie `kora_uid` (`SESSION_COOKIE` de [`http.ts`](../src/server/http.ts)). Cookie absent ou identifiant inconnu : l'utilisateur par défaut `DEFAULT_USER_ID` (`u_sophie`, [`seed.ts`](../src/server/store/seed.ts)) est utilisé, sans erreur.
 - Le cookie est posé par [`POST /api/me`](#post-me) : `kora_uid=<id>; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000` (30 jours).
-- **Il n'existe aucune authentification** (ni mot de passe, ni jeton, ni SSO) : c'est un mécanisme de démonstration. Toute requête sans cookie agit en tant qu'administratrice.
+- **Il n'existe aucune authentification** (ni mot de passe, ni jeton, ni SSO) : c'est un mécanisme de démonstration. Toute requête sans cookie agit en tant qu'administratrice. Avec la base persistante, cela vaut pour les données de production : toute personne qui connaît l'adresse de l'application peut créer, modifier ou supprimer définitivement des données. Le client Supabase navigateur et `auth-middleware.ts` générés par Lovable ([`src/integrations/supabase/`](../src/integrations/supabase/)) ne sont utilisés nulle part.
 
 | Identifiant | Nom | Équipe | Rôles |
 |---|---|---|---|
@@ -183,7 +192,7 @@ Toute requête dont la méthode n'est ni `GET` (ni `HEAD`) ni `OPTIONS` doit por
 | `u_claire` | Claire Dubois | Direction | `validateur` |
 | `u_marc` | Marc Lefèvre | Développement économique | `lecteur` |
 
-Dans les exemples `curl`, l'utilisateur est choisi avec `-b 'kora_uid=u_lucas'`.
+Ces quatre utilisateurs viennent du seed dans les deux modes : en base, `ensureReady()` les installe au premier démarrage, ils existent donc en production. Dans les exemples `curl`, l'utilisateur est choisi avec `-b 'kora_uid=u_lucas'`.
 
 <a id="droits"></a>
 
@@ -253,10 +262,10 @@ interface ApiErrorBody {
 
 - `code` est stable et destiné au code client ; `message` est en français et destiné à l'affichage ; `details` est présent seulement pour certaines erreurs (champs fautifs, identifiant en conflit, tentative de publication bloquée…).
 - Les erreurs métier sont levées sous forme de `HttpError` ([`http.ts`](../src/server/http.ts)) via les aides `badRequest`, `forbidden`, `notFound`, `conflict`, `unprocessable`. Aucune trace de pile n'est renvoyée (vérifié par le test « répond au format ApiErrorBody sans trace de pile »).
-- Toute autre exception est journalisée côté serveur (`console.error("[api] erreur interne", …)`) et renvoie `500 internal_error` (« Erreur interne du serveur. »).
+- Toute autre exception est journalisée côté serveur (`console.error("[api] erreur interne", …)`) et renvoie `500 internal_error` (« Erreur interne du serveur. »). C'est le cas des erreurs de la base : `DbRepository` relaie le message Supabase dans une `Error`. C'est aussi le cas d'une configuration incomplète : sans `SUPABASE_SERVICE_ROLE_KEY`, `supabaseAdmin` ([`client.server.ts`](../src/integrations/supabase/client.server.ts)) lève « Missing Supabase environment variable(s): SUPABASE_SERVICE_ROLE_KEY. … », et toute route résolue répond `500`.
 - Côté front, `apiFetch` convertit la réponse en `ApiError(status, code, message, details)` ; si le corps n'est pas un `ApiErrorBody`, `code` vaut `http_error`.
 
-Exemples réels (instance de démonstration) :
+Exemples réels (instance locale en mémoire ; les mêmes réponses sont produites en base) :
 
 ```bash
 curl -s http://localhost:8080/api/inconnu
@@ -326,7 +335,7 @@ Liste exhaustive des codes émis par le serveur (recherche de tous les `HttpErro
 | 422 | `duplicate_variant` | Identifiants de variantes non uniques | — |
 | 422 | `item_not_found` | Sujet inconnu dans l'édition (modification groupée) | `{ itemIds }` |
 | 422 | `newsletter_empty` | Approbation d'une édition sans sujet | — |
-| 500 | `internal_error` | Exception non prévue | — |
+| 500 | `internal_error` | Exception non prévue, erreur de la base ou configuration Supabase incomplète | — |
 
 Le code `linkedin_api_unavailable` n'est pas une erreur : il figure dans le champ `code` d'une publication LinkedIn **réussie** en mode export (voir [`POST /api/linkedin/:id/publish`](#post-linkedin-publish)). De même, `budget_exhausted` apparaît comme `errorCode` d'une exécution de collecte `bloque_quota`.
 
@@ -360,7 +369,7 @@ Seuls les filtres de `GET /signals` sont validés (`422 invalid_filter`) ; aille
 - Toutes les dates renvoyées sont des chaînes ISO 8601 en UTC produites par `toISOString()` (ex. `2026-10-12T16:27:44.903Z`). Une date inconnue vaut `null`, jamais une date inventée (en-tête de [`types.ts`](../src/lib/api/types.ts)).
 - En entrée (`from`, `to`, `weekOf`, `scheduledAt`), toute chaîne acceptée par `Date.parse` est admise (aide `isoDate` de `validation.ts`, `parseDate` de [`dates.ts`](../src/server/domain/dates.ts)). Une chaîne réduite à une date (`2026-10-01`) est interprétée par JavaScript comme minuit UTC.
 - Les bornes de jour, de semaine et de mois (période du dashboard, mois des quotas `monthKey`, lundi d'une édition, envoi prévu à 9 h, nom des fichiers exportés `isoDay`) sont calculées dans le **fuseau horaire du processus serveur**.
-- Dans les données de démonstration, les dates sont relatives à l'instant de démarrage du serveur.
+- Dans les données de démonstration (store mémoire), les dates sont relatives à l'instant de démarrage du serveur. En base, les enregistrements installés par `ensureReady()` (grille, règles) sont datés relativement à l'instant de leur installation, puis ne changent plus.
 
 <a id="budget"></a>
 
@@ -374,6 +383,8 @@ Les opérations « payantes » passent par `paidCall()` de [`usage.ts`](../src/s
 | Variantes LinkedIn | `POST /linkedin` | `generation_linkedin` | 0,08 € | 0,08 € | `linkedin_posts` |
 | Résumé de sujet newsletter | `POST /newsletters/:id/items`, `PATCH /signals/:id` (`inNewsletter: true`) | `generation_summary` | 0,02 € | 0,02 € | aucun |
 | Collecte d'une source | `POST /sources/:id/collect`, `POST /collect` (par source) | `search_query`, `observation` | 0,075 € | 0,012 € + 0,021 € par publication reçue (3 au plus) | `search_queries`, `observations` |
+
+Les coûts de collecte restent ces montants estimés alors que les flux RSS et Google News lus par le [collecteur réel](#collecte-reelle) sont gratuits : une collecte complète de 150 sources coûte jusqu'à 11,25 €, soit une douzaine de collectes complètes par mois avec le plafond de 150 €.
 
 La suspension se lève seulement au changement de mois : aucun endpoint ne permet de modifier les plafonds (`settings.quotaLimits`, initialisés à `DEFAULT_LIMITS`) ni de lever la suspension. La consultation, les exports et les décisions non payantes (approbation, publication, import, conversion) restent disponibles (test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts)).
 
@@ -391,7 +402,9 @@ Les quotas d'unités sont vérifiés par `assertQuota()` avant l'action : refus 
 | `sources` | 300 | `POST /sources` | nombre de sources (stock) |
 | `storage_gb` | 10 Go | `POST /imports` (incrément : taille du fichier) | `storageBaseGb` + taille des imports |
 
-Après chaque appel payant, `checkAlerts()` émet une notification `quota` par compteur (hors `companies` et `sources`) au passage de 80 % puis de 100 %, une seule fois par seuil et par mois. Le jeu de démonstration remplit le quota d'entreprises (150/150) : `POST /api/companies` est refusé tant qu'aucune entreprise n'a été supprimée.
+Après chaque appel payant, `checkAlerts()` émet une notification `quota` par compteur (hors `companies` et `sources`) au passage de 80 % puis de 100 %, une seule fois par seuil et par mois.
+
+En mémoire, le jeu de démonstration remplit le quota d'entreprises (150/150) : `POST /api/companies` y est refusé tant qu'aucune entreprise n'a été supprimée. En base, le registre démarre vide, mais les réglages copiés du seed gardent `storageBaseGb: 2.4` : le compteur `storage_gb` démarre à 2,4 Go sans aucun fichier. Chaque entreprise créée ajoute une source Google News, comptée dans le stock `sources` sans que ce quota soit vérifié (voir [`POST /api/companies`](#post-companies)).
 
 <a id="audit-notifications"></a>
 
@@ -448,7 +461,7 @@ Handlers : [`session.ts`](../src/server/handlers/session.ts).
 curl -s http://localhost:8080/api/me
 ```
 
-Réponse réelle de l'instance de démonstration (sans cookie, donc utilisatrice par défaut) :
+Réponse réelle de l'instance locale en mémoire (sans cookie, donc utilisatrice par défaut) ; elle est identique en base, où `u_sophie` existe aussi :
 
 ```json
 {"id":"u_sophie","name":"Sophie Martin","email":"sophie.martin@inovallee.com","team":"Équipe Communication","roles":["admin","redacteur","validateur"],"avatarUrl":null}
@@ -522,13 +535,15 @@ Handlers : [`ops.ts`](../src/server/handlers/ops.ts). Les exports, servis par le
 
 Contenu : `period` (bornes effectives), `kpis` (cinq cartes `companies`, `signals`, `priority_topics`, `wordpress_drafts`, `linkedin_to_validate`, avec tendance et mini-histogramme de 8 semaines), `groups` (`prioritaires`, `a_surveiller`, `traites`, quatre rubriques maximum chacun), `activity` (un point par jour de la période), `latestWordpressDraft`, `latestLinkedInPost`, `newsletter` (édition courante non exportée et interrupteur `includeNext` pour le signal prioritaire le plus récent) et `engine` (`active` vaut `false` quand les appels payants sont suspendus). Les règles de calcul sont décrites dans [Règles métier](05-regles-metier.md).
 
+Le premier élément de `engine.features` arrondit le nombre de sources actives à la cinquantaine inférieure, avec un minimum de 50 : une base sans source affiche « Veille multi-sources (50+ sources) ».
+
 Erreurs spécifiques : `400 invalid_period` (date illisible, ou `from` postérieur à `to`).
 
 ```bash
 curl -s 'http://localhost:8080/api/dashboard?from=2026-10-01T00:00:00.000Z&to=2026-10-12T21:59:59.999Z'
 ```
 
-Extrait réel de `GET /api/dashboard` (période par défaut ; les « … » marquent les coupes) :
+Extrait réel de `GET /api/dashboard` sur l'instance locale en mémoire (données de démonstration, période par défaut ; les « … » marquent les coupes). En production, les valeurs reflètent le registre réel et les collectes, à partir d'une base vide :
 
 ```json
 {
@@ -613,7 +628,7 @@ curl -s 'http://localhost:8080/api/search?q=pasqal'
 curl -s http://localhost:8080/api/usage
 ```
 
-Extrait réel :
+Extrait réel (instance locale en mémoire, données de démonstration) :
 
 ```json
 {
@@ -668,14 +683,14 @@ Le manifeste est construit par `exportManifest` en générant chaque table d'exp
 
 | Champ | Contenu |
 |---|---|
-| `workspaceId` | `ws_inovallee` (`WORKSPACE_ID`) |
+| `workspaceId` | `ws_inovallee` (constante `WORKSPACE_ID` de `seed.ts`, dans les deux modes) |
 | `generatedAt` | instant de génération (ISO 8601) |
 | `generatedBy` | nom de l'utilisateur courant |
 | `encoding` | « UTF-8 (CSV avec BOM, séparateur virgule, fins de ligne CRLF) » |
 | `dates` | « ISO 8601 ; une date inconnue est laissée vide (null en JSON) » |
 | `entities[]` | pour chaque entité : `entity`, `label`, `count`, `columns`, `csv`, `json` (URL relatives) |
 
-Extrait réel (instance de démonstration) :
+La clé des réglages en base (`DbRepository.workspaceId`, valeur `kora`) n'est pas exposée par le manifeste. Extrait réel (instance locale en mémoire) :
 
 ```json
 {
@@ -760,7 +775,7 @@ Handlers : [`registry.ts`](../src/server/handlers/registry.ts). DTO : [`Company`
 
 - **Client** : `api.createCompany(input)`.
 - **Droit** : `registry.write` (admin, rédacteur).
-- **Réponse** : `201` `Company`.
+- **Réponse** : `201` `Company`, avec `sourceCount: 1` (source Google News créée automatiquement).
 
 | Champ | Type | Requis | Contraintes |
 |---|---|---|---|
@@ -774,11 +789,25 @@ Handlers : [`registry.ts`](../src/server/handlers/registry.ts). DTO : [`Company`
 
 Le domaine est mis en minuscules ; le schéma (`https://`), le chemin, le préfixe `www.` et le point final sont retirés ; le résultat doit correspondre à `^[a-z0-9-]+(\.[a-z0-9-]+)+$` puis passer `checkHost()` de [`security.ts`](../src/server/domain/security.ts) (refus des adresses IP privées, `localhost`, `.local`, `.internal`…).
 
-Ordre des contrôles : droit, schéma, domaine, quota `companies`, unicité. L'identifiant vaut `co_<nom normalisé, espaces remplacés par des tirets, 40 caractères>` (ex. `co_chartreuse-instruments`), ou un identifiant généré si celui-ci existe déjà. Les couleurs du monogramme (`brand`) sont choisies dans `BRAND_COLORS` par hachage du nom. Effets : audit `company.create`.
+Ordre des contrôles : droit, schéma, domaine, quota `companies`, unicité. L'identifiant vaut `co_<nom normalisé, espaces remplacés par des tirets, 40 caractères>` (ex. `co_chartreuse-instruments`), ou un identifiant généré par `nextId("co")` si celui-ci existe déjà. Les couleurs du monogramme (`brand`) sont choisies dans `BRAND_COLORS` par hachage du nom.
 
-Erreurs spécifiques : `422 domain_invalid`, `422 url_refused`, `422 quota_exceeded` (systématique sur le jeu de démonstration, déjà à 150/150), `409 duplicate_company` (`details.companyId`).
+Effets : l'entreprise est enregistrée, puis une source de veille est créée automatiquement dans une seconde écriture, non atomique avec la première :
+
+| Champ de la source | Valeur |
+|---|---|
+| `type` | `recherche_web` |
+| `label` | « Google News — `<nom>` » |
+| `url` | `googleNewsUrl(nom)` de [`collector.ts`](../src/server/adapters/collector.ts) : `https://news.google.com/rss/search?q="<nom>"&hl=fr&gl=FR&ceid=FR:fr` (requête encodée) |
+| `frequency` | `quotidienne` |
+| `access` | `en_attente` |
+| `simulation` (interne) | `{ mode: "auto" }` |
+
+Le champ interne `simulation` n'est lu que par le collecteur simulé des tests. Cette source n'est pas soumise aux contrôles de [`POST /api/sources`](#post-sources) : ni quota `sources` (le stock peut donc dépasser 300), ni filtrage `validateSourceUrl`, ni contrôle de doublon, ni audit `source.create`. Sa fréquence est `quotidienne`, alors que `POST /api/sources` attribue `hebdomadaire` par défaut au type `recherche_web`. Seul l'audit `company.create` est écrit (« Ajout au registre : `<nom>` (`<domaine>`) »).
+
+Erreurs spécifiques : `422 domain_invalid`, `422 url_refused`, `422 quota_exceeded` (150 entreprises ; systématique sur le jeu de démonstration en mémoire, déjà à 150/150), `409 duplicate_company` (`details.companyId`).
 
 ```bash
+# 201 : Company avec "sourceCount": 1
 curl -s -X POST http://localhost:8080/api/companies \
   -H 'x-kora-request: 1' -H 'content-type: application/json' \
   -d '{"name":"Chartreuse Instruments","domain":"chartreuse-instruments.fr","sector":"Instrumentation","themes":["numerique"]}'
@@ -803,7 +832,7 @@ Erreurs spécifiques : `404 not_found` (« Entreprise introuvable. »).
 - **Réponse** : `200` `Company`.
 - **Corps** : les champs de `POST /api/companies`, tous facultatifs, avec les mêmes contraintes (`schemas.company.partial()`).
 
-Effets : un `territory` vide conserve l'ancienne valeur ; un changement de nom recalcule les initiales du monogramme ; l'unicité nom/domaine est revérifiée en excluant l'entreprise elle-même ; audit `company.update` (« Champs modifiés : … »). Les signaux existants ne sont pas recalculés.
+Effets : un `territory` vide conserve l'ancienne valeur ; un changement de nom recalcule les initiales du monogramme ; l'unicité nom/domaine est revérifiée en excluant l'entreprise elle-même ; audit `company.update` (« Champs modifiés : … »). Les signaux existants ne sont pas recalculés. Les sources ne sont pas modifiées : après un changement de nom, la source Google News créée avec l'entreprise garde son libellé et son URL, et interroge donc toujours l'ancien nom.
 
 Erreurs spécifiques : `404 not_found`, `422 domain_invalid`, `422 url_refused` (ex. domaine `router.local`, test « refuse un domaine officiel privé »), `409 duplicate_company`.
 
@@ -815,7 +844,7 @@ Erreurs spécifiques : `404 not_found`, `422 domain_invalid`, `422 url_refused` 
 - **Droit** : `registry.delete` (admin).
 - **Réponse** : `204`.
 
-Effets : les sources de l'entreprise sont supprimées ; l'historique est conservé mais détaché : les signaux passent à `companyId: null` avec une revue `homonymie` (« Entreprise « … » retirée du registre : à rattacher »), sans recalcul de score ni effacement des thématiques ; les observations, articles et posts LinkedIn passent à `companyId: null`. Contrairement à [`DELETE /api/sources/:id`](#delete-source), les observations conservent leur `sourceId`, qui désigne alors une source supprimée. Audit `company.delete`.
+Effets : les sources de l'entreprise, y compris sa source Google News, sont supprimées ; l'historique est conservé mais détaché : les signaux passent à `companyId: null` avec une revue `homonymie` (« Entreprise « … » retirée du registre : à rattacher »), sans recalcul de score ni effacement des thématiques ; les observations, articles et posts LinkedIn passent à `companyId: null`. Contrairement à [`DELETE /api/sources/:id`](#delete-source), les observations conservent leur `sourceId`, qui désigne alors une source supprimée. Audit `company.delete`.
 
 Erreurs spécifiques : `404 not_found`.
 
@@ -823,7 +852,41 @@ Erreurs spécifiques : `404 not_found`.
 
 ## 6. Sources et collecte
 
-Handlers : [`registry.ts`](../src/server/handlers/registry.ts) (CRUD) et [`signals.ts`](../src/server/handlers/signals.ts) (collecte), service [`collection.ts`](../src/server/services/collection.ts). DTO : [`Source`](../src/lib/api/types.ts) (sans les champs internes `createdAt`, `runCount`, `simulation`) et [`CollectionRun`](../src/lib/api/types.ts). La collecte est **simulée** par `SimulatedCollector` ([`collector.ts`](../src/server/adapters/collector.ts)) : aucun site n'est réellement interrogé.
+Handlers : [`registry.ts`](../src/server/handlers/registry.ts) (CRUD) et [`signals.ts`](../src/server/handlers/signals.ts) (collecte), service [`collection.ts`](../src/server/services/collection.ts). DTO : [`Source`](../src/lib/api/types.ts) (sans les champs internes `createdAt`, `runCount`, `simulation`) et [`CollectionRun`](../src/lib/api/types.ts). Le collecteur est choisi par [`adapters/index.ts`](../src/server/adapters/index.ts) : `RealCollector` dès que `VITEST` n'est pas défini (production et poste local), `SimulatedCollector` sous Vitest seulement. La collecte est déclenchée manuellement (« Lancer la collecte », « Réessayer ») : aucun planificateur n'existe.
+
+<a id="collecte-reelle"></a>
+
+### Collecteur réel (`RealCollector`)
+
+`RealCollector` (nom `collecteur-rss-google-v1`, [`collector.ts`](../src/server/adapters/collector.ts)) émet de vraies requêtes HTTP vers Google News et vers les sites des sources ; ces flux sortants sont inventoriés dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md). L'URL interrogée dépend du type de la source :
+
+| Type de source | URL interrogée |
+|---|---|
+| `recherche_web` | Google News RSS sur le nom de l'entreprise |
+| `actualites` dont l'URL ne contient ni « rss », « feed », « atom » ni « xml » | Google News RSS sur le nom de l'entreprise |
+| `actualites` avec une URL de flux, `site_officiel`, `communiques`, `rss`, `newsletter_import` | URL de la source |
+
+Pour les deux premières lignes, l'URL enregistrée sur la source n'est pas lue, sauf si elle contient déjà `news.google.com` : c'est le cas de la source créée par [`POST /api/companies`](#post-companies). La requête Google News est construite par `googleNewsUrl` avec le nom de l'entreprise entre guillemets (à défaut d'entreprise, le libellé de la source), en français (`hl=fr`, `gl=FR`).
+
+Déroulement d'une tentative :
+
+1. La réponse est lue en entier. Si elle n'est pas un flux (aucune balise `<rss`, `<feed` ou `<rdf:RDF`), le collecteur cherche dans la page un `<link type="application/rss+xml">` ou `application/atom+xml` et lit le flux désigné (adresse résolue par rapport à la page). Sans lien de flux, la tentative réussit avec zéro publication : l'exécution sera `succes_sans_actualite`.
+2. `parseFeed` analyse le RSS 2.0 (`<item>`) ou l'Atom (`<entry>`) par expressions régulières : titre, lien (texte de `<link>` ou attribut `href`), date (`pubDate`, `published` ou `updated`), description (`description`, `summary` ou `content`). Le média vient de la balise `<source>` de Google News (le suffixe « - `<média>` » est retiré du titre) ; à défaut, c'est l'entreprise, ou le nom d'hôte sans entreprise. `eventDate` vaut toujours `null`. Le lien de l'entrée est stocké tel quel, sans suivre de redirection : pour Google News, c'est une adresse `news.google.com`.
+3. Hors Google News (troisième ligne du tableau), si l'URL de la source n'est pas hébergée sur le domaine de l'entreprise (test `hostOf(url).endsWith(company.domain)`, sans point de séparation), seules les entrées dont le titre ou la description contient le nom ou un alias (sous-chaîne, sans tenir compte de la casse) sont gardées.
+4. Les entrées datées de plus de 180 jours sont écartées (celles sans date sont gardées), puis le reste est trié par date décroissante. `runSource` ne traite ensuite que les 3 premières (`MAX_ITEMS`) : si un flux publie plus de 3 entrées entre deux collectes, les plus anciennes ne sont jamais ingérées.
+
+Chaque requête utilise `fetch` avec un délai de 15 s (lecture du corps comprise), l'en-tête `user-agent: Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et un en-tête `accept` qui privilégie RSS, Atom et XML. Les redirections sont suivies sans nouveau filtrage SSRF, l'URL de flux découverte dans une page ne passe pas par `validateSourceUrl`, et la taille de la réponse n'est pas limitée.
+
+Une tentative en échec renvoie un code repris tel quel dans `failureCode` (source) et `errorCode` (exécution), avec un motif dans `failureReason` et `errorMessage` :
+
+| Code | Cause | Motif |
+|---|---|---|
+| `TIMEOUT` | Pas de réponse complète en 15 s | « Délai de réponse dépassé » |
+| `HTTP_<statut>` (ex. `HTTP_404`, `HTTP_403`, `HTTP_503`) | Réponse HTTP hors 2xx, après redirections | « Réponse HTTP `<statut>` » |
+| `NETWORK` | Autre exception sans code (DNS, connexion refusée, TLS…) | message de l'exception (sous Node, souvent « fetch failed ») ou « Erreur réseau » |
+| code de l'exception | Exception portant son propre `code` (sous Node, `ERR_INVALID_URL` pour un lien de flux invalide) | message de l'exception |
+
+Le collecteur marque `HTTP_403` et `HTTP_404` comme non transitoires (`transient: false`), mais [`collection.ts`](../src/server/services/collection.ts) ne lit pas ce champ et réessaie quand même jusqu'à 3 fois. Une tentative peut enchaîner deux requêtes de 15 s au plus (page, puis flux découvert) : dans le pire cas, une source occupe donc 90 s sur ses 3 tentatives. Le refus budgétaire n'est pas un échec du collecteur : l'exécution est alors `bloque_quota` avec `errorCode: "budget_exhausted"`, et la source n'est pas modifiée.
 
 <a id="get-sources"></a>
 
@@ -851,6 +914,8 @@ Handlers : [`registry.ts`](../src/server/handlers/registry.ts) (CRUD) et [`signa
 | `frequency` | `"quotidienne"` \| `"hebdomadaire"` | non | défaut `hebdomadaire` pour `recherche_web`, `quotidienne` sinon |
 
 L'URL est stockée sous sa forme normalisée (`URL.toString()`). Le filtrage SSRF refuse notamment `localhost`, les réseaux privés et lien-local IPv4/IPv6, les adresses IP en notation non standard, les suffixes internes, les protocoles autres que `http`/`https` et les identifiants intégrés à l'URL (liste testée dans [`security.test.ts`](../src/test/server/security.test.ts), détail dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md)). Effets : audit `source.create`.
+
+Le type détermine ce que la collecte lit réellement (voir [Collecteur réel](#collecte-reelle)) : pour `recherche_web`, et pour `actualites` sans URL de flux, l'URL saisie n'est jamais interrogée, sauf s'il s'agit déjà d'une URL `news.google.com` ; la collecte interroge Google News sur le nom de l'entreprise.
 
 Erreurs spécifiques : `404 not_found` (entreprise), `422 url_refused` (`details.url`), `422 quota_exceeded` (300 sources), `409 duplicate_source` (même URL pour la même entreprise, `details.sourceId`).
 
@@ -903,10 +968,10 @@ Effets : les observations issues de la source passent à `sourceId: null` (elles
 Déroulement (`collectOne` puis `runSource`) :
 
 1. Une source `desactivee` est refusée (`409 source_disabled`).
-2. Appel payant `search_query` : 0,075 € réservés, puis 0,012 € consignés pour la requête et 0,021 € par publication reçue (3 au plus). Budget épuisé : exécution consignée `bloque_quota` (`errorCode: "budget_exhausted"`) puis `402 budget_exhausted`.
-3. Le collecteur est appelé jusqu'à 3 fois (`MAX_ATTEMPTS`) tant qu'il échoue.
-4. Échec : la source passe `access: "erreur"` avec `failureCode`, `failureReason` et `attempts` ; notification `erreur_source` si elle n'était pas déjà en échec ; exécution `echec`.
-5. Succès : au plus 3 publications (`MAX_ITEMS`) sont traitées. Chacune est ignorée si son URL est refusée par le filtrage SSRF, si son URL canonique est déjà connue ou si son titre ou son extrait est vide après nettoyage (`sanitizeText`). Les autres deviennent des observations rattachées à une entreprise (seuil `MATCH_THRESHOLD = 60`, sinon « à rattacher ») puis, selon `decideCluster` (fenêtre `CLUSTER_WINDOW_DAYS` de 7 jours), sont ajoutées à un signal récent de la même entreprise, ou créent un nouveau signal scoré avec la grille active (avec une revue `fusion_incertaine` si un signal proche existe). Notification `signal` si un nouveau signal atteint 80. La source repasse `ok` ; exécution `succes` (au moins une nouvelle observation) ou `succes_sans_actualite`.
+2. Appel payant `search_query` : 0,075 € réservés, puis 0,012 € consignés pour la requête et 0,021 € par publication reçue (3 au plus), même si les flux interrogés sont gratuits. Budget épuisé : exécution consignée `bloque_quota` (`errorCode: "budget_exhausted"`) puis `402 budget_exhausted`.
+3. Le collecteur ([`RealCollector`](#collecte-reelle) hors tests) est appelé jusqu'à 3 fois (`MAX_ATTEMPTS`) tant qu'il échoue, quel que soit le caractère transitoire de l'erreur.
+4. Échec : la source passe `access: "erreur"` avec `failureCode`, `failureReason` (codes `TIMEOUT`, `HTTP_<statut>`, `NETWORK`… décrits dans [Collecteur réel](#collecte-reelle)) et `attempts` ; notification `erreur_source` si elle n'était pas déjà en échec ; exécution `echec` avec les mêmes `errorCode` et `errorMessage`.
+5. Succès : les 3 premières publications renvoyées par le collecteur (`MAX_ITEMS`), c'est-à-dire les plus récentes, sont traitées ; les autres sont ignorées. Parmi les trois, une publication est ignorée si son URL est refusée par le filtrage SSRF, si son URL canonique est déjà connue ou si son titre ou son extrait est vide après nettoyage (`sanitizeText`). Les autres deviennent des observations rattachées à une entreprise (seuil `MATCH_THRESHOLD = 60`, sinon « à rattacher ») puis, selon `decideCluster` (fenêtre `CLUSTER_WINDOW_DAYS` de 7 jours), sont ajoutées à un signal récent de la même entreprise, ou créent un nouveau signal scoré avec la grille active (avec une revue `fusion_incertaine` si un signal proche existe). Notification `signal` si un nouveau signal atteint 80. La source repasse `ok` ; exécution `succes` (au moins une nouvelle observation) ou `succes_sans_actualite`.
 
 Aucune entrée d'audit n'est écrite pour une collecte unitaire. Le détail du regroupement et du rattachement est dans [Règles métier](05-regles-metier.md).
 
@@ -927,6 +992,8 @@ curl -s -X POST http://localhost:8080/api/sources/<sourceId>/collect \
 - **Réponse** : `200` `CollectionRun[]` (une exécution par source non désactivée, traitées séquentiellement).
 
 Effets : comme la collecte unitaire pour chaque source ; dès qu'une exécution est bloquée par le budget, toutes les suivantes sont consignées `bloque_quota` sans appel. Cet endpoint ne renvoie jamais `402`. Audit `collect.all` (« `n` sources, `m` nouvelles observations, `k` échec(s) »).
+
+Les sources sont collectées l'une après l'autre, avec des requêtes réseau réelles, dans une seule requête HTTP : sur un registre complet, la réponse peut prendre plusieurs minutes (jusqu'à 90 s par source dans le pire cas, voir [Collecteur réel](#collecte-reelle)). Aucun verrou n'empêche deux collectes simultanées de la même source.
 
 <a id="get-collection-runs"></a>
 
@@ -970,7 +1037,7 @@ curl -s 'http://localhost:8080/api/signals?limit=2'
 curl -s 'http://localhost:8080/api/signals?status=tous&sort=score&limit=3'
 ```
 
-Extrait réel de `GET /api/signals?limit=2` (premier élément, tronqué) :
+Extrait réel de `GET /api/signals?limit=2` sur l'instance locale en mémoire (premier élément, tronqué) :
 
 ```json
 {
@@ -1751,7 +1818,7 @@ Handlers : [`distribution.ts`](../src/server/handlers/distribution.ts), service 
 
 - **Client** : `api.editorialDna()` (hook `useEditorialDna`).
 - **Droit** : aucun.
-- **Réponse** : `200` `EditorialDna` : `rules` (triées par identifiant), `examples` (ordre du store), `proposals` (par création décroissante).
+- **Réponse** : `200` `EditorialDna` : `rules` (triées par identifiant), `examples` (ordre du store), `proposals` (par création décroissante). En base, seules les règles du seed sont installées par `ensureReady()` : `examples` et `proposals` démarrent vides.
 
 Les propositions sont recalculées par `refreshProposals` lorsqu'une version humaine succède à une version KORA ([`POST /api/articles/:id/versions`](#post-article-versions)) ; une proposition décidée n'est jamais reproposée.
 
@@ -1814,7 +1881,7 @@ Fichiers à toucher, dans l'ordre :
 | Étape | Fichier | À faire |
 |---|---|---|
 | 1 | [`types.ts`](../src/lib/api/types.ts) | DTO de réponse et type d'entrée ; nouvelle valeur de `AuditEvent["entity"]` si besoin |
-| 2 | [`records.ts`](../src/server/store/records.ts), [`repository.ts`](../src/server/store/repository.ts), [`memory.ts`](../src/server/store/memory.ts), [`seed.ts`](../src/server/store/seed.ts) | seulement pour une nouvelle collection : enregistrement, `Collection`, store, seed ; conversion DTO dans [`view.ts`](../src/server/services/view.ts) |
+| 2 | [`records.ts`](../src/server/store/records.ts), [`repository.ts`](../src/server/store/repository.ts), [`memory.ts`](../src/server/store/memory.ts), [`db.ts`](../src/server/store/db.ts), [`seed.ts`](../src/server/store/seed.ts) | seulement pour une nouvelle collection : enregistrement, `Collection`, store mémoire, `DbCollection` de `DbRepository`, seed ; conversion DTO dans [`view.ts`](../src/server/services/view.ts) |
 | 3 | [`validation.ts`](../src/server/validation.ts) | schéma zod dans `schemas` |
 | 4 | [`permissions.ts`](../src/server/domain/permissions.ts) | nouvelle `Action` et entrée de `MATRIX` si aucune action existante ne convient |
 | 5 | `src/server/handlers/<domaine>.ts` | handler `Handler` : droit, validation, règle, persistance, audit, réponse |
@@ -1825,6 +1892,12 @@ Fichiers à toucher, dans l'ordre :
 | 10 | ce document | ligne du récapitulatif et section de l'endpoint |
 
 Règles à respecter : contrôler le droit en premier (`assertCan`), valider tout corps avec `parse` (jamais de lecture directe de `ctx.body`), lever des `HttpError` via les aides de `http.ts` avec un `code` stable, journaliser toute décision avec `audit`, invalider les approbations sur toute modification d'un contenu approuvé (`invalidateApprovals` / `invalidateApproval`), passer tout appel à un modèle ou à un fournisseur facturé par `assertQuota` puis `paidCall`, et ne renvoyer que des DTO (jamais d'enregistrement brut contenant des champs internes).
+
+Le dépôt est obtenu une fois par requête par `await getRepository()` dans `handleApiRequest` : la fonction est **asynchrone** depuis l'arrivée de `DbRepository`, car elle attend `ensureReady()`, qui installe la configuration à la première requête. Un handler ne l'appelle pas lui-même et passe par `ctx.repo`. Les deux implémentations de `Repository` doivent rester équivalentes :
+
+- une nouvelle collection s'ajoute à `MemoryRepository` (et au seed si besoin) et à `DbRepository` (`new DbCollection("<nom>")`). Elle ne demande pas de migration SQL, car `kora_records` stocke toutes les collections (colonne `collection`) ;
+- un changement de forme d'un enregistrement existant n'est pas migré en base. `STORE_VERSION` ne réinitialise que le store mémoire, et les lignes JSON déjà stockées gardent l'ancienne forme : le code doit tolérer les champs absents, ou une migration des données JSONB doit être écrite ;
+- avec `DbRepository`, chaque appel est une requête réseau sans transaction. Il faut éviter les `list()` répétés dans une boucle et ordonner les écritures pour qu'un échec intermédiaire laisse un état cohérent.
 
 Squelette, sur un exemple **fictif** (cet endpoint n'existe pas) : modifier la note d'une grille de score.
 
@@ -1868,10 +1941,14 @@ const saveNote = useKoraMutation(
 
 ```ts
 // src/test/server/signals.test.ts
+import { getRepository } from "@/server/store/memory";
+
 it("modifie la note d'une grille (administration uniquement)", async () => {
   const ok = await call<ScoringGrid>("PATCH", "/scoring-grids/1", { body: { note: "Grille initiale" } });
   expect(ok.status).toBe(200);
   expect(ok.body.note).toBe("Grille initiale");
+  const repo = await getRepository();
+  expect((await repo.grids.get("grid_v1"))?.note).toBe("Grille initiale");
   const denied = await call("PATCH", "/scoring-grids/1", {
     body: { note: "x" },
     user: USERS.redacteur,
@@ -1880,19 +1957,20 @@ it("modifie la note d'une grille (administration uniquement)", async () => {
 });
 ```
 
-Les tests appellent directement `handleApiRequest` (pas de serveur HTTP) avec un store réinitialisé depuis le seed et une horloge figée (`NOW` = 12 octobre 2026, 10 h 30) ; `call` ajoute l'en-tête anti-CSRF sauf avec `csrf: false`, et `multipart()` construit un corps `multipart/form-data`. Lancer `bun run test`.
+Les tests appellent directement `handleApiRequest` (pas de serveur HTTP) avec un store réinitialisé depuis le seed et une horloge figée (`NOW` = 12 octobre 2026, 10 h 30) ; `call` ajoute l'en-tête anti-CSRF sauf avec `csrf: false`, et `multipart()` construit un corps `multipart/form-data`. Pour lire ou préparer le dépôt dans un test, `await getRepository()` (comme dans [`budget.test.ts`](../src/test/server/budget.test.ts) et [`signals.test.ts`](../src/test/server/signals.test.ts)). Sous Vitest (`VITEST` défini), `getRepository()` renvoie toujours le `MemoryRepository`, le collecteur est `SimulatedCollector` et OpenAI est désactivé, même si `SUPABASE_URL` ou `AI_API_KEY` sont définies : les tests ne touchent ni la base ni le réseau. Lancer `bun run test`.
 
 <a id="limites"></a>
 
 ## 14. Limites connues de l'API
 
-Comportements actuels à connaître avant d'exposer l'API au-delà de la démonstration. Les aspects de sécurité sont développés dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
+Comportements actuels à connaître, d'autant que l'application hébergée travaille désormais sur une base persistante. Les aspects de sécurité sont développés dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
 
-- **Pas d'authentification** : sans cookie, toute requête agit en tant qu'administratrice `u_sophie`, et `POST /api/me` permet de prendre n'importe quelle identité.
+- **Pas d'authentification** : sans cookie, toute requête agit en tant qu'administratrice `u_sophie`, et `POST /api/me` permet de prendre n'importe quelle identité. Avec la base persistante, quiconque connaît l'adresse de l'application peut donc créer, modifier ou supprimer définitivement des données de production.
 - **`GET /api/newsletters/:id/export` modifie l'état** (export consigné, édition verrouillée) alors que les `GET` ne sont pas soumis à l'en-tête anti-CSRF.
-- **Persistance en mémoire** : toutes les écritures sont perdues au redémarrage ; le schéma PostgreSQL [`schema.sql`](../db/postgres/schema.sql) n'est pas branché.
+- **Persistance sans transaction** : hors tests et si `SUPABASE_URL` est définie, les données sont stockées dans la base Supabase de Lovable Cloud (`DbRepository`, une ligne JSON par enregistrement dans `kora_records`, réglages dans `kora_settings`, accès serveur seulement par la clé de service) et survivent aux redémarrages. Il n'y a ni transaction ni verrou : une requête qui écrit plusieurs enregistrements peut laisser un état partiel, et deux requêtes simultanées peuvent s'écraser (réglages réécrits en entier par `saveSettings`, réservation budgétaire `reservedEur` lue puis réécrite, deux collectes de la même source). Chaque `list()` relit toute la collection par pages de 1 000 lignes. Les sauvegardes dépendent de l'offre Supabase de Lovable Cloud ; elles ne sont ni configurées ni documentées par le projet, et aucune restauration n'a été testée. Le schéma relationnel [`schema.sql`](../db/postgres/schema.sql) n'est toujours pas utilisé. Le stockage est détaillé dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md).
 - **Pagination** : seule la liste des signaux est paginée ; les autres listes renvoient tout.
 - **Pas de planification** : la collecte n'est déclenchée que par `POST /collect` ou `POST /sources/:id/collect`, et la programmation d'un article (`scheduledAt`) ne déclenche rien.
+- **Collecte réelle peu encadrée** : les redirections et les flux découverts dans une page ne repassent pas par le filtrage SSRF, la taille des réponses n'est pas limitée, seules les 3 entrées les plus récentes d'un flux sont prises à chaque exécution, et chaque exécution est facturée sur le budget API alors que les flux lus sont gratuits (voir [Collecteur réel](#collecte-reelle)).
 - **Canaux simulés** : WordPress ne crée que des brouillons simulés, LinkedIn n'est qu'un export, la newsletter n'est jamais envoyée.
 - **Plafonds non administrables** : aucun endpoint ne modifie `quotaLimits` ni ne lève une suspension budgétaire ; les quotas `search_queries` et `observations` ne sont pas bloquants.
 - **Réversibilité partielle** : les contenus (corps des versions d'articles, posts, éditions) et les fichiers importés ne font pas partie des exports d'entités (voir [Exports et téléchargements](#exports)).

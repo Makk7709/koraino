@@ -1,6 +1,6 @@
 # Règles métier et workflows
 
-**Objet.** Ce document décrit les règles métier appliquées par le serveur KORA : score éditorial et indicateur documentaire, Signal Engine (rattachement, regroupement, fusion, dates), workflows WF1 à WF6, approbation et publication, matrice des droits, quotas et budget, Editorial DNA, imports humains, newsletter et amélioration par OpenAI. Il s'adresse aux ingénieurs qui modifient ces règles ou doivent expliquer un comportement observé. Les règles pures sont dans `src/server/domain/`, leur orchestration dans `src/server/services/` et `src/server/handlers/`. Le format exact des requêtes et réponses est dans la [Référence API](03-reference-api.md), les champs dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md). Les règles qui ne figurent qu'au cahier des charges sont signalées comme telles ; la couverture complète est dans [Couverture du cahier des charges](10-couverture-cahier-des-charges.md).
+**Objet.** Ce document décrit les règles métier appliquées par le serveur KORA : score éditorial et indicateur documentaire, Signal Engine (rattachement, regroupement, fusion, dates), workflows WF1 à WF6, approbation et publication, matrice des droits, quotas et budget, Editorial DNA, imports humains, newsletter et amélioration par OpenAI. Il s'adresse aux ingénieurs qui modifient ces règles ou doivent expliquer un comportement observé. Les règles pures sont dans `src/server/domain/`, leur orchestration dans `src/server/services/` et `src/server/handlers/`. Le format exact des requêtes et réponses est dans la [Référence API](03-reference-api.md), les champs dans le [Dictionnaire des données](04-dictionnaire-des-donnees.md). Les règles qui ne figurent qu'au cahier des charges sont signalées comme telles ; la couverture complète est dans [Couverture du cahier des charges](10-couverture-cahier-des-charges.md). Les exemples chiffrés (signal Pasqal, tentative `pub_0001`) proviennent du jeu de démonstration, que seul le dépôt en mémoire charge (tests et développement local sans base) ; la base de production démarre sans données métier.
 
 ## Sommaire
 
@@ -178,7 +178,7 @@ Chaque élément renvoyé par le collecteur passe par `ingest` ([`services/colle
 6. `decideCluster` rattache l'observation à un signal existant ou crée un signal.
 7. Le signal est reconstruit (`rebuildSignal` dans [`services/signals.ts`](../src/server/services/signals.ts)) : reprises, dates, observation primaire, score. Un nouveau signal de score au moins égal à 80 déclenche une notification.
 
-Une collecte retient au plus trois éléments par source (`MAX_ITEMS`).
+Une collecte retient au plus trois éléments par source (`MAX_ITEMS`) : les trois premiers renvoyés par le collecteur, c'est-à-dire, pour le collecteur réel, les trois publications les plus récentes (voir [WF1](#wf1--collecte-et-classement)).
 
 ### Rattachement aux entreprises
 
@@ -213,6 +213,8 @@ Sous le seuil de 60, `companyId` vaut `null` : le signal est « à rattacher » 
 
 Les homonymies et les fusions incertaines sont ainsi soumises à revue humaine (§3.2) : la revue s'affiche sur le signal et se résout par rattachement, fusion ou défusion.
 
+Le collecteur réel ne fournit jamais de date d'événement : la date de référence d'un signal collecté est donc sa date de création. Une publication antérieure de plus de 7 jours à cette date n'est jamais rattachée par `decideCluster`, même si elle reprend le même communiqué. La première collecte d'une source, qui peut ramener des publications vieilles de 180 jours, crée donc des signaux distincts pour un même événement ancien, sans revue ; seule une fusion manuelle les réunit.
+
 ### Fusion et défusion
 
 `POST /api/signals/:id/merge` (`signal.write`) fusionne les signaux `otherIds` (1 à 50) dans le signal `:id`. Les contrôles sont les suivants : un signal ne peut être fusionné avec lui-même (422 `invalid_merge`), tous les signaux doivent exister (404), et ils ne peuvent concerner deux entreprises différentes (422 `company_mismatch`). Les observations sont déplacées. Les articles, posts LinkedIn et éléments de newsletter des signaux absorbés sont repointés vers le signal cible ; un doublon dans une même édition est retiré. Les signaux absorbés sont supprimés. Le signal cible garde son statut, prend la confiance maximale et l'union des tags (six au plus), et sa revue est effacée. Il est reconstruit, avec préservation du score s'il est décidé, puis l'événement `signal.merge` est journalisé. Le statut et le motif propres aux signaux absorbés sont perdus ; seul le journal d'audit en garde trace.
@@ -221,9 +223,9 @@ Les homonymies et les fusions incertaines sont ainsi soumises à revue humaine (
 
 ### Dates
 
-Chaque observation porte trois dates : `collectedAt` (toujours renseignée, heure du serveur à l'ingestion), `publishedAt` (fournie par la source ou `null`) et `eventDate` (`null` si inconnue). Le collecteur simulé ne fournit jamais de date d'événement ; seul le jeu de démonstration en contient. Le signal reprend la plus ancienne valeur de chaque date parmi ses observations, recalculée à chaque reconstruction.
+Chaque observation porte trois dates : `collectedAt` (toujours renseignée, heure du serveur à l'ingestion), `publishedAt` (fournie par la source ou `null`) et `eventDate` (`null` si inconnue). Aucun collecteur ne fournit de date d'événement : le collecteur réel ne lit que la date de publication (`pubDate`, `published` ou `updated`), et le collecteur simulé des tests n'en produit pas. Seul le jeu de démonstration contient des dates d'événement. Sans date d'événement, la nouveauté se calcule sur la plus ancienne date de publication : une publication de plus de 30 jours au moment de la création du signal perd 25 points (« événement antérieur de N jours à sa détection »), ce qui touche les entrées anciennes ramenées par la fenêtre de 180 jours. Le signal reprend la plus ancienne valeur de chaque date parmi ses observations, recalculée à chaque reconstruction.
 
-Une date inconnue n'est jamais inventée : elle reste `null` dans l'API et dans les exports JSON, vide dans les exports CSV. L'interface affiche la date de publication, à défaut la date d'événement (`signalDate` dans [`signal-utils.ts`](../src/components/signals/signal-utils.ts)), et « Date inconnue » si les deux manquent (`formatDate` dans [`labels.ts`](../src/components/kora/labels.ts)). La liste des sources du brouillon écrit « date inconnue ». La date de collecte sert de repli uniquement pour ordonner les observations et calculer les fenêtres de regroupement ; elle n'est jamais présentée comme date de publication. Une date d'événement inconnue retire 8 points à la nouveauté, et une fraîcheur inconnue est signalée dans l'indicateur documentaire (« Date de publication inconnue »).
+Une date inconnue n'est jamais inventée : elle reste `null` dans l'API et dans les exports JSON, vide dans les exports CSV. L'interface affiche la date de publication, à défaut la date d'événement (`signalDate` dans [`signal-utils.ts`](../src/components/signals/signal-utils.ts)), et « Date inconnue » si les deux manquent (`formatDate` dans [`labels.ts`](../src/components/kora/labels.ts)). La liste des sources du brouillon écrit « date inconnue ». La date de collecte sert de repli uniquement pour ordonner les observations et calculer les fenêtres de regroupement ; elle n'est jamais présentée comme date de publication. L'absence de toute date d'événement et de publication retire 8 points à la nouveauté, et une fraîcheur inconnue est signalée dans l'indicateur documentaire (« Date de publication inconnue »).
 
 ### Statuts d'un signal
 
@@ -282,18 +284,42 @@ Les six workflows sont ceux du §6 du cahier des charges. Les endpoints cités s
 
 **Rôles.** Action `collect` : rédacteur et administrateur.
 
+**Collecteur réel.** Hors tests, l'adaptateur est `RealCollector` (`collecteur-rss-google-v1`, [`adapters/collector.ts`](../src/server/adapters/collector.ts)) ; `SimulatedCollector` ne sert plus qu'aux tests Vitest ([`adapters/index.ts`](../src/server/adapters/index.ts)). L'adresse lue dépend du type de source :
+
+| Type de source | Adresse lue |
+|---|---|
+| `recherche_web` | Google News RSS sur le nom de l'entreprise, sauf si l'URL de la source pointe déjà vers `news.google.com` : elle est alors lue telle quelle |
+| `actualites` dont l'URL ne contient ni `rss`, ni `feed`, ni `atom`, ni `xml` | Google News RSS sur le nom de l'entreprise, avec la même exception |
+| `actualites` à URL de flux, et tous les autres types | URL de la source |
+
+`googleNewsUrl` construit `https://news.google.com/rss/search?q=…&hl=fr&gl=FR&ceid=FR:fr`, la requête étant le nom de l'entreprise entre guillemets, à défaut le libellé de la source. Pour une page d'actualités ordinaire, l'URL déclarée n'est donc jamais lue. La réponse est ensuite traitée ainsi :
+
+1. Si elle n'est pas un flux (aucune balise `rss`, `feed` ou `rdf:RDF`), le collecteur cherche dans la page une balise `<link>` de type `application/rss+xml` ou `application/atom+xml` et lit le flux annoncé : c'est la découverte automatique. Sans flux annoncé, il renvoie un succès avec zéro publication.
+2. `parseFeed` extrait par expressions régulières les entrées RSS 2.0 (`item`) et Atom (`entry`) : titre, lien, date (`pubDate`, `published`, à défaut `updated`) et description (`description`, `summary` ou `content`). Le média est lu dans la balise `source` de Google News, dont le nom est retiré de la fin du titre ; à défaut, c'est l'entreprise de la source, ou le nom d'hôte pour une source sans entreprise.
+3. Pour une source d'entreprise qui ne passe pas par Google News, et dont l'hôte ne se termine pas par le domaine de l'entreprise, seules les entrées dont le titre ou la description contient le nom ou un alias sont gardées. Ce filtre est une simple inclusion de chaîne, insensible à la casse mais sensible aux accents et sans frontière de mot, à la différence de `matchCompany`.
+4. Les entrées publiées depuis plus de 180 jours sont écartées ; les entrées sans date sont gardées. La liste est triée de la plus récente à la plus ancienne, les entrées sans date en dernier.
+5. La date d'événement vaut toujours `null`.
+
+Chaque requête est interrompue après 15 secondes (code `TIMEOUT`). Un statut HTTP d'erreur donne le code `HTTP_<statut>`, une autre erreur réseau le code porté par l'erreur, à défaut `NETWORK` ; seuls `HTTP_403` et `HTTP_404` sont marqués non transitoires. Les contrôles réseau (redirections, adresses internes) sont décrits dans [Collecteur web](06-securite-et-flux-tiers.md#collecteur-web).
+
+Pour Google News, le lien d'une entrée pointe vers `news.google.com` et non vers le site du média, et la description ne contient qu'un lien titré suivi du nom du média : l'extrait nettoyé se réduit au titre, répété, et au nom du média. Le classement, l'extraction des montants, l'indicateur documentaire et la liste des faits du dossier ne disposent donc, pour ces observations, que du titre. Le rattachement par le domaine de l'URL (confiance 97) ne s'y applique jamais.
+
+**Source Google News automatique.** `POST /api/companies` ([`handlers/registry.ts`](../src/server/handlers/registry.ts)) crée, avec l'entreprise, une source `recherche_web` intitulée `Google News — <nom>`, d'URL `googleNewsUrl(nom)`, de fréquence quotidienne et d'accès `en_attente`. La réponse porte donc `sourceCount: 1`. Cette source n'est pas contrôlée par `assertQuota("sources")`, que seul `POST /api/sources` appelle : le nombre de sources peut ainsi dépasser le plafond de 300. Seul l'événement `company.create` est journalisé. L'URL étant lue telle quelle, un renommage de l'entreprise ne change pas la requête : la collecte continue d'interroger Google News sur l'ancien nom.
+
 **Étapes.**
 
 1. Une source désactivée est refusée (409 `source_disabled`) ; la collecte globale l'ignore.
 2. Le coût est réservé avant l'appel (`paidCall`, type `search_query`, estimation `COSTS.search + 3 × COSTS.observation`, soit 0,075 €). En cas de refus, la collecte est enregistrée au statut `bloque_quota` avec le code `budget_exhausted`. Une collecte unitaire répond alors 402 ; la collecte globale marque aussi `bloque_quota` toutes les sources restantes et répond 200 avec la liste des collectes.
-3. Le collecteur est appelé jusqu'à trois fois (`MAX_ATTEMPTS`) dans la même requête, sans délai entre les essais. L'indicateur `transient` de l'échec n'est pas pris en compte : un refus HTTP 403 est aussi réessayé.
+3. Le collecteur est appelé jusqu'à trois fois (`MAX_ATTEMPTS`) dans la même requête, sans délai entre les essais. L'indicateur `transient` de l'échec n'est pas pris en compte : un refus HTTP 403 ou 404 est aussi réessayé. Une source qui ne répond pas retient ainsi la requête 45 secondes, et jusqu'à 90 secondes si la page répond mais pas le flux qu'elle annonce. La collecte globale traite les sources l'une après l'autre.
 4. En cas d'échec, la source passe en `erreur` avec le code et le motif (`failureCode`, `failureReason`) et un compteur d'essais limité à 3. Une notification `erreur_source` n'est émise qu'au premier échec, pas si la source était déjà en erreur. La collecte est enregistrée au statut `echec`.
-5. En cas de succès, les éléments sont ingérés (voir [Chaîne d'ingestion](#chaîne-dingestion)). La source repasse en `ok`, la date de dernière réussite est mise à jour et le motif d'échec effacé. La collecte est au statut `succes` si au moins une observation nouvelle a été créée, `succes_sans_actualite` sinon.
-6. La consommation enregistrée est d'une recherche (0,012 €) et d'une observation (0,021 €) par élément renvoyé, y compris les éléments écartés comme doublons.
+5. En cas de succès, les trois premières entrées (`MAX_ITEMS`), c'est-à-dire les trois plus récentes, sont ingérées (voir [Chaîne d'ingestion](#chaîne-dingestion)). Si un flux publie plus de trois entrées entre deux collectes, les plus anciennes ne seront jamais ingérées ; à la première collecte, seules trois publications des 180 derniers jours sont reprises. La source repasse en `ok`, la date de dernière réussite est mise à jour et le motif d'échec effacé. La collecte est au statut `succes` si au moins une observation nouvelle a été créée, `succes_sans_actualite` sinon.
+6. La consommation enregistrée est d'une recherche (0,012 €) et d'une observation (0,021 €) par entrée retenue, dans la limite de trois, y compris les entrées écartées comme doublons.
 
-**États.** Une source a un accès `ok`, `erreur`, `en_attente` ou `desactivee`. Une collecte (`CollectionRun`) est `succes`, `succes_sans_actualite`, `echec` ou `bloque_quota` : une source en échec n'est jamais présentée comme « succès sans actualité ». L'accès d'une source ne peut pas être mis manuellement à `erreur` (422 `invalid_access`) ; une modification d'URL le repasse en `en_attente`.
+**Coût de la collecte réelle.** Les flux RSS et Google News sont gratuits, mais chaque exécution reste imputée au budget comme un appel payant, aux coûts estimés d'un fournisseur de recherche. Un flux renvoyant à chaque exécution ses trois entrées les plus récentes, une source active coûte en général 0,075 € par collecte, même sans nouveauté. Pour 150 sources, une collecte complète coûte environ 11 € : le budget mensuel de 150 € permet une douzaine de collectes complètes.
 
-**Contrôles.** Droit `collect`, filtrage des URL, réservation budgétaire, dédoublonnage par URL canonique, nettoyage du texte.
+**États.** Une source a un accès `ok`, `erreur`, `en_attente` ou `desactivee`. Une collecte (`CollectionRun`) est `succes`, `succes_sans_actualite`, `echec` ou `bloque_quota`. Une requête en échec n'est jamais présentée comme « succès sans actualité ». En revanche, une page lue sans flux détectable l'est, alors qu'aucune publication n'a pu y être lue ; le §6 demande qu'une source indisponible ne soit jamais affichée comme une collecte réussie sans actualité. L'accès d'une source ne peut pas être mis manuellement à `erreur` (422 `invalid_access`) ; une modification d'URL le repasse en `en_attente`.
+
+**Contrôles.** Droit `collect`, filtrage des URL collectées, réservation budgétaire, filtre par nom des flux généralistes, fenêtre de 180 jours, dédoublonnage par URL canonique, nettoyage du texte.
 
 **Sorties.** Collectes, observations et signaux `nouveau` ; notifications (signal prioritaire, erreur de source, alertes de quota) ; événement `collect.all` pour la collecte globale. La collecte d'une seule source n'est pas journalisée.
 
@@ -494,7 +520,7 @@ L'approbation d'un article (`POST /api/articles/:id/approve`, `article.decide`) 
 
 L'événement `article.approve` est journalisé. Le rejet (`POST /api/articles/:id/reject`, `article.decide`) exige un motif d'au moins trois caractères (400 `validation_error`) et un statut `en_revue`, `approuve` ou `programme`. Il invalide toutes les approbations valides avec le motif « Rejet : … », journalise `article.reject` et notifie.
 
-Aucune règle n'empêche un utilisateur d'approuver une version qu'il a rédigée. Seuls les rôles comptent : dans la démonstration, Sophie Martin cumule les rôles rédacteur et validateur et peut approuver son propre texte. Le cahier des charges (§7) admet ce cumul par décision d'Inovallée, en précisant qu'il ne constitue pas une séparation à deux personnes.
+Aucune règle n'empêche un utilisateur d'approuver une version qu'il a rédigée. Seuls les rôles comptent : Sophie Martin, compte de démonstration également installé dans la base de production, cumule les rôles rédacteur et validateur et peut approuver son propre texte. Le cahier des charges (§7) admet ce cumul par décision d'Inovallée, en précisant qu'il ne constitue pas une séparation à deux personnes.
 
 ### Invalidation
 
@@ -539,7 +565,7 @@ Le §6 demande de vérifier l'existence du contenu distant avant toute reprise, 
 
 ### Tentatives et codes d'échec
 
-- **Collecte.** Trois essais au plus par collecte, code et motif visibles sur la source et sur la collecte, notification au premier échec. Codes du collecteur simulé : `HTTP_403`, `HTTP_404`, `TIMEOUT`, `TLS_ERROR`.
+- **Collecte.** Trois essais au plus par collecte, code et motif visibles sur la source et sur la collecte, notification au premier échec. Codes du collecteur réel : `HTTP_<statut>`, `TIMEOUT`, et `NETWORK` pour une erreur réseau sans code ; le collecteur simulé des tests produit `HTTP_403`, `HTTP_404`, `TIMEOUT` et `TLS_ERROR`.
 - **Publication.** Aucune reprise automatique. Chaque demande refusée est enregistrée comme tentative `bloque` avec son code ; le compteur `attempts` compte les demandes répétées et n'est pas borné.
 - **Budget.** Un appel refusé répond 402 `budget_exhausted` ; une collecte refusée est enregistrée `bloque_quota`.
 
@@ -554,7 +580,7 @@ Le §6 demande de vérifier l'existence du contenu distant avant toute reprise, 
 
 [`adapters/channels.ts`](../src/server/adapters/channels.ts) contient les adaptateurs. Leur comportement est le suivant :
 
-- **WordPress** est simulé. L'adaptateur crée ou met à jour en mémoire un brouillon fictif `wp-NNNN` avec le titre, le contenu (chapô puis corps), l'extrait, les catégories et les tags. Le titre SEO et les médias ne sont pas transmis. Rien ne sort du serveur et le message précise « Aucune publication publique : la mise en ligne reste manuelle. »
+- **WordPress** est simulé. L'adaptateur crée ou met à jour, dans la mémoire de l'instance serveur, un brouillon fictif `wp-NNNN` avec le titre, le contenu (chapô puis corps), l'extrait, les catégories et les tags. Le titre SEO et les médias ne sont pas transmis. Rien ne sort du serveur et le message précise « Aucune publication publique : la mise en ligne reste manuelle. » Avec la base persistante, l'identifiant distant reste enregistré dans l'article alors que la table de l'adaptateur est perdue à chaque redémarrage de l'instance.
 - **LinkedIn** n'a pas d'API (`apiAvailable: false`). La publication consigne seulement que l'export est prêt ; le texte est récupéré par `GET /api/linkedin/:id/export`.
 - **Newsletter** : le fichier HTML ou texte est produit à la demande, jamais envoyé.
 - **Publication d'un article sur un autre canal** que WordPress : une tentative « Export … prêt : diffusion manuelle » est consignée, sans fichier associé.
@@ -585,11 +611,11 @@ Les droits sont définis dans [`domain/permissions.ts`](../src/server/domain/per
 | `grid.write` | `POST /scoring-grids`, `POST /signals/rescore` | non | non | non | oui |
 | `rule.write` | Règles et propositions de l'Editorial DNA | non | non | non | oui |
 
-Les comptes de démonstration sont décrits dans [Démarrage](01-demarrage.md). Les tests de [`security.test.ts`](../src/test/server/security.test.ts) et [`studio.test.ts`](../src/test/server/studio.test.ts) vérifient notamment qu'un lecteur ne peut rien modifier, qu'un rédacteur ne peut pas approuver et qu'un validateur ne peut pas rédiger.
+Les comptes de démonstration sont décrits dans [Démarrage](01-demarrage.md). Ce sont aussi les seuls comptes de la base de production, qui les reçoit à sa première initialisation. Les tests de [`security.test.ts`](../src/test/server/security.test.ts) et [`studio.test.ts`](../src/test/server/studio.test.ts) vérifient notamment qu'un lecteur ne peut rien modifier, qu'un rédacteur ne peut pas approuver et qu'un validateur ne peut pas rédiger.
 
 Quatre points sont à connaître :
 
-- **Approbation de son propre texte.** Rien ne compare le validateur à l'auteur de la version : un utilisateur à la fois rédacteur et validateur (Sophie Martin dans la démonstration) approuve son propre texte.
+- **Approbation de son propre texte.** Rien ne compare le validateur à l'auteur de la version : un utilisateur à la fois rédacteur et validateur (Sophie Martin, en démonstration comme en production) approuve son propre texte.
 - **Suppression d'une source.** `DELETE /sources/:id` exige `registry.write` et est donc ouvert aux rédacteurs, alors que la suppression d'une entreprise est réservée à l'administrateur.
 - **Propriété des contenus.** Aucune règle de propriété n'existe : tout rédacteur peut modifier tout article, post ou édition.
 - **Lectures.** Toutes les lectures sont ouvertes à tous les rôles, y compris le journal d'audit et les exports. La sécurité de la session elle-même est décrite dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
@@ -609,10 +635,10 @@ Les plafonds et coûts sont dans [`domain/budget.ts`](../src/server/domain/budge
 | Posts LinkedIn | `linkedin_posts` | 25 | Générations de posts du mois | 422 à `POST /linkedin` |
 | Éditions de newsletter | `newsletters` | 5 | Éditions créées dans le mois | 422 à la création d'une édition |
 | Entreprises suivies | `companies` | 150 | Total du registre | 422 à `POST /companies` |
-| Sources configurées | `sources` | 300 | Total du registre | 422 à `POST /sources` |
+| Sources configurées | `sources` | 300 | Total du registre | 422 à `POST /sources`, pas à `POST /companies` |
 | Stockage | `storage_gb` | 10 Go | Base fixe des réglages plus taille des imports | 422 à `POST /imports` |
 
-`assertQuota` répond 422 `quota_exceeded`. Les compteurs `search_queries` et `observations` sont mesurés et alertés mais ne bloquent rien ; seul le budget limite la collecte. La conversion d'un import ne consomme pas le quota d'articles. Les autres plafonds du §12 ne sont pas appliqués : cinq comptes, deux variantes par article, une collecte quotidienne par source, nombre de traitements simultanés.
+`assertQuota` répond 422 `quota_exceeded`. Les compteurs `search_queries` et `observations` sont mesurés et alertés mais ne bloquent rien ; seul le budget limite la collecte. Chaque exécution de collecte compte une recherche, qu'elle interroge Google News ou lise directement un flux. La source Google News créée avec chaque entreprise échappe au contrôle du quota de sources (voir [WF1](#wf1--collecte-et-classement)). Le stockage part de la base fixe `storageBaseGb`, qui vaut 2,4 Go dans les réglages initiaux, y compris pour une base de production vide. La conversion d'un import ne consomme pas le quota d'articles. Les autres plafonds du §12 ne sont pas appliqués : cinq comptes, deux variantes par article, une collecte quotidienne par source, nombre de traitements simultanés.
 
 ### Coûts unitaires
 
@@ -639,6 +665,8 @@ Le coût est réservé et enregistré par unité, que le texte soit produit par 
 
 Deux appels à OpenAI échappent à cette réservation. Le résumé produit à la collecte est calculé pendant l'ingestion, après la libération de la réservation, et aucune ligne de consommation ne lui correspond en propre. Le résumé produit à la défusion n'est encadré par aucun `paidCall` et reste possible quand le budget est suspendu.
 
+Les réservations (`reservedEur`), la suspension et les alertes déjà notifiées sont stockées dans un seul document de réglages. Avec la base Supabase, `paidCall` le relit puis le réécrit en entier (`saveSettings`), sans transaction ni verrou : deux requêtes simultanées peuvent perdre une réservation, une libération ou une alerte. Une exécution interrompue par l'hébergeur entre la réservation et la libération laisserait aussi sa réservation en base, où aucun redémarrage ne l'efface plus.
+
 ### Alertes à 80 % et 100 %
 
 `alertLevel` classe chaque compteur : `seuil_80` à partir de 80 % du plafond, `atteint` à 100 %, `ok` sinon. Après chaque appel payant, `checkAlerts` examine le budget, les recherches, les observations, les articles, les posts, les newsletters et le stockage (pas les entreprises ni les sources) et émet une notification par compteur, par niveau et par mois, mémorisée sous la clé `AAAA-MM:clé:niveau` dans `notifiedAlerts`. Seul le niveau courant est notifié : un compteur qui passe en une fois de moins de 80 % à 100 % ne reçoit que l'alerte `atteint`. Les alertes ne sont vérifiées qu'après un appel payant : un dépassement du stockage par un import, par exemple, n'est notifié qu'au prochain appel payant.
@@ -647,7 +675,7 @@ Deux appels à OpenAI échappent à cette réservation. Le résumé produit à l
 
 Les appels payants sont refusés : création d'article, création de post LinkedIn, ajout d'un sujet à une newsletter, collecte. La consultation, les exports CSV et JSON, les exports LinkedIn et newsletter, les décisions (approbation, rejet, publication), les imports, les modifications du registre et l'enregistrement de versions restent possibles. Le test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts) vérifie la consultation, l'export CSV, l'export de newsletter et la publication WordPress. Le moteur est affiché comme inactif sur le tableau de bord.
 
-La suspension dure jusqu'à la fin du mois, même si le plafond était relevé. Aucun endpoint ne modifie les plafonds : ils sont copiés de `DEFAULT_LIMITS` dans les réglages au démarrage (voir [Exploitation](09-exploitation.md)).
+La suspension dure jusqu'à la fin du mois, même si le plafond était relevé ; en base, elle survit aux redémarrages. Aucun endpoint ne modifie les plafonds (`quotaLimits`). Le dépôt en mémoire les copie de `DEFAULT_LIMITS` à chaque démarrage ; la base Supabase ne les copie qu'une fois, à l'initialisation des réglages, si bien qu'une modification ultérieure de `DEFAULT_LIMITS` n'a plus d'effet sur une base existante (voir [Exploitation](09-exploitation.md)).
 
 ### Période
 
@@ -663,7 +691,7 @@ Une règle (`RuleRecord`) a un type (`ton`, `longueur`, `structure`, `vocabulair
 
 ### Exemples
 
-Les exemples d'articles (`EditorialExample` : titre, extrait, URL, date) proviennent du jeu de démonstration et sont affichés par `GET /api/editorial-dna`. Aucun endpoint n'en ajoute et la génération ne les utilise pas : la récupération d'exemples pertinents au moment de la rédaction (§4.1) n'est pas implémentée.
+Les exemples d'articles (`EditorialExample` : titre, extrait, URL, date) proviennent du jeu de démonstration et sont affichés par `GET /api/editorial-dna`. La base de production est initialisée avec les règles du jeu de démonstration mais sans exemple : la liste y est vide. Aucun endpoint n'en ajoute et la génération ne les utilise pas : la récupération d'exemples pertinents au moment de la rédaction (§4.1) n'est pas implémentée.
 
 ### Propositions issues des corrections
 
@@ -701,7 +729,7 @@ Toute autre combinaison répond 415 `unsupported_format` (par exemple un PDF, ou
 - **Texte.** Le contenu doit être de l'UTF-8 strict, sinon 415 `invalid_encoding`. Le BOM est retiré. L'original est le texte décodé ; le texte extrait en normalise seulement les fins de ligne.
 - **DOCX.** Le fichier doit commencer par la signature ZIP `PK`. Seule la partie `word/document.xml` est décompressée (fflate), et seulement si sa taille décompressée ne dépasse pas 50 Mio. Les paragraphes `<w:p>`, les textes `<w:t>`, les tabulations et les sauts de ligne sont extraits par expressions régulières, et les entités XML sont décodées. L'original est la suite des paragraphes séparés par un saut de ligne ; le texte extrait est la suite des paragraphes non vides séparés par une ligne vide. Les en-têtes, pieds de page, notes, commentaires et images sont ignorés. Tout échec répond 415 `invalid_docx`.
 
-Le nom de fichier est assaini (chemin et caractères de contrôle retirés, 200 caractères au plus). L'auteur est obligatoire (400 `author_required`) et tronqué à 120 caractères. Les octets originaux sont conservés en mémoire avec l'import, mais aucun endpoint ne permet de les télécharger.
+Le nom de fichier est assaini (chemin et caractères de contrôle retirés, 200 caractères au plus). L'auteur est obligatoire (400 `author_required`) et tronqué à 120 caractères. Les octets originaux sont conservés dans l'enregistrement de l'import (`bytes`), mais aucun endpoint ne permet de les télécharger. En base, ce `Uint8Array` est sérialisé par `JSON.stringify` en objet à clés numériques, soit environ 12,5 octets de JSON par octet de fichier : un fichier de 1 Mio produit une ligne `kora_records` d'environ 12,5 Mio.
 
 ### Propositions
 
