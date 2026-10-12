@@ -1,10 +1,9 @@
-import { Info } from "lucide-react";
 import { useState } from "react";
 import { EmptyState, PageTitle, PrimaryButton, UnderlineTabs } from "@/components/kora/primitives";
 import { useLinkedInPosts } from "@/lib/api/hooks";
 import { LinkedInMark } from "@/components/articles/channel";
 import { useCompanyMap, usePermissions } from "@/components/articles/hooks";
-import { Banner, DetailSkeleton } from "@/components/articles/ui";
+import { DetailSkeleton } from "@/components/articles/ui";
 import { ConnectionCard } from "./ConnectionCard";
 import { NewPostDialog } from "./NewPostDialog";
 import { PostDetail } from "./PostDetail";

@@ -1,5 +1,7 @@
 import type { Approval, LinkedInStatus, PublicationAttempt } from "@/lib/api/types";
+import { appUserReconnectRequired, callAsAppUser } from "@/integrations/lovable/appUserConnector";
 import { adapters } from "../adapters";
+import { getConnectionKeyForUser } from "../appUserConnections.server";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
 import { renderNewsletterHtml, renderNewsletterText } from "../domain/newsletter";
@@ -233,7 +235,7 @@ export const approveLinkedIn: Handler = async (ctx) => {
   return json(toLinkedIn(next));
 };
 
-/** Diffusion LinkedIn : l'API n'étant pas disponible, l'envoi est un export (idempotent). */
+/** Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent). */
 export const publishLinkedIn: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getPostOr404(ctx);
@@ -286,6 +288,59 @@ export const publishLinkedIn: Handler = async (ctx) => {
     throw unprocessable(check.code, check.message, { attempt: toPublication(attempt) });
   }
   const linkedin = adapters().linkedin;
+  const variant = rec.variants.find((v) => v.id === rec.selectedVariantId) ?? rec.variants[0]!;
+  const hashtags = variant.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ");
+  const commentary = [variant.text, "", hashtags].join("\n");
+  const result = await publishViaUserAccount(ctx.user.id, commentary);
+
+  if (result.kind === "published") {
+    const attempt: PublicationAttempt = {
+      ...base,
+      id: ctx.repo.nextId("pub"),
+      status: "succes",
+      code: null,
+      message: "Post publié sur LinkedIn via le compte relié.",
+      attempts: 1,
+      remoteId: result.remoteId,
+      mode: "publication",
+    };
+    await ctx.repo.publications.insert(attempt);
+    await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+    await audit(
+      ctx,
+      "publication.success",
+      "publication",
+      attempt.id,
+      `LinkedIn « ${rec.title} » publié (version ${rec.version})`,
+    );
+    return json(toPublication(attempt), { status: 201 });
+  }
+
+  if (result.kind === "reconnect_required" || result.kind === "api_error") {
+    const code =
+      result.kind === "reconnect_required" ? "linkedin_reconnect_required" : "linkedin_api_error";
+    const attempt: PublicationAttempt = {
+      ...base,
+      id: ctx.repo.nextId("pub"),
+      status: "echec",
+      code,
+      message: result.message,
+      attempts: 1,
+      remoteId: null,
+      mode: "publication",
+    };
+    await ctx.repo.publications.insert(attempt);
+    await audit(
+      ctx,
+      "publication.failed",
+      "publication",
+      attempt.id,
+      `LinkedIn « ${rec.title} » — ${result.message}`,
+    );
+    throw unprocessable(code, result.message, { attempt: toPublication(attempt) });
+  }
+
+  // Compte non relié : comportement historique, export manuel (idempotent).
   const attempt: PublicationAttempt = {
     ...base,
     id: ctx.repo.nextId("pub"),
