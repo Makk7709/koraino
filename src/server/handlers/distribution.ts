@@ -2,6 +2,7 @@ import type { Approval, LinkedInStatus, PublicationAttempt } from "@/lib/api/typ
 import { appUserReconnectRequired, callAsAppUser } from "@/integrations/lovable/appUserConnector";
 import { adapters } from "../adapters";
 import { getConnectionKeyForUser } from "../appUserConnections.server";
+import { GATEWAY_BASE_URL, LINKEDIN_CONNECTOR_ID, LINKEDIN_SCOPES } from "./connectors";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
 import { renderNewsletterHtml, renderNewsletterText } from "../domain/newsletter";
@@ -234,6 +235,76 @@ export const approveLinkedIn: Handler = async (ctx) => {
   );
   return json(toLinkedIn(next));
 };
+
+type LinkedInPublishResult =
+  | { kind: "not_connected" }
+  | { kind: "reconnect_required"; message: string }
+  | { kind: "api_error"; message: string }
+  | { kind: "published"; remoteId: string };
+
+/**
+ * Publie un post via le compte LinkedIn relié de l'utilisateur (connecteur
+ * App User). Renvoie `not_connected` quand aucune clé n'est stockée — l'appelant
+ * retombe alors sur l'export manuel historique.
+ */
+async function publishViaUserAccount(
+  userId: string,
+  commentary: string,
+): Promise<LinkedInPublishResult> {
+  const key = await getConnectionKeyForUser(userId, LINKEDIN_CONNECTOR_ID);
+  if (!key) return { kind: "not_connected" };
+
+  const reconnect = (where: string) => ({
+    kind: "reconnect_required" as const,
+    message: `Votre accès LinkedIn doit être renouvelé (${where}) : reconnectez votre compte depuis la page LinkedIn.`,
+  });
+
+  const me = await callAsAppUser({
+    gatewayBaseUrl: GATEWAY_BASE_URL,
+    connectionAPIKey: key,
+    connectorId: LINKEDIN_CONNECTOR_ID,
+    path: "/v2/userinfo",
+    requiredScopes: LINKEDIN_SCOPES,
+  });
+  if (await appUserReconnectRequired(me)) return reconnect("identification");
+  if (!me.ok) {
+    const body = await me.text();
+    console.error(`LinkedIn /v2/userinfo failed [${me.status}]: ${body}`);
+    return { kind: "api_error", message: `LinkedIn a refusé l'identification (${me.status}).` };
+  }
+  const profile = (await me.json()) as { sub?: string };
+  if (!profile.sub) {
+    return { kind: "api_error", message: "LinkedIn n'a pas renvoyé l'identifiant du compte." };
+  }
+
+  const res = await callAsAppUser({
+    gatewayBaseUrl: GATEWAY_BASE_URL,
+    connectionAPIKey: key,
+    connectorId: LINKEDIN_CONNECTOR_ID,
+    path: "/v2/ugcPosts",
+    requiredScopes: LINKEDIN_SCOPES,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        author: `urn:li:person:${profile.sub}`,
+        commentary,
+        visibility: {
+          "@type": "com.linkedin.ugc.MemberNetworkVisibility",
+          visibility: "PUBLIC",
+        },
+      }),
+    },
+  });
+  if (await appUserReconnectRequired(res)) return reconnect("publication");
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`LinkedIn /v2/ugcPosts failed [${res.status}]: ${body}`);
+    return { kind: "api_error", message: `LinkedIn a refusé la publication (${res.status}).` };
+  }
+  const payload = (await res.json()) as { id?: string };
+  return { kind: "published", remoteId: payload.id ?? "linkedin" };
+}
 
 /** Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent). */
 export const publishLinkedIn: Handler = async (ctx) => {
