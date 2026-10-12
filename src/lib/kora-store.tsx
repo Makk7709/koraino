@@ -10,17 +10,17 @@ export type Channel = "WordPress" | "LinkedIn" | "Newsletter";
 
 export interface Company {
   id: string; name: string; aliases: string[]; domain: string; sector: string;
-  sources: { type: string; url: string; ok: boolean; lastSuccess: string; error?: string }[];
+  sources: { type: string; url: string; ok: boolean; lastSuccess: string; error?: string | undefined }[];
 }
 export interface Signal {
   id: string; companyId: string; title: string; category: Category; collectedAt: string;
-  publishedAt?: string; sources: string[]; independent: number; status: SignalStatus;
+  publishedAt?: string | undefined; sources: string[]; independent: number; status: SignalStatus;
   scores: { importance: number; nouveaute: number; territoire: number; lecteurs: number; diffusion: number };
 }
 export interface Version { n: number; text: string; at: string; by: string }
 export interface Draft {
   id: string; signalId: string; title: string; versions: Version[]; status: DraftStatus;
-  approval?: { by: string; at: string; version: number; channel: Channel };
+  approval?: { by: string; at: string; version: number; channel: Channel } | undefined;
   publishedOn: Channel[]; log: { at: string; msg: string }[];
 }
 
