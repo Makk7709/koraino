@@ -24,7 +24,7 @@ function defaults(): Adapters {
   return {
     textModel: new TemplateTextModel(),
     // Désactivé sous Vitest : les tests restent déterministes et hors réseau.
-    ai: process.env.AI_API_KEY && !process.env.VITEST ? new OpenAiEnhancer() : null,
+    ai: process.env["AI_API_KEY"] && !process.env["VITEST"] ? new OpenAiEnhancer() : null,
     collector: new SimulatedCollector(),
     wordpress: new SimulatedWordPress(),
     linkedin: new ExportOnlyLinkedIn(),

@@ -19,7 +19,7 @@ const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = "gpt-4o-mini";
 
 async function chat(system: string, user: string): Promise<string | null> {
-  const key = process.env.AI_API_KEY;
+  const key = process.env["AI_API_KEY"];
   if (!key) return null;
   try {
     const res = await fetch(OPENAI_URL, {
