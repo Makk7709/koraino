@@ -173,7 +173,7 @@ describe("consommation et quotas", () => {
     expect(created.body).toMatchObject({
       name: "Chartreuse Instruments",
       priority: "normale",
-      sourceCount: 0,
+      sourceCount: 1,
     });
     const duplicate = await call<ApiErrorBody>("POST", "/companies", { body: input });
     expect(duplicate.status).toBe(422); // de nouveau plein : le quota est vérifié avant le doublon
