@@ -306,7 +306,20 @@ async function publishViaUserAccount(
   return { kind: "published", remoteId: payload.id ?? "linkedin" };
 }
 
-/** Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent). */
+/** Doit couvrir l'appel LinkedIn le plus lent : au-delà, une autre requête pourrait republier. */
+const PUBLISH_LOCK_TTL_MS = 120_000;
+
+let userPublisher = publishViaUserAccount;
+
+/** Remplace la publication via le compte relié (tests) ; `null` rétablit l'appel réel. */
+export function setLinkedInUserPublisherForTests(fn: typeof publishViaUserAccount | null): void {
+  userPublisher = fn ?? publishViaUserAccount;
+}
+
+/**
+ * Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent).
+ * Un verrou par post et version sérialise les demandes simultanées (double clic, onglets).
+ */
 export const publishLinkedIn: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getPostOr404(ctx);
@@ -358,78 +371,100 @@ export const publishLinkedIn: Handler = async (ctx) => {
     );
     throw unprocessable(check.code, check.message, { attempt: toPublication(attempt) });
   }
-  const linkedin = adapters().linkedin;
-  const variant = rec.variants.find((v) => v.id === rec.selectedVariantId) ?? rec.variants[0]!;
-  const hashtags = variant.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ");
-  const commentary = [variant.text, "", hashtags].join("\n");
-  const result = await publishViaUserAccount(ctx.user.id, commentary);
 
-  if (result.kind === "published") {
+  const lockKey = `linkedin-publish:${rec.id}:v${rec.version}`;
+  const lock = await ctx.repo.acquireLock(lockKey, PUBLISH_LOCK_TTL_MS);
+  if (!lock) {
+    throw conflict(
+      "publication_in_progress",
+      "Une publication de ce post est déjà en cours. Patientez quelques secondes puis actualisez.",
+    );
+  }
+  try {
+    // La demande concurrente a pu aboutir entre la première lecture et la prise du verrou.
+    const settled = (await ctx.repo.publications.list()).find(
+      (p) => p.idempotencyKey === key && p.status === "succes",
+    );
+    if (settled) return json(toPublication(settled));
+
+    const linkedin = adapters().linkedin;
+    const variant = rec.variants.find((v) => v.id === rec.selectedVariantId) ?? rec.variants[0]!;
+    const hashtags = variant.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ");
+    const commentary = [variant.text, "", hashtags].join("\n");
+    const result = await userPublisher(ctx.user.id, commentary);
+
+    if (result.kind === "published") {
+      const attempt: PublicationAttempt = {
+        ...base,
+        id: ctx.repo.nextId("pub"),
+        status: "succes",
+        code: null,
+        message: "Post publié sur LinkedIn via le compte relié.",
+        attempts: 1,
+        remoteId: result.remoteId,
+        mode: "publication",
+      };
+      await ctx.repo.publications.insert(attempt);
+      await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+      await audit(
+        ctx,
+        "publication.success",
+        "publication",
+        attempt.id,
+        `LinkedIn « ${rec.title} » publié (version ${rec.version})`,
+      );
+      return json(toPublication(attempt), { status: 201 });
+    }
+
+    if (result.kind === "reconnect_required" || result.kind === "api_error") {
+      const code =
+        result.kind === "reconnect_required" ? "linkedin_reconnect_required" : "linkedin_api_error";
+      const attempt: PublicationAttempt = {
+        ...base,
+        id: ctx.repo.nextId("pub"),
+        status: "echec",
+        code,
+        message: result.message,
+        attempts: 1,
+        remoteId: null,
+        mode: "publication",
+      };
+      await ctx.repo.publications.insert(attempt);
+      await audit(
+        ctx,
+        "publication.failed",
+        "publication",
+        attempt.id,
+        `LinkedIn « ${rec.title} » — ${result.message}`,
+      );
+      throw unprocessable(code, result.message, { attempt: toPublication(attempt) });
+    }
+
+    // Compte non relié : comportement historique, export manuel (idempotent).
     const attempt: PublicationAttempt = {
       ...base,
       id: ctx.repo.nextId("pub"),
       status: "succes",
-      code: null,
-      message: "Post publié sur LinkedIn via le compte relié.",
+      code: linkedin.apiAvailable ? null : "linkedin_api_unavailable",
+      message: linkedin.apiAvailable ? "Post publié." : linkedin.unavailableReason,
       attempts: 1,
-      remoteId: result.remoteId,
-      mode: "publication",
     };
     await ctx.repo.publications.insert(attempt);
-    await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+    await ctx.repo.linkedin.update({ ...rec, status: "exporte", updatedAt: at });
     await audit(
       ctx,
       "publication.success",
       "publication",
       attempt.id,
-      `LinkedIn « ${rec.title} » publié (version ${rec.version})`,
+      `LinkedIn « ${rec.title} » exporté (version ${rec.version})`,
     );
     return json(toPublication(attempt), { status: 201 });
+  } finally {
+    // Un échec de libération ne doit pas masquer le résultat : le verrou expirera seul.
+    await ctx.repo.releaseLock(lockKey, lock).catch((e: unknown) => {
+      console.error(`[linkedin] verrou ${lockKey} non libéré`, e);
+    });
   }
-
-  if (result.kind === "reconnect_required" || result.kind === "api_error") {
-    const code =
-      result.kind === "reconnect_required" ? "linkedin_reconnect_required" : "linkedin_api_error";
-    const attempt: PublicationAttempt = {
-      ...base,
-      id: ctx.repo.nextId("pub"),
-      status: "echec",
-      code,
-      message: result.message,
-      attempts: 1,
-      remoteId: null,
-      mode: "publication",
-    };
-    await ctx.repo.publications.insert(attempt);
-    await audit(
-      ctx,
-      "publication.failed",
-      "publication",
-      attempt.id,
-      `LinkedIn « ${rec.title} » — ${result.message}`,
-    );
-    throw unprocessable(code, result.message, { attempt: toPublication(attempt) });
-  }
-
-  // Compte non relié : comportement historique, export manuel (idempotent).
-  const attempt: PublicationAttempt = {
-    ...base,
-    id: ctx.repo.nextId("pub"),
-    status: "succes",
-    code: linkedin.apiAvailable ? null : "linkedin_api_unavailable",
-    message: linkedin.apiAvailable ? "Post publié." : linkedin.unavailableReason,
-    attempts: 1,
-  };
-  await ctx.repo.publications.insert(attempt);
-  await ctx.repo.linkedin.update({ ...rec, status: "exporte", updatedAt: at });
-  await audit(
-    ctx,
-    "publication.success",
-    "publication",
-    attempt.id,
-    `LinkedIn « ${rec.title} » exporté (version ${rec.version})`,
-  );
-  return json(toPublication(attempt), { status: 201 });
 };
 
 export const exportLinkedIn: Handler = async (ctx) => {
