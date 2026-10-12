@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { editorialScore, WEIGHTS } from "./kora-store";
+import { editorialScore, WEIGHTS } from "@/lib/kora-store";
 describe("score éditorial", () => {
   it("poids sommant à 100 %", () => expect(Object.values(WEIGHTS).reduce((a, b) => a + b, 0)).toBe(100));
   it("reste entre 0 et 100", () => {
