@@ -21,7 +21,7 @@ import {
  * le navigateur ne reçoit que des informations d'affichage.
  */
 
-const GATEWAY_BASE_URL = "https://connector-gateway.lovable.dev";
+export const GATEWAY_BASE_URL = "https://connector-gateway.lovable.dev";
 export const LINKEDIN_CONNECTOR_ID = "linkedin";
 /** openid + profile : identité du membre ; w_member_social : publier des posts. */
 export const LINKEDIN_SCOPES = ["openid", "profile", "w_member_social"];
