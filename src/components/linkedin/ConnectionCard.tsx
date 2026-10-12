@@ -1,9 +1,15 @@
 import { Info, Linkedin, Loader2, LogOut, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Banner, PrimaryButton, SecondaryButton } from "@/components/articles/ui";
-import { useLinkedInConnection, useLinkedInLink, useLinkedInUnlink } from "@/lib/api/hooks";
-import { errorMessage } from "@/lib/api/hooks";
+import { Banner } from "@/components/articles/ui";
+import { GhostButton, PrimaryButton } from "@/components/kora/primitives";
+import {
+  errorMessage,
+  useLinkedInComplete,
+  useLinkedInConnection,
+  useLinkedInLink,
+  useLinkedInUnlink,
+} from "@/lib/api/hooks";
 
 /** Attend la fin du consentement OAuth dans le popup (message same-origin uniquement). */
 function waitForOAuthCompletion(popup: Window): Promise<string | null> {
@@ -42,13 +48,14 @@ function waitForOAuthCompletion(popup: Window): Promise<string | null> {
 
 /**
  * Carte de connexion du compte LinkedIn de l'utilisateur courant. Chaque
- * utilisateur relie son propre compte ; la publication part ensuite de son
- * compte. Sans connexion, l'export manuel reste disponible.
+ * utilisateur relie son propre compte ; les publications partent ensuite de
+ * son compte. Sans connexion, l'export manuel reste disponible.
  */
 export function ConnectionCard() {
   const connection = useLinkedInConnection();
   const startConnect = useLinkedInLink();
-  const complete = useLinkedInUnlink(); // placeholder replaced below
+  const complete = useLinkedInComplete();
+  const disconnect = useLinkedInUnlink();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
 
@@ -56,7 +63,7 @@ export function ConnectionCard() {
     const popup = window.open("", "lovable-oauth", "width=600,height=720");
     if (!popup) return;
     setBusy(true);
-    let code: string | null = null;
+    let code: string | null;
     try {
       const { authorizationUrl } = await startConnect.mutateAsync();
       const completion = waitForOAuthCompletion(popup);
@@ -65,19 +72,26 @@ export function ConnectionCard() {
     } catch (error) {
       popup.close();
       setBusy(false);
-      throw error;
+      toastError(error);
+      return;
     }
     try {
       if (code) await complete.mutateAsync(code);
       await qc.invalidateQueries({ queryKey: ["kora", "linkedinConnection"] });
+    } catch (error) {
+      toastError(error);
     } finally {
       setBusy(false);
     }
   }
 
+  function toastError(error: unknown) {
+    import("sonner").then(({ toast }) => toast.error(errorMessage(error)));
+  }
+
   const data = connection.data;
   return (
-    <Banner tone="info" icon={Info} className="mb-4 items-center justify-between gap-4">
+    <Banner tone="info" icon={Info} className="mb-4 flex items-center justify-between gap-4">
       <span className="min-w-0 text-sm">
         {connection.isPending ? (
           <span className="inline-flex items-center gap-2">
@@ -86,9 +100,8 @@ export function ConnectionCard() {
         ) : data?.connected ? (
           <>
             Compte LinkedIn connecté
-            {data.name ? (
-              <strong className="ml-1 font-medium">{data.name}</strong>
-            ) : null} — les publications partiront de ce compte.
+            {data.name ? <strong className="ml-1 font-medium">{data.name}</strong> : null} — les
+            publications partiront de ce compte.
           </>
         ) : data?.reconnectRequired ? (
           <>
@@ -103,9 +116,9 @@ export function ConnectionCard() {
         )}
       </span>
       {busy ? null : data?.connected ? (
-        <SecondaryButton onClick={() => void disconnect.mutateAsync()}>
+        <GhostButton onClick={() => void disconnect.mutateAsync()}>
           <LogOut className="size-4" /> Déconnecter
-        </SecondaryButton>
+        </GhostButton>
       ) : (
         <PrimaryButton onClick={() => void onConnect()}>
           {data?.reconnectRequired ? <RefreshCw className="size-4" /> : <Linkedin className="size-4" />}

@@ -345,6 +345,16 @@ export interface LinkedInPost {
   updatedAt: string;
 }
 
+/** Connexion LinkedIn de l'utilisateur courant (connecteur par utilisateur). */
+export interface LinkedInConnection {
+  connected: boolean;
+  name?: string | null;
+  memberId?: string | null;
+  reconnectRequired?: boolean;
+  error?: string | null;
+}
+
+
 export type NewsletterStatus = "composition" | "approuvee" | "exportee";
 
 export interface NewsletterItem {
