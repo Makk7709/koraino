@@ -1,24 +1,30 @@
-# KORAino
+# KORA Newsroom IA — Inovallée
 
-tu peux me realiser cette app ?
+Espace éditorial d'Inovallée : veille des entreprises de l'écosystème, signaux scorés et sourcés, rédaction assistée, circuit d'approbation, et préparation de la diffusion sur WordPress, LinkedIn et la newsletter.
 
-This project was built with [Lovable](https://lovable.dev).
+![Dashboard éditorial](docs/images/dashboard.webp)
 
-## Build with Lovable
+## Démarrer
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/40d714f1-3fc5-491b-9623-447358a56672).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
+```bash
+nvm use 24
+bun install
+bun run dev        # http://localhost:8080
 ```
+
+| Commande | Effet |
+|---|---|
+| `bun run test` | Tests Vitest |
+| `npx tsc --noEmit -p .` | Vérification TypeScript |
+| `bun run lint` | ESLint et Prettier |
+| `bun run build` | Build de production (Cloudflare Workers) |
+
+Variable d'environnement facultative : `AI_API_KEY` (clé OpenAI, lue côté serveur uniquement) pour améliorer les textes générés.
+
+## Documentation
+
+Toute la documentation est dans [`docs/`](docs/README.md) : démarrage, architecture, référence API, dictionnaire des données, règles métier, sécurité, frontend, guide utilisateur, exploitation, et couverture du cahier des charges.
+
+## Lovable
+
+Ce projet est connecté à [Lovable](https://lovable.dev/projects/40d714f1-3fc5-491b-9623-447358a56672) : chaque commit poussé sur `main` est synchronisé avec l'éditeur, et inversement. Ne réécrivez jamais un historique déjà poussé (pas de `push --force`, de rebase ni d'amend de commits publiés) et gardez `main` dans un état qui fonctionne. Voir [`AGENTS.md`](AGENTS.md).
