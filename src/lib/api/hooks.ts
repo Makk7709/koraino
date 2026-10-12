@@ -80,8 +80,7 @@ function useAccountMutation<TVars, TData>(fn: (vars: TVars) => Promise<TData>) {
   });
 }
 
-export const useCreateUser = () =>
-  useAccountMutation((input: UserInput) => api.createUser(input));
+export const useCreateUser = () => useAccountMutation((input: UserInput) => api.createUser(input));
 export const useUpdateUser = () =>
   useAccountMutation(({ id, input }: { id: string; input: UserPatch }) =>
     api.updateUser(id, input),

@@ -30,7 +30,7 @@ export const LINKEDIN_CONNECTOR_ID = "linkedin";
 export const LINKEDIN_SCOPES = ["openid", "profile", "w_member_social"];
 
 function clientApiKey(): string {
-  const key = process.env['LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY'];
+  const key = process.env["LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY"];
   if (!key) {
     throw new Error("LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY is not set");
   }
@@ -67,10 +67,7 @@ export const getLinkedInConnection: Handler = async (ctx) => {
 
 /** Démarre le consentement OAuth LinkedIn (popup) et renvoie l'URL d'autorisation. */
 export const startLinkedInConnect: Handler = async (ctx) => {
-  const returnUrl = new URL(
-    "/api/oauth/linkedin/return",
-    publicOrigin(ctx),
-  ).toString();
+  const returnUrl = new URL("/api/oauth/linkedin/return", publicOrigin(ctx)).toString();
   const existing = await getConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
   const { authorizationUrl } = await authorizeAppUserOAuth({
     gatewayBaseUrl: GATEWAY_BASE_URL,
@@ -100,10 +97,7 @@ export const completeLinkedInConnection: Handler = async (ctx) => {
       "Aucune connexion LinkedIn n'est en attente pour votre compte (demande expirée ou déjà utilisée) : relancez « Connecter mon compte LinkedIn ».",
     );
   }
-  const { connectionAPIKey, connectorId } = await exchangeAppUserOAuthCode(
-    GATEWAY_BASE_URL,
-    code,
-  );
+  const { connectionAPIKey, connectorId } = await exchangeAppUserOAuthCode(GATEWAY_BASE_URL, code);
   if (connectorId !== LINKEDIN_CONNECTOR_ID) {
     throw badRequest("connector_mismatch", "Le retour OAuth ne correspond pas à LinkedIn.");
   }

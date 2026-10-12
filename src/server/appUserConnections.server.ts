@@ -1,4 +1,5 @@
 import { decryptConnectionKey, encryptConnectionKey } from "./connectionKeyCrypto";
+import { usesDatabase } from "./database";
 import { HttpError } from "./http";
 
 /**
@@ -6,11 +7,6 @@ import { HttpError } from "./http";
  * de l'app et par connecteur. Accès serveur uniquement (service_role) — le
  * navigateur ne voit jamais la clé.
  */
-
-/** True quand la base est utilisable (ni Vitest, ni env manquante). */
-function dbAvailable(): boolean {
-  return !process.env["VITEST"] && !!process.env["SUPABASE_URL"];
-}
 
 export async function saveConnectionKeyForUser(
   userId: string,
@@ -52,7 +48,7 @@ export async function getConnectionKeyForUser(
   userId: string,
   connectorId: string,
 ): Promise<string | null> {
-  if (!dbAvailable()) return null;
+  if (!usesDatabase()) return null;
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data, error } = await supabaseAdmin
@@ -73,7 +69,7 @@ export async function deleteConnectionKeyForUser(
   userId: string,
   connectorId: string,
 ): Promise<void> {
-  if (!dbAvailable()) return;
+  if (!usesDatabase()) return;
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { error } = await supabaseAdmin
     .from("app_user_connections")

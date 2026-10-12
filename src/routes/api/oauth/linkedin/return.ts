@@ -6,7 +6,7 @@ import { createFileRoute } from "@tanstack/react-router";
  * Il analyse les paramètres côté serveur et transmet le code à usage unique
  * (jamais la clé de connexion) à la fenêtre ouvrante via postMessage.
  */
-export const Route = createFileRoute('/api/oauth/linkedin/return')({
+export const Route = createFileRoute("/api/oauth/linkedin/return")({
   server: {
     handlers: {
       GET: async ({ request }) => {
@@ -30,12 +30,12 @@ export const Route = createFileRoute('/api/oauth/linkedin/return')({
 
         const escapeHtml = (str: string) =>
           str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
 
-        const safeJson = JSON.stringify(result).replace(/<\//g, '<\\/');
+        const safeJson = JSON.stringify(result).replace(/<\//g, "<\\/");
 
         const html = `<!DOCTYPE html>
 <html lang="fr">

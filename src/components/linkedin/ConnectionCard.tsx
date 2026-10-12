@@ -127,7 +127,11 @@ export function ConnectionCard() {
         </GhostButton>
       ) : (
         <PrimaryButton onClick={() => void onConnect()}>
-          {data?.reconnectRequired ? <RefreshCw className="size-4" /> : <Linkedin className="size-4" />}
+          {data?.reconnectRequired ? (
+            <RefreshCw className="size-4" />
+          ) : (
+            <Linkedin className="size-4" />
+          )}
           {data?.reconnectRequired ? "Reconnecter LinkedIn" : "Connecter mon compte LinkedIn"}
         </PrimaryButton>
       )}
