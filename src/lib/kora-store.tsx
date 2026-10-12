@@ -46,7 +46,7 @@ export function evidenceState(sig: Signal): { label: string; tone: "ok" | "warn"
 
 const now = () => new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
 
-function seed() {
+function seed(): { companies: Company[]; signals: Signal[]; drafts: Draft[] } {
   const companies: Company[] = [
     { id: "c1", name: "Isorg", aliases: ["ISORG SA"], domain: "isorg.fr", sector: "Électronique imprimée",
       sources: [{ type: "Actualités", url: "isorg.fr/news", ok: true, lastSuccess: "12/10/2026" },

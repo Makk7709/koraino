@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useKora, type Channel, type DraftStatus } from "@/lib/kora-store";
 
 export const Route = createFileRoute("/studio")({
-  validateSearch: (s: Record<string, unknown>) => ({ d: typeof s.d === "string" ? s.d : undefined }),
+  validateSearch: (s: Record<string, unknown>) => ({ d: typeof s['d'] === "string" ? (s['d'] as string) : undefined }),
   head: () => ({ meta: [
     { title: "Studio éditorial — KORA Newsroom" },
     { name: "description", content: "Brouillons sourcés, versions et approbations éditoriales." },
