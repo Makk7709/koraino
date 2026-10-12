@@ -89,14 +89,17 @@ export const createLinkedIn: Handler = async (ctx) => {
       units: 1,
       label: `Post LinkedIn : ${title}`,
     },
-    () =>
-      adapters().textModel.linkedinVariants({
+    async () => {
+      const input = {
         title,
         lead: version?.chapo || article?.excerpt || signal?.summary || title,
         companyName: company?.name ?? null,
         themes: signal?.themes ?? company?.themes ?? [],
         tags: signal?.tags ?? version?.tags ?? [],
-      }),
+      };
+      const base = adapters().textModel.linkedinVariants(input);
+      return (await adapters().ai?.enhanceLinkedInVariants(input, base)) ?? base;
+    },
   );
   const id = ctx.repo.nextId("li");
   const at = ctx.now.toISOString();

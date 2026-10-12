@@ -101,7 +101,11 @@ export async function addItem(
       units: 1,
       label: `Résumé newsletter : ${title}`,
     },
-    () => adapters().textModel.summarize({ title, text }),
+    async () => {
+      const input = { title, text };
+      const base = adapters().textModel.summarize(input);
+      return (await adapters().ai?.enhanceSummary(input, base)) ?? base;
+    },
   );
   const item: NewsletterItem = {
     id: ctx.repo.nextId("nli"),
