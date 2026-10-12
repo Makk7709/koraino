@@ -1,17 +1,18 @@
 import type { CreatedUser, InvitationResult, InvitationStatus, Role } from "@/lib/api/types";
 import { disconnectAppUser } from "@/integrations/lovable/appUserConnector";
-import { deleteConnectionKeyForUser, getConnectionKeyForUser } from "../appUserConnections.server";
+import { deleteConnectionKeyForUser } from "../appUserConnections.server";
 import { inviteAccount } from "../auth/admin";
 import { authMode } from "../auth/mode";
 import { isActiveAdmin, toPublicUser, userIdForEmail } from "../auth/users";
 import type { Ctx, Handler } from "../context";
 import { assertCan, roleLabel } from "../domain/permissions";
 import { conflict, json, noContent, notFound, unprocessable } from "../http";
+import { discardPendingConnect } from "../linkedin/pendingConnect";
 import { publicOrigin } from "../publicUrl";
 import { audit } from "../services/journal";
 import type { UserRecord } from "../store/records";
 import { defined, parse, schemas } from "../validation";
-import { GATEWAY_BASE_URL, LINKEDIN_CONNECTOR_ID } from "./connectors";
+import { GATEWAY_BASE_URL, LINKEDIN_CONNECTOR_ID, readConnectionKey } from "./connectors";
 
 /* ------------------------------------------------------------------ */
 /* Gestion des utilisateurs (administrateurs)                          */
@@ -27,7 +28,8 @@ const INVITATION_LABEL: Record<InvitationStatus, string> = {
 const rolesText = (roles: Role[]) => roles.map(roleLabel).join(", ");
 
 const USERS_LOCK = "users:admins";
-const USERS_LOCK_TTL_MS = 15_000;
+/** Couvre aussi les invitations faites sous verrou (pagination et envoi Supabase Auth). */
+const USERS_LOCK_TTL_MS = 60_000;
 
 async function getUserOr404(ctx: Ctx): Promise<UserRecord> {
   const user = await ctx.repo.users.get(ctx.params["id"]!);
@@ -36,9 +38,10 @@ async function getUserOr404(ctx: Ctx): Promise<UserRecord> {
 }
 
 /**
- * Modification ou suppression d'un utilisateur sous verrou : sans transactions en base, deux
- * administrateurs qui se rétrogradent l'un l'autre passeraient chacun le contrôle « dernier
- * administrateur ». Les droits de l'auteur sont relus sous le verrou.
+ * Création, modification, suppression et invitation sous verrou : sans transactions en base,
+ * deux administrateurs qui se rétrogradent l'un l'autre passeraient chacun le contrôle
+ * « dernier administrateur », et une invitation réécrirait une modification faite pendant son
+ * appel réseau. Les droits de l'auteur sont relus sous le verrou.
  */
 async function withUsersLock(ctx: Ctx, fn: () => Promise<Response>): Promise<Response> {
   const token = await ctx.repo.acquireLock(USERS_LOCK, USERS_LOCK_TTL_MS);
@@ -69,7 +72,11 @@ async function assertNotLastAdmin(ctx: Ctx, target: UserRecord, message: string)
   if (!others.length) throw unprocessable("last_admin", message);
 }
 
-/** Invite l'adresse (mode supabase) et rattache le compte Supabase renvoyé à l'utilisateur. */
+/**
+ * Invite l'adresse (mode supabase) et rattache le compte Supabase renvoyé à l'utilisateur,
+ * relu après l'appel réseau : seuls `authUserId` et `activatedAt` sont écrits, une modification
+ * faite entre-temps (rôles, nom, équipe) est conservée.
+ */
 async function invite(
   ctx: Ctx,
   user: UserRecord,
@@ -92,9 +99,8 @@ async function invite(
     return { user, result: { invitation: "failed", message: outcome.message } };
   }
   const { account } = outcome;
-  const owner = (await ctx.repo.users.list()).find(
-    (u) => u.authUserId === account.id && u.id !== user.id,
-  );
+  const users = await ctx.repo.users.list();
+  const owner = users.find((u) => u.authUserId === account.id && u.id !== user.id);
   if (owner) {
     return {
       user,
@@ -104,11 +110,18 @@ async function invite(
       },
     };
   }
+  const current = users.find((u) => u.id === user.id);
+  if (!current) {
+    return {
+      user,
+      result: { invitation: "failed", message: "Utilisateur supprimé pendant l'invitation." },
+    };
+  }
   const linked: UserRecord = {
-    ...user,
+    ...current,
     authUserId: account.id,
     activatedAt: account.email_confirmed_at
-      ? (user.authUserId === account.id && user.activatedAt) || ctx.now.toISOString()
+      ? (current.authUserId === account.id && current.activatedAt) || ctx.now.toISOString()
       : null,
   };
   await ctx.repo.users.update(linked);
@@ -120,34 +133,36 @@ export const createUser: Handler = async (ctx) => {
   const input = parse(schemas.createUser, ctx.body);
   const emailTaken = () =>
     conflict("email_taken", "Un utilisateur utilise déjà cette adresse e-mail.");
-  if ((await ctx.repo.users.list()).some((u) => u.email.toLowerCase() === input.email)) {
-    throw emailTaken();
-  }
-  const created: UserRecord = {
-    id: userIdForEmail(input.email),
-    name: input.name,
-    email: input.email,
-    team: input.team ?? "",
-    roles: input.roles,
-    avatarUrl: null,
-    authUserId: null,
-    activatedAt: null,
-  };
-  try {
-    await ctx.repo.users.insert(created);
-  } catch (error) {
-    if (await ctx.repo.users.get(created.id)) throw emailTaken();
-    throw error;
-  }
-  const { user, result } = await invite(ctx, created);
-  await audit(
-    ctx,
-    "user.create",
-    "user",
-    user.id,
-    `${user.name} (${user.email}) — ${rolesText(user.roles)} ; ${INVITATION_LABEL[result.invitation]}`,
-  );
-  return json({ user: toPublicUser(user), ...result } satisfies CreatedUser, { status: 201 });
+  return withUsersLock(ctx, async () => {
+    if ((await ctx.repo.users.list()).some((u) => u.email.toLowerCase() === input.email)) {
+      throw emailTaken();
+    }
+    const created: UserRecord = {
+      id: userIdForEmail(input.email),
+      name: input.name,
+      email: input.email,
+      team: input.team ?? "",
+      roles: input.roles,
+      avatarUrl: null,
+      authUserId: null,
+      activatedAt: null,
+    };
+    try {
+      await ctx.repo.users.insert(created);
+    } catch (error) {
+      if (await ctx.repo.users.get(created.id)) throw emailTaken();
+      throw error;
+    }
+    const { user, result } = await invite(ctx, created);
+    await audit(
+      ctx,
+      "user.create",
+      "user",
+      user.id,
+      `${user.name} (${user.email}) — ${rolesText(user.roles)} ; ${INVITATION_LABEL[result.invitation]}`,
+    );
+    return json({ user: toPublicUser(user), ...result } satisfies CreatedUser, { status: 201 });
+  });
 };
 
 export const updateUser: Handler = async (ctx) => {
@@ -195,7 +210,7 @@ export const updateUser: Handler = async (ctx) => {
 
 /** Révocation (au mieux) puis suppression de la connexion LinkedIn de l'utilisateur. */
 async function removeLinkedInConnection(userId: string): Promise<void> {
-  const key = await getConnectionKeyForUser(userId, LINKEDIN_CONNECTOR_ID);
+  const { key } = await readConnectionKey(userId);
   if (key) {
     try {
       await disconnectAppUser({
@@ -222,6 +237,7 @@ export const deleteUser: Handler = async (ctx) => {
       throw unprocessable("self_delete", "Vous ne pouvez pas supprimer votre propre compte.");
     }
     await removeLinkedInConnection(target.id);
+    await discardPendingConnect(ctx.repo, target.id);
     await ctx.repo.users.remove(target.id);
     await audit(ctx, "user.delete", "user", target.id, `${target.name} (${target.email}) supprimé`);
     return noContent();
@@ -230,16 +246,18 @@ export const deleteUser: Handler = async (ctx) => {
 
 export const resendInvitation: Handler = async (ctx) => {
   assertCan(ctx.user, "users.manage");
-  const target = await getUserOr404(ctx);
-  const { result } = await invite(ctx, target);
-  if (result.invitation !== "not_applicable") {
-    await audit(
-      ctx,
-      "user.invite",
-      "user",
-      target.id,
-      `${target.name} (${target.email}) — ${INVITATION_LABEL[result.invitation]}`,
-    );
-  }
-  return json(result satisfies InvitationResult);
+  return withUsersLock(ctx, async () => {
+    const target = await getUserOr404(ctx);
+    const { result } = await invite(ctx, target);
+    if (result.invitation !== "not_applicable") {
+      await audit(
+        ctx,
+        "user.invite",
+        "user",
+        target.id,
+        `${target.name} (${target.email}) — ${INVITATION_LABEL[result.invitation]}`,
+      );
+    }
+    return json(result satisfies InvitationResult);
+  });
 };

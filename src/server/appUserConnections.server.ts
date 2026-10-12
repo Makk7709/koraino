@@ -65,16 +65,26 @@ export async function getConnectionKeyForUser(
   }
 }
 
+/** Base indisponible : 503, la connexion n'est pas supprimée et l'opération peut être relancée. */
 export async function deleteConnectionKeyForUser(
   userId: string,
   connectorId: string,
 ): Promise<void> {
   if (!usesDatabase()) return;
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { error } = await supabaseAdmin
-    .from("app_user_connections")
-    .delete()
-    .eq("user_id", userId)
-    .eq("connector_id", connectorId);
-  if (error) throw error;
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("app_user_connections")
+      .delete()
+      .eq("user_id", userId)
+      .eq("connector_id", connectorId);
+    if (error) throw error;
+  } catch (error) {
+    console.error("[app_user_connections] suppression impossible :", error);
+    throw new HttpError(
+      503,
+      "linkedin_unavailable",
+      "Connexion LinkedIn impossible à supprimer pour le moment : réessayez plus tard.",
+    );
+  }
 }

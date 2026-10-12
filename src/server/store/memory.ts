@@ -107,6 +107,12 @@ export class MemoryRepository implements Repository {
     return token;
   }
 
+  async replaceLock(key: string, ttlMs: number) {
+    const token = crypto.randomUUID();
+    this.locks.set(key, { token, expiresAt: now().getTime() + ttlMs });
+    return token;
+  }
+
   async releaseLock(key: string, token: string) {
     if (this.locks.get(key)?.token === token) this.locks.delete(key);
   }

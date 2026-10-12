@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClock } from "@/server/clock";
 import {
   consumePendingConnect,
+  discardPendingConnect,
   openPendingConnect,
   PENDING_CONNECT_TTL_MS,
 } from "@/server/linkedin/pendingConnect";
@@ -16,7 +17,10 @@ interface Row {
   data: Record<string, unknown>;
 }
 
-/** `kora_records` en mémoire : PK (collection, id) => 23505, filtres `eq` dont `data->>champ`. */
+/**
+ * `kora_records` en mémoire : PK (collection, id) => 23505, upsert sur cette PK, filtres `eq`
+ * dont `data->>champ`.
+ */
 class FakeRecords {
   rows = new Map<string, Row>();
 
@@ -27,6 +31,11 @@ class FakeRecords {
         const key = `${row.collection}|${row.id}`;
         if (this.rows.has(key)) return { error: { code: "23505", message: "duplicate key" } };
         this.rows.set(key, structuredClone(row));
+        return { error: null };
+      },
+      upsert: async (row: Row, options: { onConflict?: string }) => {
+        expect(options).toEqual({ onConflict: "collection,id" });
+        this.rows.set(`${row.collection}|${row.id}`, structuredClone(row));
         return { error: null };
       },
       select: () => this.query(),
@@ -98,20 +107,60 @@ describe.each([
 
   it("expire après 10 minutes", async () => {
     const kept = await openPendingConnect(repo, "u_claire");
-    const expired = await openPendingConnect(repo, "u_claire");
     at(PENDING_CONNECT_TTL_MS - 1);
     expect(await consumePendingConnect(repo, "u_claire", kept)).toBe(true);
-    at(PENDING_CONNECT_TTL_MS);
+    const expired = await openPendingConnect(repo, "u_claire");
+    at(2 * PENDING_CONNECT_TTL_MS - 1);
     expect(await consumePendingConnect(repo, "u_claire", expired)).toBe(false);
   });
 
   it("jeton falsifié ou état mal formé : refus, l'attente reste valable", async () => {
     const state = await openPendingConnect(repo, "u_claire");
-    const [requestId] = state.split(".");
-    for (const forged of [`${requestId}.faux`, requestId!, "", `${state}.x`, "a:b.c"]) {
-      expect(await consumePendingConnect(repo, "u_claire", forged)).toBe(false);
+    expect(state).toMatch(/^[0-9a-f-]{36}$/);
+    const forged = [
+      "faux",
+      state.replace(/^./, (c) => (c === "0" ? "1" : "0")),
+      "",
+      `${state}.x`,
+      `${state}.${state}`,
+      "a:b.c",
+      "x".repeat(65),
+    ];
+    for (const attempt of forged) {
+      expect(await consumePendingConnect(repo, "u_claire", attempt)).toBe(false);
     }
     expect(await consumePendingConnect(repo, "u_claire", state)).toBe(true);
+  });
+
+  it("N5 — une seule attente par utilisateur : chaque ouverture invalide la précédente", async () => {
+    const states: string[] = [];
+    for (let i = 0; i < 20; i++) states.push(await openPendingConnect(repo, "u_claire"));
+    const other = await openPendingConnect(repo, "u_lucas");
+    expect(new Set(states).size).toBe(20);
+    for (const old of states.slice(0, -1)) {
+      expect(await consumePendingConnect(repo, "u_claire", old)).toBe(false);
+    }
+    expect(await consumePendingConnect(repo, "u_claire", states.at(-1)!)).toBe(true);
+    expect(await consumePendingConnect(repo, "u_lucas", other)).toBe(true);
+  });
+
+  it("N5 — l'attente d'un utilisateur supprimé est effacée, quel que soit son jeton", async () => {
+    const state = await openPendingConnect(repo, "u_claire");
+    const other = await openPendingConnect(repo, "u_lucas");
+    await discardPendingConnect(repo, "u_claire");
+    await discardPendingConnect(repo, "u_marc");
+    expect(await consumePendingConnect(repo, "u_claire", state)).toBe(false);
+    expect(await consumePendingConnect(repo, "u_lucas", other)).toBe(true);
+  });
+
+  it("replaceLock évince un détenteur non expiré : son jeton ne libère plus rien", async () => {
+    const held = (await repo.acquireLock("cle", 60_000))!;
+    const replaced = await repo.replaceLock("cle", 60_000);
+    expect(replaced).not.toBe(held);
+    await repo.releaseLock("cle", held);
+    expect(await repo.acquireLock("cle", 60_000)).toBeNull();
+    await repo.releaseLock("cle", replaced);
+    expect(await repo.acquireLock("cle", 60_000)).toEqual(expect.any(String));
   });
 
   it("finalisation déjà en cours pour cet utilisateur (autre instance) : refus sans consommer", async () => {
@@ -148,6 +197,22 @@ describe("F3 — attente en base : aucune ligne laissée derrière", () => {
     const stale = await openPendingConnect(repo, "u_claire");
     at(PENDING_CONNECT_TTL_MS);
     expect(await consumePendingConnect(repo, "u_claire", stale)).toBe(false);
+    expect(records.rows.size).toBe(0);
+  });
+
+  it("N5 — clics « Connecter » répétés sans finalisation : une seule ligne par utilisateur", async () => {
+    const repo = new DbRepository();
+    let last = "";
+    for (let i = 0; i < 20; i++) last = await openPendingConnect(repo, "u_claire");
+    await openPendingConnect(repo, "u_lucas");
+    expect([...records.rows.keys()].sort()).toEqual([
+      "locks|linkedin-connect:u_claire",
+      "locks|linkedin-connect:u_lucas",
+    ]);
+    expect(records.rows.get("locks|linkedin-connect:u_claire")!.data["token"]).toBe(last);
+
+    expect(await consumePendingConnect(repo, "u_claire", last)).toBe(true);
+    await discardPendingConnect(repo, "u_lucas");
     expect(records.rows.size).toBe(0);
   });
 });

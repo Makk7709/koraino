@@ -1,14 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/** Sous-ensemble de supabase-js utilisé par `DbRepository.ensureReady`. */
+/**
+ * Sous-ensemble de supabase-js utilisé par `DbRepository.ensureReady` et par la suppression
+ * d'une connexion LinkedIn.
+ */
 const fake = vi.hoisted(() => ({
   workspace: null as { workspace_id: string } | null,
   records: [] as { collection: string; id: string }[],
   settings: [] as unknown[],
+  deletions: [] as [string, unknown][][],
+  deleteError: null as { message: string } | null,
 }));
 vi.mock("@/integrations/supabase/client.server", () => ({
   supabaseAdmin: {
     from(table: string) {
+      if (table === "app_user_connections") {
+        return {
+          delete: () => {
+            const filters: [string, unknown][] = [];
+            const query = {
+              eq: (column: string, value: unknown) => {
+                filters.push([column, value]);
+                return query;
+              },
+              then: (resolve: (r: { error: { message: string } | null }) => unknown) => {
+                if (!fake.deleteError) fake.deletions.push(filters);
+                return Promise.resolve({ error: fake.deleteError }).then(resolve);
+              },
+            };
+            return query;
+          },
+        };
+      }
       if (table === "kora_settings") {
         return {
           select: () => ({
@@ -31,8 +54,10 @@ vi.mock("@/integrations/supabase/client.server", () => ({
   },
 }));
 
+import { deleteConnectionKeyForUser } from "@/server/appUserConnections.server";
 import { authMode } from "@/server/auth/mode";
 import { usesDatabase } from "@/server/database";
+import { HttpError } from "@/server/http";
 import { DbRepository } from "@/server/store/db";
 import { getRepository, resetStore } from "@/server/store/memory";
 
@@ -40,9 +65,12 @@ beforeEach(() => {
   fake.workspace = null;
   fake.records = [];
   fake.settings = [];
+  fake.deletions = [];
+  fake.deleteError = null;
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   delete (globalThis as Record<string, unknown>)["__koraDb__"];
 });
 
@@ -83,5 +111,39 @@ describe("I4 — un seul prédicat pour la base et le mode d'authentification", 
     vi.stubEnv("SUPABASE_URL", "");
     expect(usesDatabase()).toBe(false);
     expect(authMode()).toBe("demo");
+  });
+});
+
+describe("N3 — suppression d'une connexion LinkedIn en base", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("SUPABASE_URL", "https://projet.supabase.invalid");
+  });
+
+  it("supprime la ligne de cet utilisateur et de ce connecteur", async () => {
+    await deleteConnectionKeyForUser("u_claire", "linkedin");
+    expect(fake.deletions).toEqual([
+      [
+        ["user_id", "u_claire"],
+        ["connector_id", "linkedin"],
+      ],
+    ]);
+  });
+
+  it("base en panne : 503 linkedin_unavailable, pas une erreur interne", async () => {
+    fake.deleteError = { message: "connexion refusée" };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = await deleteConnectionKeyForUser("u_claire", "linkedin").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error).toMatchObject({
+      status: 503,
+      code: "linkedin_unavailable",
+      message: "Connexion LinkedIn impossible à supprimer pour le moment : réessayez plus tard.",
+    });
+    expect(logged).toHaveBeenCalledWith(
+      "[app_user_connections] suppression impossible :",
+      fake.deleteError,
+    );
+    expect(fake.deletions).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authorizeAppUserOAuth,
+  disconnectAppUser,
   exchangeAppUserOAuthCode,
 } from "@/integrations/lovable/appUserConnector";
 import type {
@@ -21,7 +22,8 @@ import { setClock } from "@/server/clock";
 import { idempotencyKey } from "@/server/domain/workflow";
 import { GATEWAY_BASE_URL } from "@/server/handlers/connectors";
 import { setLinkedInUserPublisherForTests } from "@/server/handlers/distribution";
-import { PENDING_CONNECT_TTL_MS } from "@/server/linkedin/pendingConnect";
+import { HttpError } from "@/server/http";
+import { consumePendingConnect, PENDING_CONNECT_TTL_MS } from "@/server/linkedin/pendingConnect";
 import type { Repository } from "@/server/store/repository";
 import { Route as OAuthReturnRoute } from "@/routes/api/oauth/linkedin/return";
 import { call, NOW, setup, teardown, USERS } from "./helpers";
@@ -52,6 +54,10 @@ const NOT_PENDING_MESSAGE =
   "Aucune connexion LinkedIn n'est en attente pour votre compte (demande expirée ou déjà utilisée) : relancez « Connecter mon compte LinkedIn ».";
 const KEY_UNAVAILABLE_MESSAGE =
   "Impossible de lire votre connexion LinkedIn pour le moment : réessayez plus tard.";
+const UNREADABLE_REMOVED =
+  "Connexion LinkedIn illisible supprimée sans révocation : l'accès reste à retirer dans LinkedIn (services autorisés)";
+const DELETE_UNAVAILABLE_MESSAGE =
+  "Connexion LinkedIn impossible à supprimer pour le moment : réessayez plus tard.";
 const MAYBE_MESSAGE =
   "LinkedIn est momentanément indisponible (erreur 503) : le post a peut-être été publié.";
 const MAYBE_PUBLISHED: PublishResult = {
@@ -180,20 +186,28 @@ describe("F3 — connexion LinkedIn : attente côté serveur liée à l'utilisat
 
   it("attente expirée après 10 minutes : 409", async () => {
     const early = await connect(VALIDATOR);
-    const late = await connect(VALIDATOR);
-
     setClock(() => new Date(NOW.getTime() + PENDING_CONNECT_TTL_MS - 1));
     expect((await complete(VALIDATOR, { code: "code-1", state: early })).status).toBe(200);
-    setClock(() => new Date(NOW.getTime() + PENDING_CONNECT_TTL_MS));
+
+    const late = await connect(VALIDATOR);
+    setClock(() => new Date(NOW.getTime() + 2 * PENDING_CONNECT_TTL_MS - 1));
     expectNotPending(await complete(VALIDATOR, { code: "code-2", state: late }));
     expect(exchangeAppUserOAuthCode).toHaveBeenCalledTimes(1);
   });
 
-  it("identifiant de demande valide mais jeton falsifié : 409, l'attente reste valable", async () => {
+  it("jeton falsifié : 409, l'attente reste valable", async () => {
     const state = await connect(VALIDATOR);
-    const [requestId] = state.split(".");
-    expectNotPending(await complete(VALIDATOR, { code: "code-1", state: `${requestId}.faux` }));
+    const forged = state.slice(0, -1) + (state.endsWith("0") ? "1" : "0");
+    expectNotPending(await complete(VALIDATOR, { code: "code-1", state: forged }));
     expect((await complete(VALIDATOR, { code: "code-2", state })).status).toBe(200);
+  });
+
+  it("N5 — un nouveau clic « Connecter » remplace l'attente précédente", async () => {
+    const first = await connect(VALIDATOR);
+    const second = await connect(VALIDATOR);
+    expectNotPending(await complete(VALIDATOR, { code: "code-1", state: first }));
+    expect((await complete(VALIDATOR, { code: "code-2", state: second })).status).toBe(200);
+    expect(vi.mocked(exchangeAppUserOAuthCode).mock.calls).toEqual([[GATEWAY_BASE_URL, "code-2"]]);
   });
 
   it("le code reste obligatoire (400) et n'entame pas l'attente", async () => {
@@ -430,6 +444,7 @@ describe("F5 — erreur de lecture de la clé : 503, tentative en échec, jamais
       }),
     ]);
     expect(attempts.some((a) => a.mode === "export" || a.status === "succes")).toBe(false);
+    expect(deleteConnectionKeyForUser).not.toHaveBeenCalled();
     expect((await getPost()).status).toBe("approuve");
     const journal = await call<AuditEvent[]>("GET", "/audit?entity=publication");
     expect(journal.body).toContainEqual(
@@ -443,21 +458,93 @@ describe("F5 — erreur de lecture de la clé : 503, tentative en échec, jamais
     expect(retry.body).toMatchObject({ status: "succes", mode: "export" });
   });
 
-  it("statut et déconnexion : 503 explicite, la clé stockée n'est pas supprimée", async () => {
+  it("statut : 503 explicite, la clé stockée n'est pas supprimée", async () => {
     vi.mocked(getConnectionKeyForUser).mockRejectedValue(new ConnectionKeyUnavailableError());
-    for (const [method, path] of [
-      ["GET", "/me/linkedin"],
-      ["POST", "/me/linkedin/disconnect"],
-      ["POST", "/me/linkedin/connect"],
+    const res = await call<ApiErrorBody>("GET", "/me/linkedin", { user: VALIDATOR });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toEqual({
+      code: "linkedin_unavailable",
+      message: KEY_UNAVAILABLE_MESSAGE,
+    });
+    expect(deleteConnectionKeyForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("N3 — clé illisible : déconnexion, reconnexion et suppression restent possibles", () => {
+  beforeEach(() => {
+    vi.mocked(disconnectAppUser).mockReset().mockResolvedValue();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  const unreadableFor = (userId: string) =>
+    vi.mocked(getConnectionKeyForUser).mockImplementation(async (id) => {
+      if (id === userId) throw new ConnectionKeyUnavailableError();
+      return null;
+    });
+
+  it("déconnexion : 200, connexion supprimée sans révocation, journalisée", async () => {
+    unreadableFor(VALIDATOR);
+    const res = await call<{ ok: boolean }>("POST", "/me/linkedin/disconnect", { user: VALIDATOR });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(disconnectAppUser).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteConnectionKeyForUser).mock.calls).toEqual([[VALIDATOR, "linkedin"]]);
+    expect(console.error).toHaveBeenCalledWith(
+      `[linkedin] connexion de ${VALIDATOR} illisible : suppression sans révocation`,
+    );
+    const journal = await call<AuditEvent[]>("GET", "/audit?entity=user");
+    expect(journal.body).toContainEqual(
+      expect.objectContaining({
+        action: "linkedin.disconnect",
+        entityId: VALIDATOR,
+        details: UNREADABLE_REMOVED,
+      }),
+    );
+  });
+
+  it("reconnexion : connexion illisible supprimée, consentement neuf, nouvelle clé enregistrée", async () => {
+    unreadableFor(VALIDATOR);
+    const state = await connect(VALIDATOR);
+    expect(vi.mocked(deleteConnectionKeyForUser).mock.calls).toEqual([[VALIDATOR, "linkedin"]]);
+    expect(vi.mocked(authorizeAppUserOAuth).mock.calls[0]![0]).not.toHaveProperty(
+      "connectionAPIKey",
+    );
+    expect((await complete(VALIDATOR, { code: "code-1", state })).status).toBe(200);
+    expect(saveConnectionKeyForUser).toHaveBeenCalledWith(
+      VALIDATOR,
+      "linkedin",
+      "lovack_cle_de_test",
+    );
+  });
+
+  it("suppression de l'utilisateur : 204, connexion et attente effacées, sans révocation", async () => {
+    const state = await connect(VALIDATOR);
+    unreadableFor(VALIDATOR);
+    const res = await call("DELETE", `/users/${VALIDATOR}`, { user: ADMIN });
+    expect(res.status).toBe(204);
+    expect(await repo.users.get(VALIDATOR)).toBeUndefined();
+    expect(disconnectAppUser).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteConnectionKeyForUser).mock.calls).toEqual([[VALIDATOR, "linkedin"]]);
+    expect(await consumePendingConnect(repo, VALIDATOR, state)).toBe(false);
+  });
+
+  it("base réellement en panne : la suppression échoue elle-même en 503, l'utilisateur reste", async () => {
+    unreadableFor(VALIDATOR);
+    vi.mocked(deleteConnectionKeyForUser).mockRejectedValue(
+      new HttpError(503, "linkedin_unavailable", DELETE_UNAVAILABLE_MESSAGE),
+    );
+    for (const [method, path, user] of [
+      ["POST", "/me/linkedin/disconnect", VALIDATOR],
+      ["POST", "/me/linkedin/connect", VALIDATOR],
+      ["DELETE", `/users/${VALIDATOR}`, ADMIN],
     ] as const) {
-      const res = await call<ApiErrorBody>(method, path, { user: VALIDATOR });
+      const res = await call<ApiErrorBody>(method, path, { user });
       expect(res.status, `${method} ${path}`).toBe(503);
       expect(res.body.error).toEqual({
         code: "linkedin_unavailable",
-        message: KEY_UNAVAILABLE_MESSAGE,
+        message: DELETE_UNAVAILABLE_MESSAGE,
       });
     }
-    expect(deleteConnectionKeyForUser).not.toHaveBeenCalled();
+    expect(await repo.users.get(VALIDATOR)).toBeDefined();
     expect(authorizeAppUserOAuth).not.toHaveBeenCalled();
   });
 });

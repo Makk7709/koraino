@@ -7,6 +7,7 @@ import {
   type AuthAccount,
   type AuthAdminApi,
 } from "@/server/auth/admin";
+import { setClock } from "@/server/clock";
 import { HttpError } from "@/server/http";
 import { publicOrigin } from "@/server/publicUrl";
 import { handleApiRequest } from "@/server/router";
@@ -249,6 +250,171 @@ describe("M3 — contrôle « dernier administrateur » sous verrou", () => {
     expect(self.status).toBe(422);
     expect(self.body.error.code).toBe("last_admin");
     expect((await call("DELETE", `/users/${USERS.admin}`, { headers: token })).status).toBe(204);
+  });
+});
+
+describe("N4 — invitation et première connexion n'annulent pas une modification concurrente", () => {
+  /** Lucas : administrateur invité (compte non confirmé) ; Sophie et Claire : administratrices actives. */
+  async function pendingAdmin() {
+    const sophie = bearer(await link(USERS.admin));
+    const lucas = (await repo.users.get(USERS.redacteur))!;
+    const pending = fake.addAccount(lucas.email, { confirmed: false, invited: true });
+    await repo.users.update({
+      ...lucas,
+      roles: ["admin"],
+      authUserId: pending.id,
+      activatedAt: null,
+    });
+    const claire = (await repo.users.get(USERS.validateur))!;
+    await repo.users.update({ ...claire, roles: ["admin"] });
+    return { sophie, claire: bearer(await link(USERS.validateur)), pendingId: pending.id };
+  }
+
+  /** Retient `inviteUserByEmail` jusqu'à `release()`. */
+  function gateInvitations() {
+    let reached = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const invite = fake.admin.inviteUserByEmail.bind(fake.admin);
+    fake.admin.inviteUserByEmail = async (email, options) => {
+      reached = true;
+      await gate;
+      return invite(email, options);
+    };
+    return { reached: () => reached, release };
+  }
+
+  const demote = (headers: Record<string, string>) =>
+    call<ApiErrorBody>("PATCH", `/users/${USERS.redacteur}`, {
+      headers,
+      body: { roles: ["lecteur"] },
+    });
+
+  it("renvoi d'invitation en cours : la rétrogradation attend (409), puis s'applique et reste", async () => {
+    const { sophie, claire, pendingId } = await pendingAdmin();
+    const gate = gateInvitations();
+    const resend = call<InvitationResult>("POST", `/users/${USERS.redacteur}/invite`, {
+      headers: sophie,
+    });
+    await vi.waitFor(() => expect(gate.reached()).toBe(true));
+
+    const busy = await demote(claire);
+    expect(busy.status).toBe(409);
+    expect(busy.body.error.code).toBe("users_busy");
+    gate.release();
+    expect((await resend).body).toEqual({ invitation: "sent" });
+
+    expect((await demote(claire)).status).toBe(200);
+    const lucas = (await repo.users.get(USERS.redacteur))!;
+    expect(lucas.roles).toEqual(["lecteur"]);
+    expect(lucas.authUserId).toEqual(expect.any(String));
+    expect(lucas.authUserId).not.toBe(pendingId);
+    expect(lucas.activatedAt).toBeNull();
+  });
+
+  it("verrou expiré pendant une invitation lente : seuls authUserId et activatedAt sont écrits", async () => {
+    const { sophie, claire, pendingId } = await pendingAdmin();
+    const gate = gateInvitations();
+    const resend = call<InvitationResult>("POST", `/users/${USERS.redacteur}/invite`, {
+      headers: sophie,
+    });
+    await vi.waitFor(() => expect(gate.reached()).toBe(true));
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000));
+
+    expect((await demote(claire)).status).toBe(200);
+    gate.release();
+    expect((await resend).body).toEqual({ invitation: "sent" });
+    const lucas = (await repo.users.get(USERS.redacteur))!;
+    expect(lucas.roles).toEqual(["lecteur"]);
+    expect(lucas.authUserId).not.toBe(pendingId);
+  });
+
+  it("utilisateur supprimé pendant une invitation lente : il ne réapparaît pas, échec explicite", async () => {
+    const { sophie, claire } = await pendingAdmin();
+    const gate = gateInvitations();
+    const resend = call<InvitationResult>("POST", `/users/${USERS.redacteur}/invite`, {
+      headers: sophie,
+    });
+    await vi.waitFor(() => expect(gate.reached()).toBe(true));
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000));
+
+    expect((await call("DELETE", `/users/${USERS.redacteur}`, { headers: claire })).status).toBe(
+      204,
+    );
+    gate.release();
+    const res = await resend;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      invitation: "failed",
+      message: "Utilisateur supprimé pendant l'invitation.",
+    });
+    expect(await repo.users.get(USERS.redacteur)).toBeUndefined();
+  });
+
+  it("création pendant une autre modification : 409 users_busy, rien n'est créé ni invité", async () => {
+    const sophie = bearer(await link(USERS.admin));
+    const lock = (await repo.acquireLock("users:admins", 60_000))!;
+    const busy = await call<ApiErrorBody>("POST", "/users", { headers: sophie, body: RECRUE });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error.code).toBe("users_busy");
+    expect(fake.invites).toEqual([]);
+    expect((await repo.users.list()).some((u) => u.email === RECRUE.email)).toBe(false);
+
+    await repo.releaseLock("users:admins", lock);
+    const created = await call<CreatedUser>("POST", "/users", { headers: sophie, body: RECRUE });
+    expect(created.status).toBe(201);
+    expect(created.body.invitation).toBe("sent");
+  });
+
+  /** Fait passer `mutate` juste après la première lecture de la liste (celle de `resolveKoraUser`). */
+  function afterFirstList(mutate: () => Promise<void>) {
+    const list = repo.users.list.bind(repo.users);
+    let done = false;
+    repo.users.list = async () => {
+      const snapshot = await list();
+      if (!done) {
+        done = true;
+        await mutate();
+      }
+      return snapshot;
+    };
+  }
+
+  async function confirmedNotActivated() {
+    const lucas = (await repo.users.get(USERS.redacteur))!;
+    const account = fake.addAccount(lucas.email, { invited: true });
+    await repo.users.update({
+      ...lucas,
+      roles: ["admin"],
+      authUserId: account.id,
+      activatedAt: null,
+    });
+    return bearer(fake.tokenFor(account.id));
+  }
+
+  it("première connexion : l'activation n'écrase pas une rétrogradation concurrente", async () => {
+    const token = await confirmedNotActivated();
+    afterFirstList(async () => {
+      const current = (await repo.users.get(USERS.redacteur))!;
+      await repo.users.update({ ...current, roles: ["lecteur"] });
+    });
+    const me = await call<User>("GET", "/me", { headers: token });
+    expect(me.status).toBe(200);
+    expect(me.body.roles).toEqual(["lecteur"]);
+    const lucas = (await repo.users.get(USERS.redacteur))!;
+    expect(lucas.roles).toEqual(["lecteur"]);
+    expect(lucas.activatedAt).toBe(NOW.toISOString());
+  });
+
+  it("première connexion d'un utilisateur supprimé entre-temps : 403, il ne réapparaît pas", async () => {
+    const token = await confirmedNotActivated();
+    afterFirstList(async () => {
+      await repo.users.remove(USERS.redacteur);
+    });
+    const me = await call<ApiErrorBody>("GET", "/me", { headers: token });
+    expect(me.status).toBe(403);
+    expect(me.body.error.code).toBe("account_not_authorized");
+    expect(await repo.users.get(USERS.redacteur)).toBeUndefined();
   });
 });
 

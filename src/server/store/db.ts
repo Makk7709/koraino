@@ -229,6 +229,27 @@ export class DbRepository implements Repository {
     return (await insert()) ? token : null;
   }
 
+  /** Upsert sur la clé primaire (collection, id) : la ligne en place est écrasée. */
+  async replaceLock(key: string, ttlMs: number) {
+    const token = crypto.randomUUID();
+    const lock: LockRow = {
+      id: key,
+      token,
+      expiresAt: new Date(now().getTime() + ttlMs).toISOString(),
+    };
+    const { error } = await (await db()).from("kora_records").upsert(
+      {
+        collection: LOCKS,
+        id: key,
+        data: lock as never,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "collection,id" },
+    );
+    if (error) throw new Error(error.message);
+    return token;
+  }
+
   async releaseLock(key: string, token: string) {
     const client = await db();
     const { error } = await client

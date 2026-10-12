@@ -74,8 +74,15 @@ export async function resolveKoraUser(
   return bootstrapAdmin(repo, claims.sub, now);
 }
 
+/**
+ * Relu juste avant l'écriture : seul `activatedAt` change, une modification concurrente (rôles
+ * retirés…) est conservée ; un utilisateur supprimé ou rattaché ailleurs entre-temps est refusé.
+ */
 async function markActivated(repo: Repository, user: UserRecord, now: Date): Promise<UserRecord> {
-  const activated = { ...user, activatedAt: now.toISOString() };
+  const current = await repo.users.get(user.id);
+  if (!current || current.authUserId !== user.authUserId) throw accountNotAuthorized();
+  if (current.activatedAt) return current;
+  const activated = { ...current, activatedAt: now.toISOString() };
   try {
     await repo.users.update(activated);
   } catch (error) {

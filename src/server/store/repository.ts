@@ -64,6 +64,11 @@ export interface Repository {
    * toute la durée de l'opération protégée.
    */
   acquireLock(key: string, ttlMs: number): Promise<string | null>;
+  /**
+   * Pose le verrou en évinçant tout détenteur, expiré ou non : son jeton ne libère plus rien et
+   * la clé n'occupe jamais qu'une ligne. Renvoie un jeton imprévisible.
+   */
+  replaceLock(key: string, ttlMs: number): Promise<string>;
   /** Libère le verrou s'il est encore détenu avec ce jeton (sans effet sinon). */
   releaseLock(key: string, token: string): Promise<void>;
 }

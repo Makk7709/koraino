@@ -11,6 +11,7 @@ import {
   exchangeAppUserOAuthCode,
 } from "@/integrations/lovable/appUserConnector";
 import {
+  ConnectionKeyUnavailableError,
   deleteConnectionKeyForUser,
   getConnectionKeyForUser,
   saveConnectionKeyForUser,
@@ -35,6 +36,28 @@ function clientApiKey(): string {
     throw new Error("LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY is not set");
   }
   return key;
+}
+
+const UNREADABLE_REMOVED =
+  "Connexion LinkedIn illisible supprimée sans révocation : l'accès reste à retirer dans LinkedIn (services autorisés)";
+
+/**
+ * Clé de l'utilisateur avant déconnexion, reconnexion ou suppression du compte. Illisible
+ * (secret changé, ligne corrompue) : la révocation côté passerelle est impossible, mais la
+ * ligne doit rester supprimable, sinon ces trois opérations resteraient bloquées en 503. Si la
+ * base elle-même est en panne, la suppression qui suit échoue à son tour en 503. La
+ * publication garde le 503 : elle ne passe pas par ici.
+ */
+export async function readConnectionKey(
+  userId: string,
+): Promise<{ key: string | null; unreadable: boolean }> {
+  try {
+    return { key: await getConnectionKeyForUser(userId, LINKEDIN_CONNECTOR_ID), unreadable: false };
+  } catch (error) {
+    if (!(error instanceof ConnectionKeyUnavailableError)) throw error;
+    console.error(`[linkedin] connexion de ${userId} illisible : suppression sans révocation`);
+    return { key: null, unreadable: true };
+  }
 }
 
 /** Statut de la connexion LinkedIn de l'utilisateur courant. */
@@ -68,7 +91,11 @@ export const getLinkedInConnection: Handler = async (ctx) => {
 /** Démarre le consentement OAuth LinkedIn (popup) et renvoie l'URL d'autorisation. */
 export const startLinkedInConnect: Handler = async (ctx) => {
   const returnUrl = new URL("/api/oauth/linkedin/return", publicOrigin(ctx)).toString();
-  const existing = await getConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+  const { key: existing, unreadable } = await readConnectionKey(ctx.user.id);
+  if (unreadable) {
+    await deleteConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+    await audit(ctx, "linkedin.disconnect", "user", ctx.user.id, UNREADABLE_REMOVED);
+  }
   const { authorizationUrl } = await authorizeAppUserOAuth({
     gatewayBaseUrl: GATEWAY_BASE_URL,
     connectorId: LINKEDIN_CONNECTOR_ID,
@@ -106,9 +133,9 @@ export const completeLinkedInConnection: Handler = async (ctx) => {
   return json({ ok: true });
 };
 
-/** Révocation côté LinkedIn, puis suppression de la clé stockée. */
+/** Révocation côté LinkedIn (impossible si la clé est illisible), puis suppression de la clé stockée. */
 export const disconnectLinkedIn: Handler = async (ctx) => {
-  const key = await getConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+  const { key, unreadable } = await readConnectionKey(ctx.user.id);
   if (key) {
     await disconnectAppUser({
       gatewayBaseUrl: GATEWAY_BASE_URL,
@@ -117,6 +144,12 @@ export const disconnectLinkedIn: Handler = async (ctx) => {
     });
   }
   await deleteConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
-  await audit(ctx, "linkedin.disconnect", "user", ctx.user.id, "Compte LinkedIn déconnecté");
+  await audit(
+    ctx,
+    "linkedin.disconnect",
+    "user",
+    ctx.user.id,
+    unreadable ? UNREADABLE_REMOVED : "Compte LinkedIn déconnecté",
+  );
   return json({ ok: true });
 };
