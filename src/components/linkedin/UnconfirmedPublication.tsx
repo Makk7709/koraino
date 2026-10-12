@@ -1,6 +1,7 @@
 import { CheckCircle2, RotateCcw } from "lucide-react";
 import { Banner } from "@/components/articles/ui";
 import { GhostButton, PrimaryButton } from "@/components/kora/primitives";
+import { formatDateTime } from "@/components/kora/labels";
 import { ConfirmDialog } from "@/components/veille/kit";
 import type { LinkedInPublishInput, PublicationAttempt } from "@/lib/api/types";
 
@@ -28,14 +29,18 @@ export function UnconfirmedPublication({
   const title = disabledReason ?? undefined;
   return (
     <Banner tone="warning" title="Publication LinkedIn à vérifier">
-      <p>
+      <p className="font-medium">
+        Publication lancée par {attempt.by} le {formatDateTime(attempt.at)}.
+      </p>
+      <p className="mt-1">
         {attempt.code === CONFIRMATION_PENDING
           ? "KORA n'a pas reçu la confirmation de LinkedIn pour cette publication. Si elle vient d'être lancée, patientez quelques secondes puis actualisez."
           : attempt.message}
       </p>
       <p className="mt-1">
-        Ouvrez le fil LinkedIn du compte relié, puis indiquez à KORA si le post y figure. Aucune
-        nouvelle publication de la version {attempt.version} n&apos;est possible en attendant.
+        Ouvrez le fil LinkedIn du compte de {attempt.by}, puis indiquez à KORA si le post y figure.
+        Aucune nouvelle publication de la version {attempt.version} n&apos;est possible en
+        attendant. « Republier » publiera depuis le compte LinkedIn relié de la personne qui clique.
       </p>
       <div className="mt-2.5 flex flex-wrap gap-2">
         <PrimaryButton disabled={disabled} title={title} onClick={() => onResolve("published")}>
@@ -48,7 +53,7 @@ export function UnconfirmedPublication({
             </GhostButton>
           }
           title="Republier ce post sur LinkedIn ?"
-          description="Confirmez seulement après avoir vérifié le fil LinkedIn : si le post y figure déjà, il sera publié une seconde fois, publiquement."
+          description={`Confirmez seulement après avoir vérifié le fil LinkedIn : si le post y figure déjà, il sera publié une seconde fois, publiquement. La nouvelle publication partira de votre compte LinkedIn relié, pas forcément de celui de ${attempt.by} (sans compte relié : export manuel).`}
           confirmLabel="Republier"
           onConfirm={() => onResolve("not_published")}
         />

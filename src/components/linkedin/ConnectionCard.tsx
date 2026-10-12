@@ -60,14 +60,18 @@ export function ConnectionCard() {
   const [busy, setBusy] = useState(false);
 
   async function onConnect() {
-    const popup = window.open("", "lovable-oauth", "width=600,height=720");
+    // Sans nom (une fenêtre nommée peut être ciblée par une autre page) mais sans `noopener` :
+    // la page de retour a besoin de `window.opener` pour rendre le code.
+    const popup = window.open("", "_blank", "width=600,height=720");
     if (!popup) return;
     setBusy(true);
     let code: string | null;
+    let state: string;
     try {
-      const { authorizationUrl } = await startConnect.mutateAsync(undefined);
+      const started = await startConnect.mutateAsync(undefined);
+      state = started.state;
       const completion = waitForOAuthCompletion(popup);
-      popup.location.href = authorizationUrl;
+      popup.location.href = started.authorizationUrl;
       code = await completion;
     } catch (error) {
       popup.close();
@@ -76,7 +80,7 @@ export function ConnectionCard() {
       return;
     }
     try {
-      if (code) await complete.mutateAsync(code);
+      if (code) await complete.mutateAsync({ code, state });
       await qc.invalidateQueries({ queryKey: ["kora", "linkedinConnection"] });
     } catch (error) {
       toastError(error);
@@ -108,6 +112,8 @@ export function ConnectionCard() {
             Votre accès LinkedIn doit être renouvelé. Reconnectez votre compte pour publier à
             nouveau.
           </>
+        ) : connection.isError ? (
+          <>{errorMessage(connection.error)}</>
         ) : (
           <>
             Aucun compte LinkedIn relié : la publication reste un export manuel. Connectez votre
