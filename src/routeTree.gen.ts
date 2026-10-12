@@ -10,13 +10,23 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ArticlesRouteImport } from './routes/articles'
 import { Route as EntreprisesRouteImport } from './routes/entreprises'
-import { Route as PublicationsRouteImport } from './routes/publications'
-import { Route as StudioRouteImport } from './routes/studio'
+import { Route as LinkedinRouteImport } from './routes/linkedin'
+import { Route as NewsletterRouteImport } from './routes/newsletter'
+import { Route as ParametresRouteImport } from './routes/parametres'
+import { Route as SignauxRouteImport } from './routes/signaux'
+import { Route as VeilleRouteImport } from './routes/veille'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArticlesRoute = ArticlesRouteImport.update({
+  id: '/articles',
+  path: '/articles',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EntreprisesRoute = EntreprisesRouteImport.update({
@@ -24,49 +34,117 @@ const EntreprisesRoute = EntreprisesRouteImport.update({
   path: '/entreprises',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PublicationsRoute = PublicationsRouteImport.update({
-  id: '/publications',
-  path: '/publications',
+const LinkedinRoute = LinkedinRouteImport.update({
+  id: '/linkedin',
+  path: '/linkedin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const StudioRoute = StudioRouteImport.update({
-  id: '/studio',
-  path: '/studio',
+const NewsletterRoute = NewsletterRouteImport.update({
+  id: '/newsletter',
+  path: '/newsletter',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ParametresRoute = ParametresRouteImport.update({
+  id: '/parametres',
+  path: '/parametres',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignauxRoute = SignauxRouteImport.update({
+  id: '/signaux',
+  path: '/signaux',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VeilleRoute = VeilleRouteImport.update({
+  id: '/veille',
+  path: '/veille',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/articles': typeof ArticlesRoute
   '/entreprises': typeof EntreprisesRoute
-  '/publications': typeof PublicationsRoute
-  '/studio': typeof StudioRoute
+  '/linkedin': typeof LinkedinRoute
+  '/newsletter': typeof NewsletterRoute
+  '/parametres': typeof ParametresRoute
+  '/signaux': typeof SignauxRoute
+  '/veille': typeof VeilleRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/articles': typeof ArticlesRoute
   '/entreprises': typeof EntreprisesRoute
-  '/publications': typeof PublicationsRoute
-  '/studio': typeof StudioRoute
+  '/linkedin': typeof LinkedinRoute
+  '/newsletter': typeof NewsletterRoute
+  '/parametres': typeof ParametresRoute
+  '/signaux': typeof SignauxRoute
+  '/veille': typeof VeilleRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/articles': typeof ArticlesRoute
   '/entreprises': typeof EntreprisesRoute
-  '/publications': typeof PublicationsRoute
-  '/studio': typeof StudioRoute
+  '/linkedin': typeof LinkedinRoute
+  '/newsletter': typeof NewsletterRoute
+  '/parametres': typeof ParametresRoute
+  '/signaux': typeof SignauxRoute
+  '/veille': typeof VeilleRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/entreprises' | '/publications' | '/studio'
+  fullPaths:
+    | '/'
+    | '/articles'
+    | '/entreprises'
+    | '/linkedin'
+    | '/newsletter'
+    | '/parametres'
+    | '/signaux'
+    | '/veille'
+    | '/api/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/entreprises' | '/publications' | '/studio'
-  id: '__root__' | '/' | '/entreprises' | '/publications' | '/studio'
+  to:
+    | '/'
+    | '/articles'
+    | '/entreprises'
+    | '/linkedin'
+    | '/newsletter'
+    | '/parametres'
+    | '/signaux'
+    | '/veille'
+    | '/api/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/articles'
+    | '/entreprises'
+    | '/linkedin'
+    | '/newsletter'
+    | '/parametres'
+    | '/signaux'
+    | '/veille'
+    | '/api/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ArticlesRoute: typeof ArticlesRoute
   EntreprisesRoute: typeof EntreprisesRoute
-  PublicationsRoute: typeof PublicationsRoute
-  StudioRoute: typeof StudioRoute
+  LinkedinRoute: typeof LinkedinRoute
+  NewsletterRoute: typeof NewsletterRoute
+  ParametresRoute: typeof ParametresRoute
+  SignauxRoute: typeof SignauxRoute
+  VeilleRoute: typeof VeilleRoute
+  ApiSplatRoute: typeof ApiSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -78,6 +156,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/articles': {
+      id: '/articles'
+      path: '/articles'
+      fullPath: '/articles'
+      preLoaderRoute: typeof ArticlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/entreprises': {
       id: '/entreprises'
       path: '/entreprises'
@@ -85,18 +170,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EntreprisesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/publications': {
-      id: '/publications'
-      path: '/publications'
-      fullPath: '/publications'
-      preLoaderRoute: typeof PublicationsRouteImport
+    '/linkedin': {
+      id: '/linkedin'
+      path: '/linkedin'
+      fullPath: '/linkedin'
+      preLoaderRoute: typeof LinkedinRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/studio': {
-      id: '/studio'
-      path: '/studio'
-      fullPath: '/studio'
-      preLoaderRoute: typeof StudioRouteImport
+    '/newsletter': {
+      id: '/newsletter'
+      path: '/newsletter'
+      fullPath: '/newsletter'
+      preLoaderRoute: typeof NewsletterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/parametres': {
+      id: '/parametres'
+      path: '/parametres'
+      fullPath: '/parametres'
+      preLoaderRoute: typeof ParametresRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signaux': {
+      id: '/signaux'
+      path: '/signaux'
+      fullPath: '/signaux'
+      preLoaderRoute: typeof SignauxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/veille': {
+      id: '/veille'
+      path: '/veille'
+      fullPath: '/veille'
+      preLoaderRoute: typeof VeilleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -104,9 +217,14 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ArticlesRoute: ArticlesRoute,
   EntreprisesRoute: EntreprisesRoute,
-  PublicationsRoute: PublicationsRoute,
-  StudioRoute: StudioRoute,
+  LinkedinRoute: LinkedinRoute,
+  NewsletterRoute: NewsletterRoute,
+  ParametresRoute: ParametresRoute,
+  SignauxRoute: SignauxRoute,
+  VeilleRoute: VeilleRoute,
+  ApiSplatRoute: ApiSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
