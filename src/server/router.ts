@@ -1,6 +1,7 @@
+import { authenticate } from "./auth/session";
 import { now } from "./clock";
-import type { Ctx, Handler } from "./context";
-import { errorResponse, forbidden, HttpError, json, parseCookies, SESSION_COOKIE } from "./http";
+import type { Handler, PublicCtx, PublicHandler } from "./context";
+import { errorResponse, forbidden, HttpError, json } from "./http";
 import * as articles from "./handlers/articles";
 import * as connectors from "./handlers/connectors";
 import * as dist from "./handlers/distribution";
@@ -9,28 +10,41 @@ import * as ops from "./handlers/ops";
 import * as registry from "./handlers/registry";
 import * as session from "./handlers/session";
 import * as signals from "./handlers/signals";
+import * as users from "./handlers/users";
 import { getRepository } from "./store/memory";
-import { DEFAULT_USER_ID } from "./store/seed";
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
-interface RouteDef {
+interface RouteBase {
   method: Method;
   pattern: string;
-  handler: Handler;
-  /** Corps multipart/form-data (imports) au lieu de JSON. */
-  multipart?: boolean;
 }
 
-interface CompiledRoute extends RouteDef {
-  segments: string[];
-}
+/** Par défaut, une route exige un utilisateur résolu ; `public` la rend accessible sans session. */
+type RouteDef =
+  | (RouteBase & {
+      handler: Handler;
+      public?: undefined;
+      /** Corps multipart/form-data (imports) au lieu de JSON. */
+      multipart?: boolean;
+    })
+  | (RouteBase & { handler: PublicHandler; public: true; multipart?: undefined });
+
+type CompiledRoute = RouteDef & { segments: string[] };
 
 /** Table des routes : METHOD + motif avec paramètres `:id`. L'ordre départage les motifs ambigus. */
 const ROUTES: RouteDef[] = [
+  { method: "GET", pattern: "/auth/config", handler: session.getAuthConfig, public: true },
+  { method: "POST", pattern: "/auth/session", handler: session.openSession, public: true },
+  { method: "POST", pattern: "/auth/logout", handler: session.closeSession, public: true },
+
   { method: "GET", pattern: "/me", handler: session.getMe },
   { method: "POST", pattern: "/me", handler: session.switchUser },
   { method: "GET", pattern: "/users", handler: session.listUsers },
+  { method: "POST", pattern: "/users", handler: users.createUser },
+  { method: "PATCH", pattern: "/users/:id", handler: users.updateUser },
+  { method: "DELETE", pattern: "/users/:id", handler: users.deleteUser },
+  { method: "POST", pattern: "/users/:id/invite", handler: users.resendInvitation },
   { method: "GET", pattern: "/notifications", handler: session.listNotifications },
   { method: "POST", pattern: "/notifications/read", handler: session.markNotificationsRead },
 
@@ -206,7 +220,8 @@ async function readForm(request: Request): Promise<FormData> {
 
 /**
  * Point d'entrée de l'API métier (/api/*). Contrôles transverses : en-tête anti-CSRF sur
- * toute écriture, session par cookie, validation, erreurs au format `ApiErrorBody`.
+ * toute écriture, authentification (hors routes publiques) avant lecture du corps,
+ * validation, erreurs au format `ApiErrorBody`.
  */
 export async function handleApiRequest(request: Request): Promise<Response> {
   try {
@@ -237,26 +252,33 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     }
 
     const repo = await getRepository();
-    const cookies = parseCookies(request.headers.get("cookie"));
-    const user =
-      (cookies[SESSION_COOKIE] ? await repo.users.get(cookies[SESSION_COOKIE]) : undefined) ??
-      (await repo.users.get(DEFAULT_USER_ID));
-    if (!user) throw new Error("Utilisateur par défaut absent du store");
-
     const { route, params } = found;
+    const at = now();
     const hasBody = method === "POST" || method === "PATCH" || method === "DELETE";
-    const ctx: Ctx = {
+    const base: Omit<PublicCtx, "body" | "form"> = {
       request,
       url,
       params,
       query: url.searchParams,
       repo,
+      now: at,
+    };
+
+    if (route.public) {
+      return await route.handler({
+        ...base,
+        body: hasBody ? await readJson(request) : undefined,
+        form: null,
+      });
+    }
+
+    const { user } = await authenticate(request, repo, at);
+    return await route.handler({
+      ...base,
       user,
-      now: now(),
       body: hasBody && !route.multipart ? await readJson(request) : undefined,
       form: route.multipart ? await readForm(request) : null,
-    };
-    return await route.handler(ctx);
+    });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     console.error("[api] erreur interne", error);

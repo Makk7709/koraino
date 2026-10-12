@@ -16,6 +16,8 @@ export interface User {
   team: string;
   roles: Role[];
   avatarUrl: string | null;
+  /** Compte de connexion activé (mode supabase) ; sinon invitation en attente. */
+  hasAccount?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -354,7 +356,6 @@ export interface LinkedInConnection {
   error?: string | null;
 }
 
-
 export type NewsletterStatus = "composition" | "approuvee" | "exportee";
 
 export interface NewsletterItem {
@@ -590,6 +591,29 @@ export interface Paginated<T> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Authentification & utilisateurs                                     */
+/* ------------------------------------------------------------------ */
+
+/** `supabase` : comptes Supabase Auth sur invitation ; `demo` : changement de profil libre. */
+export type AuthMode = "supabase" | "demo";
+
+export interface AuthConfig {
+  mode: AuthMode;
+}
+
+export type InvitationStatus = "sent" | "existing_account" | "not_applicable" | "failed";
+
+export interface InvitationResult {
+  invitation: InvitationStatus;
+  /** Explication lorsque l'invitation a échoué. */
+  message?: string;
+}
+
+export interface CreatedUser extends InvitationResult {
+  user: User;
+}
+
+/* ------------------------------------------------------------------ */
 /* Corps de requêtes                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -655,4 +679,17 @@ export interface PublishInput {
 export interface ScoringGridInput {
   weights: Record<Criterion, number>;
   note?: string | null;
+}
+
+export interface UserInput {
+  name: string;
+  email: string;
+  team?: string;
+  roles: Role[];
+}
+
+export interface UserPatch {
+  name?: string;
+  team?: string;
+  roles?: Role[];
 }

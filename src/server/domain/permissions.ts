@@ -15,7 +15,8 @@ export type Action =
   | "newsletter.write"
   | "newsletter.decide"
   | "grid.write"
-  | "rule.write";
+  | "rule.write"
+  | "users.manage";
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: "Administrateur",
@@ -84,6 +85,10 @@ const MATRIX: Record<Action, { roles: Role[]; message: string }> = {
   "rule.write": {
     roles: ADMINS,
     message: "La modification du référentiel éditorial est réservée aux administrateurs.",
+  },
+  "users.manage": {
+    roles: ADMINS,
+    message: "La gestion des utilisateurs et de leurs rôles est réservée aux administrateurs.",
   },
 };
 

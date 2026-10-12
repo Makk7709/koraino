@@ -42,12 +42,29 @@ export const SOURCE_TYPES = [
   "newsletter_import",
 ] as const;
 export const RULE_KINDS = ["ton", "longueur", "structure", "vocabulaire", "interdit"] as const;
+export const ROLES = ["admin", "redacteur", "validateur", "lecteur"] as const;
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const isoDate = z.string().refine((s) => !Number.isNaN(Date.parse(s)), "Date ISO 8601 attendue");
+const roles = z
+  .array(z.enum(ROLES))
+  .min(1, "Au moins un rôle est requis")
+  .max(ROLES.length)
+  .transform((list) => [...new Set(list)]);
 
 export const schemas = {
   switchUser: z.object({ userId: text(64) }),
+  createUser: z.object({
+    name: text(120),
+    email: z.string().trim().toLowerCase().email("Adresse e-mail invalide").max(254),
+    team: z.string().trim().max(120).optional(),
+    roles,
+  }),
+  updateUser: z.object({
+    name: text(120).optional(),
+    team: z.string().trim().max(120).optional(),
+    roles: roles.optional(),
+  }),
   company: z.object({
     name: z.string().trim().min(2).max(120),
     aliases: z.array(text(120)).max(20).optional(),
