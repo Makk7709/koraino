@@ -261,7 +261,7 @@ export class RealCollector implements Collector {
           );
         }
       }
-      const cutoff = input.now.getTime() - 120 * 86_400_000;
+      const cutoff = input.now.getTime() - 180 * 86_400_000;
       items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
       items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
       return { ok: true, items };
