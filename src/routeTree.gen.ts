@@ -18,6 +18,7 @@ import { Route as ParametresRouteImport } from './routes/parametres'
 import { Route as SignauxRouteImport } from './routes/signaux'
 import { Route as VeilleRouteImport } from './routes/veille'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as ApiOauthLinkedinReturnRouteImport } from './routes/api/oauth/linkedin/return'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -64,6 +65,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiOauthLinkedinReturnRoute = ApiOauthLinkedinReturnRouteImport.update({
+  id: '/api/oauth/linkedin/return',
+  path: '/api/oauth/linkedin/return',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByTo {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -98,6 +106,7 @@ export interface FileRoutesById {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -111,6 +120,7 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/api/oauth/linkedin/return'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -122,6 +132,7 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/api/oauth/linkedin/return'
   id:
     | '__root__'
     | '/'
@@ -133,6 +144,7 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/api/oauth/linkedin/return'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -145,6 +157,7 @@ export interface RootRouteChildren {
   SignauxRoute: typeof SignauxRoute
   VeilleRoute: typeof VeilleRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiOauthLinkedinReturnRoute: typeof ApiOauthLinkedinReturnRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -212,6 +225,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/oauth/linkedin/return': {
+      id: '/api/oauth/linkedin/return'
+      path: '/api/oauth/linkedin/return'
+      fullPath: '/api/oauth/linkedin/return'
+      preLoaderRoute: typeof ApiOauthLinkedinReturnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -225,6 +245,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignauxRoute: SignauxRoute,
   VeilleRoute: VeilleRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ApiOauthLinkedinReturnRoute: ApiOauthLinkedinReturnRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

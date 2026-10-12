@@ -1,10 +1,10 @@
-import { Info } from "lucide-react";
 import { useState } from "react";
 import { EmptyState, PageTitle, PrimaryButton, UnderlineTabs } from "@/components/kora/primitives";
 import { useLinkedInPosts } from "@/lib/api/hooks";
 import { LinkedInMark } from "@/components/articles/channel";
 import { useCompanyMap, usePermissions } from "@/components/articles/hooks";
-import { Banner, DetailSkeleton } from "@/components/articles/ui";
+import { DetailSkeleton } from "@/components/articles/ui";
+import { ConnectionCard } from "./ConnectionCard";
 import { NewPostDialog } from "./NewPostDialog";
 import { PostDetail } from "./PostDetail";
 import { PostList } from "./PostList";
@@ -47,10 +47,7 @@ export function LinkedInPage({
         }
       />
 
-      <Banner tone="info" icon={Info} className="mb-4">
-        Publication via l&apos;API LinkedIn conditionnelle aux accès ; export manuel au pilote. La
-        collecte LinkedIn de pages tierces n&apos;est pas prévue.
-      </Banner>
+      <ConnectionCard />
 
       <UnderlineTabs<LinkedInTab>
         value={tab}

@@ -22,6 +22,7 @@ export const qk = {
   imports: ["kora", "imports"] as const,
   publications: (q?: object) => ["kora", "publications", q ?? {}] as const,
   linkedin: ["kora", "linkedin"] as const,
+  linkedinConnection: ["kora", "linkedinConnection"] as const,
   newsletters: ["kora", "newsletters"] as const,
   newsletter: (id: string) => ["kora", "newsletter", id] as const,
   dna: ["kora", "dna"] as const,
@@ -86,6 +87,16 @@ export const usePublications = (q?: { channel?: string; articleId?: string }) =>
   useQuery({ queryKey: qk.publications(q), queryFn: () => api.publications(q) });
 export const useLinkedInPosts = () =>
   useQuery({ queryKey: qk.linkedin, queryFn: api.linkedinPosts });
+export const useLinkedInConnection = () =>
+  useQuery({ queryKey: qk.linkedinConnection, queryFn: api.linkedinConnection });
+export const useLinkedInLink = () =>
+  useMutation({ mutationFn: () => api.startLinkedInConnect() });
+export const useLinkedInComplete = () =>
+  useMutation({ mutationFn: (code: string) => api.completeLinkedInConnection(code) });
+export const useLinkedInUnlink = () =>
+  useKoraMutation(() => api.disconnectLinkedIn(), {
+    success: "Compte LinkedIn déconnecté.",
+  });
 export const useNewsletters = () =>
   useQuery({ queryKey: qk.newsletters, queryFn: api.newsletters });
 export const useEditorialDna = () => useQuery({ queryKey: qk.dna, queryFn: api.editorialDna });
