@@ -65,7 +65,7 @@ export function ConnectionCard() {
     setBusy(true);
     let code: string | null;
     try {
-      const { authorizationUrl } = await startConnect.mutateAsync();
+      const { authorizationUrl } = await startConnect.mutateAsync(undefined);
       const completion = waitForOAuthCompletion(popup);
       popup.location.href = authorizationUrl;
       code = await completion;
