@@ -16,6 +16,7 @@ import type {
   ImportProposal,
   LinkedInConnection,
   LinkedInPost,
+  LinkedInPublishInput,
   NewsletterEdition,
   NewsletterItem,
   Notification,
@@ -213,8 +214,8 @@ export const api = {
     apiFetch<LinkedInPost>(`/linkedin/${id}/submit`, json("POST")),
   approveLinkedInPost: (id: string, version: number) =>
     apiFetch<LinkedInPost>(`/linkedin/${id}/approve`, json("POST", { version })),
-  publishLinkedInPost: (id: string) =>
-    apiFetch<PublicationAttempt>(`/linkedin/${id}/publish`, json("POST")),
+  publishLinkedInPost: (id: string, input?: LinkedInPublishInput) =>
+    apiFetch<PublicationAttempt>(`/linkedin/${id}/publish`, json("POST", input)),
 
   /* Connecteur LinkedIn par utilisateur : chacun relie son propre compte. */
   linkedinConnection: () => apiFetch<LinkedInConnection>("/me/linkedin"),

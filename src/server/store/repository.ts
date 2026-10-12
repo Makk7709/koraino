@@ -57,4 +57,13 @@ export interface Repository {
   saveSettings(settings: Settings): Promise<void>;
   /** Identifiant unique préfixé (ex. `sig_n1042`). */
   nextId(prefix: string): string;
+  /**
+   * Verrou exclusif à expiration (la base n'offre pas de transaction côté application).
+   * Renvoie un jeton de détention, ou `null` si un autre détenteur non expiré le possède.
+   * L'expiration libère le verrou d'un détenteur interrompu : `ttlMs` doit couvrir
+   * toute la durée de l'opération protégée.
+   */
+  acquireLock(key: string, ttlMs: number): Promise<string | null>;
+  /** Libère le verrou s'il est encore détenu avec ce jeton (sans effet sinon). */
+  releaseLock(key: string, token: string): Promise<void>;
 }
