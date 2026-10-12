@@ -2,6 +2,7 @@ import { now } from "./clock";
 import type { Ctx, Handler } from "./context";
 import { errorResponse, forbidden, HttpError, json, parseCookies, SESSION_COOKIE } from "./http";
 import * as articles from "./handlers/articles";
+import * as connectors from "./handlers/connectors";
 import * as dist from "./handlers/distribution";
 import * as imports from "./handlers/imports";
 import * as ops from "./handlers/ops";
@@ -32,6 +33,24 @@ const ROUTES: RouteDef[] = [
   { method: "GET", pattern: "/users", handler: session.listUsers },
   { method: "GET", pattern: "/notifications", handler: session.listNotifications },
   { method: "POST", pattern: "/notifications/read", handler: session.markNotificationsRead },
+
+  /* Connecteurs par utilisateur : chaque utilisateur relie son compte LinkedIn. */
+  { method: "GET", pattern: "/me/linkedin", handler: connectors.getLinkedInConnection },
+  {
+    method: "POST",
+    pattern: "/me/linkedin/connect",
+    handler: connectors.startLinkedInConnect,
+  },
+  {
+    method: "POST",
+    pattern: "/me/linkedin/complete",
+    handler: connectors.completeLinkedInConnection,
+  },
+  {
+    method: "POST",
+    pattern: "/me/linkedin/disconnect",
+    handler: connectors.disconnectLinkedIn,
+  },
 
   { method: "GET", pattern: "/dashboard", handler: ops.getDashboard },
   { method: "GET", pattern: "/search", handler: ops.search },
