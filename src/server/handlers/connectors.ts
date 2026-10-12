@@ -82,7 +82,7 @@ export const startLinkedInConnect: Handler = async (ctx) => {
     appUserId: ctx.user.id,
     clientAPIKey: clientApiKey(),
     returnUrl,
-    connectionAPIKey: existing ?? undefined,
+    connectionAPIKey: existing ? { connectionAPIKey: existing } : {},
     credentialsConfiguration: { scopes: LINKEDIN_SCOPES },
   });
   return json({ authorizationUrl });

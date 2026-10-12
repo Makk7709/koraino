@@ -116,7 +116,7 @@ export function ConnectionCard() {
         )}
       </span>
       {busy ? null : data?.connected ? (
-        <GhostButton onClick={() => void disconnect.mutateAsync()}>
+        <GhostButton onClick={() => void disconnect.mutateAsync(undefined)}>
           <LogOut className="size-4" /> Déconnecter
         </GhostButton>
       ) : (
