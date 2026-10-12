@@ -358,7 +358,7 @@ export const splitSignal: Handler = async (ctx) => {
     ...original,
     id: createdId,
     title: first.title,
-    summary: adapters().textModel.summarize({ title: first.title, text: first.excerpt }),
+    summary: await enhanceSummary({ title: first.title, text: first.excerpt }),
     status: "nouveau",
     statusReason: null,
     observationIds: moving,

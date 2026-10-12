@@ -158,7 +158,7 @@ async function ingest(
     id: signalId,
     companyId,
     title,
-    summary: adapters().textModel.summarize({ title, text: excerpt }),
+    summary: await enhanceSummary({ title, text: excerpt }),
     category,
     themes,
     tags: [CATEGORY_LABEL[category], ...themes.map((t) => THEME_TAGS[t])].slice(0, 4),
