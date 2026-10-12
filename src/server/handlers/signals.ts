@@ -1,5 +1,5 @@
 import type { ScoringGrid, Signal, SignalStatus } from "@/lib/api/types";
-import { adapters } from "../adapters";
+import { adapters, enhanceSummary } from "../adapters";
 import type { Ctx, Handler } from "../context";
 import { assertCan } from "../domain/permissions";
 import { applyGrid, isDecided, validateWeights } from "../domain/scoring";
@@ -358,7 +358,7 @@ export const splitSignal: Handler = async (ctx) => {
     ...original,
     id: createdId,
     title: first.title,
-    summary: adapters().textModel.summarize({ title: first.title, text: first.excerpt }),
+    summary: await enhanceSummary({ title: first.title, text: first.excerpt }),
     status: "nouveau",
     statusReason: null,
     observationIds: moving,

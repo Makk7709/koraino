@@ -101,14 +101,17 @@ export const createArticle: Handler = async (ctx) => {
       units: 1,
       label: `Dossier et brouillon : ${signal.title}`,
     },
-    () =>
-      adapters().textModel.generateDossier({
+    async () => {
+      const dossierInput = {
         signal,
         company: company ?? null,
         observations: observations.filter((o) => ids.has(o.id)),
         angle: input.angle ?? null,
         rules: rules.filter((r) => r.active),
-      }),
+      };
+      const base = adapters().textModel.generateDossier(dossierInput);
+      return (await adapters().ai?.enhanceDossier(dossierInput, base)) ?? base;
+    },
   );
   const id = ctx.repo.nextId("art");
   const at = ctx.now.toISOString();
