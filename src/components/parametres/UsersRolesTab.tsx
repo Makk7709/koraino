@@ -28,7 +28,6 @@ import { useDeleteUser, useMe, useResendInvitation, useUsers } from "@/lib/api/h
 import type { Role, User } from "@/lib/api/types";
 import { accountError, invitationFeedback } from "@/lib/auth/accounts";
 import { useAuth } from "@/lib/auth/session";
-import type { AccountUser } from "@/lib/auth/types";
 import { cn } from "@/lib/utils";
 import { ROLE_TONE } from "./labels";
 
@@ -102,7 +101,7 @@ function RolePills({ roles }: { roles: Role[] }) {
   );
 }
 
-function AccountStatus({ user }: { user: AccountUser }) {
+function AccountStatus({ user }: { user: User }) {
   if (user.hasAccount === undefined) return null;
   return (
     <Pill tone={user.hasAccount ? "green" : "amber"} size="sm" className="mt-1">
@@ -117,7 +116,7 @@ function AccountsCard() {
   const { mode } = useAuth();
   const remove = useDeleteUser();
   const invite = useResendInvitation();
-  const [dialog, setDialog] = useState<{ open: boolean; user: AccountUser | null }>({
+  const [dialog, setDialog] = useState<{ open: boolean; user: User | null }>({
     open: false,
     user: null,
   });
@@ -125,7 +124,7 @@ function AccountsCard() {
   const isAdmin = me.data?.roles.includes("admin") ?? false;
   const adminCount = (users.data ?? []).filter((u) => u.roles.includes("admin")).length;
 
-  const deleteUser = (u: AccountUser) =>
+  const deleteUser = (u: User) =>
     remove.mutate(u.id, {
       onSuccess: () => toast.success(`${u.name} n'a plus accès à KORA.`),
       onError: (e) => {
@@ -134,7 +133,7 @@ function AccountsCard() {
       },
     });
 
-  const resendInvitation = (u: AccountUser) =>
+  const resendInvitation = (u: User) =>
     invite.mutate(u.id, {
       onSuccess: (res) => {
         const feedback = invitationFeedback(res.invitation, u.email, res.message);

@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "./client";
-import type { SignalListQuery } from "./types";
-import type { CreateUserInput, UpdateUserInput } from "@/lib/auth/types";
+import type { SignalListQuery, UserInput, UserPatch } from "./types";
 
 /** Clés React Query. Toute mutation invalide la racine `["kora"]` concernée. */
 export const qk = {
@@ -82,9 +81,9 @@ function useAccountMutation<TVars, TData>(fn: (vars: TVars) => Promise<TData>) {
 }
 
 export const useCreateUser = () =>
-  useAccountMutation((input: CreateUserInput) => api.createUser(input));
+  useAccountMutation((input: UserInput) => api.createUser(input));
 export const useUpdateUser = () =>
-  useAccountMutation(({ id, input }: { id: string; input: UpdateUserInput }) =>
+  useAccountMutation(({ id, input }: { id: string; input: UserPatch }) =>
     api.updateUser(id, input),
   );
 export const useDeleteUser = () => useAccountMutation((id: string) => api.deleteUser(id));

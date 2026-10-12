@@ -1,5 +1,5 @@
 import { ApiError } from "@/lib/api/client";
-import type { InvitationStatus } from "./types";
+import type { InvitationStatus } from "@/lib/api/types";
 
 const ACCOUNT_ERRORS: Record<string, { title: string; fallback: string }> = {
   email_taken: {

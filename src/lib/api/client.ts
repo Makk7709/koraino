@@ -35,15 +35,12 @@ import type {
   SourceInput,
   UsageSnapshot,
   User,
+  CreatedUser,
+  InvitationResult,
+  UserInput,
+  UserPatch,
 } from "./types";
 import { getAccessToken, handleUnauthenticated } from "@/lib/auth/token";
-import type {
-  AccountUser,
-  CreateUserInput,
-  CreateUserResponse,
-  InvitationResponse,
-  UpdateUserInput,
-} from "@/lib/auth/types";
 
 export class ApiError extends Error {
   constructor(
@@ -128,19 +125,17 @@ export const api = {
   /* Session & utilisateurs */
   me: () => apiFetch<User>("/me"),
   switchUser: (userId: string) => apiFetch<User>("/me", json("POST", { userId })),
-  users: () => apiFetch<AccountUser[]>("/users"),
-  createUser: (input: CreateUserInput) =>
-    apiFetch<CreateUserResponse>("/users", json("POST", input)),
-  updateUser: (id: string, input: UpdateUserInput) =>
-    apiFetch<AccountUser>(`/users/${id}`, json("PATCH", input)),
+  users: () => apiFetch<User[]>("/users"),
+  createUser: (input: UserInput) => apiFetch<CreatedUser>("/users", json("POST", input)),
+  updateUser: (id: string, input: UserPatch) =>
+    apiFetch<User>(`/users/${id}`, json("PATCH", input)),
   deleteUser: (id: string) => apiFetch<void>(`/users/${id}`, json("DELETE")),
-  resendInvitation: (id: string) =>
-    apiFetch<InvitationResponse>(`/users/${id}/invite`, json("POST")),
+  resendInvitation: (id: string) => apiFetch<InvitationResult>(`/users/${id}/invite`, json("POST")),
 
   /* Authentification (mode supabase) */
   /** Vérifie le jeton côté serveur et pose le cookie `kora_session` (liens de téléchargement). */
   openServerSession: (accessToken: string) =>
-    apiFetch<AccountUser>("/auth/session", {
+    apiFetch<User>("/auth/session", {
       method: "POST",
       headers: { authorization: `Bearer ${accessToken}` },
     }),

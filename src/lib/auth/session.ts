@@ -7,7 +7,8 @@ import { passwordErrorMessage, resetRequestErrorMessage, signInErrorMessage } fr
 import { getAuthMode } from "./mode";
 import { AUTH_NOTICES, takeAuthNotice } from "./notice";
 import { LOGIN_PATH, NEW_PASSWORD_PATH } from "./redirect";
-import type { AccountUser, AuthMode, AuthNotice } from "./types";
+import type { AuthMode, User } from "@/lib/api/types";
+import type { AuthNotice } from "./types";
 
 export interface AuthState {
   status: "loading" | "ready";
@@ -16,13 +17,13 @@ export interface AuthState {
   /** Vérification serveur (`POST /api/auth/session`) de la session courante. */
   verification: "idle" | "pending" | "ok" | "error";
   /** Utilisateur KORA renvoyé par le serveur pour la session courante. */
-  user: AccountUser | null;
+  user: User | null;
   /** Raison de la dernière déconnexion forcée (401 / 403). */
   notice: AuthNotice | null;
 }
 
 export type SessionCheck =
-  | { ok: true; user: AccountUser }
+  | { ok: true; user: User }
   | {
       ok: false;
       reason: "unauthenticated" | "account_not_authorized" | "unavailable";

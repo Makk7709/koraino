@@ -1,4 +1,4 @@
-import type { AuthConfigResponse, AuthMode } from "./types";
+import type { AuthConfig, AuthMode } from "@/lib/api/types";
 
 interface CachedMode {
   mode: AuthMode;
@@ -20,7 +20,7 @@ async function fetchMode(): Promise<CachedMode> {
       headers: { accept: "application/json" },
     });
     if (!res.ok) return { mode: "demo", confirmed: false };
-    const body = (await res.json()) as Partial<AuthConfigResponse> | null;
+    const body = (await res.json()) as Partial<AuthConfig> | null;
     return isAuthMode(body?.mode)
       ? { mode: body.mode, confirmed: true }
       : { mode: "demo", confirmed: false };

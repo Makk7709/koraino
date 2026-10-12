@@ -9,9 +9,8 @@ import { ROLE_TONE } from "@/components/parametres/labels";
 import { Field, InlineError, KoraDialog, Notice, fieldClass } from "@/components/veille/kit";
 import { ApiError } from "@/lib/api/client";
 import { useCreateUser, useUpdateUser } from "@/lib/api/hooks";
-import type { Role } from "@/lib/api/types";
+import type { AuthMode, Role, User } from "@/lib/api/types";
 import { accountError, invitationFeedback } from "@/lib/auth/accounts";
-import type { AccountUser, AuthMode } from "@/lib/auth/types";
 import { emailProblem } from "@/lib/auth/validation";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +30,7 @@ interface FormState {
   roles: Role[];
 }
 
-const fromUser = (user: AccountUser | null): FormState => ({
+const fromUser = (user: User | null): FormState => ({
   name: user?.name ?? "",
   email: user?.email ?? "",
   team: user?.team ?? "",
@@ -49,7 +48,7 @@ export function UserFormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** `null` : création. */
-  user: AccountUser | null;
+  user: User | null;
   currentUserId: string | undefined;
   mode: AuthMode | null;
 }) {
