@@ -120,7 +120,10 @@ export class DbRepository implements Repository {
 
   private ready: Promise<void> | null = null;
 
-  /** Première utilisation : installe la configuration (utilisateurs, grille, règles), sans aucune donnée de démo. */
+  /**
+   * Première utilisation : installe la configuration (grille, règles, réglages), sans aucune
+   * donnée de démo ni utilisateur : le premier administrateur s'amorce par `KORA_ADMIN_EMAILS`.
+   */
   ensureReady(): Promise<void> {
     this.ready ??= (async () => {
       const { data, error } = await (
@@ -134,7 +137,6 @@ export class DbRepository implements Repository {
       if (data) return;
       const seed = buildSeed(new Date());
       const rows = [
-        ...seed.users.map((d) => ({ collection: "users", id: d.id, data: d })),
         ...seed.grids.map((d) => ({ collection: "grids", id: d.id, data: d })),
         ...seed.rules.map((d) => ({ collection: "rules", id: d.id, data: d })),
       ];

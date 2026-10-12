@@ -1,4 +1,5 @@
 import { now } from "../clock";
+import { usesDatabase } from "../database";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
 import { DbRepository } from "./db";
@@ -127,7 +128,7 @@ function holder(): Holder | undefined {
 
 /** Dépôt singleton (survit au rechargement à chaud du code serveur). */
 export async function getRepository(): Promise<Repository> {
-  if (!process.env["VITEST"] && process.env["SUPABASE_URL"]) {
+  if (usesDatabase()) {
     const g = globalThis as Record<string, unknown>;
     const db = (g["__koraDb__"] ??= new DbRepository()) as DbRepository;
     await db.ensureReady();

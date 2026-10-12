@@ -76,7 +76,7 @@ function applySession(session: Session | null) {
   });
 }
 
-/** Efface le cookie `kora_session` (requêtes simultanées regroupées). */
+/** Efface le cookie `__Host-kora_session` (requêtes simultanées regroupées). */
 function closeServerSession(): Promise<void> {
   closing ??= api
     .closeServerSession()
@@ -116,7 +116,7 @@ async function settleCheck(session: Session, check: SessionCheck) {
 }
 
 /**
- * Fait valider la session par le serveur (qui pose aussi le cookie `kora_session`).
+ * Fait valider la session par le serveur (qui pose aussi le cookie `__Host-kora_session`).
  * Un même jeton n'est vérifié qu'une fois (sauf serveur injoignable) ; 401 / 403
  * déconnectent la session Supabase.
  */
@@ -276,13 +276,19 @@ export async function requestPasswordReset(email: string): Promise<AuthActionRes
   }
 }
 
+/**
+ * Définit le mot de passe puis ferme les autres sessions du compte (ouvertes p. ex. par un
+ * tiers qui connaissait le mot de passe précédent) ; un échec de cette fermeture ne bloque pas.
+ */
 export async function updatePassword(password: string): Promise<AuthActionResult> {
   try {
     const { error } = await supabase.auth.updateUser({ password });
-    return error ? { ok: false, message: passwordErrorMessage(error) } : { ok: true };
+    if (error) return { ok: false, message: passwordErrorMessage(error) };
   } catch {
     return { ok: false, message: NOT_CONFIGURED };
   }
+  await supabase.auth.signOut({ scope: "others" }).catch(() => undefined);
+  return { ok: true };
 }
 
 /** Déconnexion volontaire : Supabase, cookie serveur, puis rechargement sur `/connexion`. */

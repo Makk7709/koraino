@@ -83,7 +83,7 @@ afterEach(() => {
 });
 
 describe("store d'authentification", () => {
-  it("valide la session auprès du serveur (cookie kora_session)", async () => {
+  it("valide la session auprès du serveur (cookie __Host-kora_session)", async () => {
     const { result } = renderHook(() => useAuth());
     expect(result.current.status).toBe("loading");
     await waitFor(() => expect(listener).not.toBeNull());

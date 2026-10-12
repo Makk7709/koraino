@@ -61,7 +61,7 @@ export const getAuthConfig: PublicHandler = async () =>
 
 /**
  * Ouvre la session serveur : vérifie le jeton Bearer, résout l'utilisateur et pose le cookie
- * `kora_session` pour la durée restante du jeton. En démonstration, renvoie l'utilisateur courant.
+ * `__Host-kora_session` pour la durée restante du jeton. En démonstration, renvoie l'utilisateur courant.
  */
 export const openSession: PublicHandler = async (ctx) => {
   const { user, token, claims } = await authenticate(ctx.request, ctx.repo, ctx.now);

@@ -139,7 +139,10 @@ export interface FakeSupabaseAuth {
   admin: AuthAdminApi;
   accounts: Map<string, AuthAccount>;
   invites: { email: string; redirectTo: string | undefined }[];
-  addAccount(email: string, opts?: { confirmed?: boolean }): AuthAccount;
+  /** Identifiants passés à `deleteUser`. */
+  deleted: string[];
+  /** `invited` : compte issu d'une invitation (`invited_at` renseigné). */
+  addAccount(email: string, opts?: { confirmed?: boolean; invited?: boolean }): AuthAccount;
   /** Acceptation d'une invitation : l'adresse devient confirmée. */
   confirm(accountId: string): void;
   /** Jeton d'accès valide pour le compte (expiration en secondes epoch). */
@@ -149,7 +152,8 @@ export interface FakeSupabaseAuth {
 
 /**
  * Mode supabase simulé (le dépôt reste en mémoire) : jetons et comptes Supabase Auth factices.
- * L'invitation imite GoTrue : `email_exists` pour un compte confirmé, renvoi sinon.
+ * L'invitation imite GoTrue : `email_exists` pour un compte confirmé, sinon (ré)invitation du
+ * compte existant ou création, avec `invited_at`.
  */
 export function useFakeSupabaseAuth(): FakeSupabaseAuth {
   let seq = 0;
@@ -157,12 +161,14 @@ export function useFakeSupabaseAuth(): FakeSupabaseAuth {
   const accounts = new Map<string, AuthAccount>();
   const tokens = new Map<string, { sub: string; exp: number }>();
   const invites: FakeSupabaseAuth["invites"] = [];
+  const deleted: string[] = [];
   const nowSec = Math.floor(NOW.getTime() / 1000);
-  const create = (email: string, confirmed: boolean): AuthAccount => {
+  const create = (email: string, confirmed: boolean, invited = false): AuthAccount => {
     const account: AuthAccount = {
       id: `00000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`,
       email: email.toLowerCase(),
       email_confirmed_at: confirmed ? NOW.toISOString() : null,
+      invited_at: invited ? NOW.toISOString() : null,
     };
     accounts.set(account.id, account);
     return account;
@@ -195,13 +201,29 @@ export function useFakeSupabaseAuth(): FakeSupabaseAuth {
           },
         };
       }
-      return { data: { user: { ...(existing ?? create(email, false)) } }, error: null };
+      const account = existing ?? create(email, false);
+      account.invited_at = NOW.toISOString();
+      return { data: { user: { ...account } }, error: null };
     },
     async listUsers(params) {
       const perPage = params?.perPage ?? 50;
       const page = params?.page ?? 1;
-      const users = [...accounts.values()].slice((page - 1) * perPage, page * perPage);
-      return { data: { users: users.map((a) => ({ ...a })) }, error: null };
+      const all = [...accounts.values()];
+      const users = all.slice((page - 1) * perPage, page * perPage);
+      return { data: { users: users.map((a) => ({ ...a })), total: all.length }, error: null };
+    },
+    async deleteUser(id) {
+      deleted.push(id);
+      const account = accounts.get(id);
+      if (!account) {
+        return {
+          data: { user: null },
+          error: { message: "User not found", code: "user_not_found", status: 404 },
+        };
+      }
+      accounts.delete(id);
+      for (const [token, entry] of tokens) if (entry.sub === id) tokens.delete(token);
+      return { data: { user: { ...account } }, error: null };
     },
   };
   setAuthModeForTests("supabase");
@@ -216,7 +238,8 @@ export function useFakeSupabaseAuth(): FakeSupabaseAuth {
     admin,
     accounts,
     invites,
-    addAccount: (email, opts) => create(email, opts?.confirmed ?? true),
+    deleted,
+    addAccount: (email, opts) => create(email, opts?.confirmed ?? true, opts?.invited ?? false),
     confirm(accountId) {
       accounts.get(accountId)!.email_confirmed_at = NOW.toISOString();
     },

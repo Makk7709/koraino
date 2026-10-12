@@ -27,8 +27,18 @@ type RouteDef =
       public?: undefined;
       /** Corps multipart/form-data (imports) au lieu de JSON. */
       multipart?: boolean;
+      /**
+       * Fichier ouvert par lien direct (`downloadUrl` côté front) : seules ces routes acceptent
+       * le cookie de session à la place de l'en-tête `Authorization`.
+       */
+      download?: boolean;
     })
-  | (RouteBase & { handler: PublicHandler; public: true; multipart?: undefined });
+  | (RouteBase & {
+      handler: PublicHandler;
+      public: true;
+      multipart?: undefined;
+      download?: undefined;
+    });
 
 type CompiledRoute = RouteDef & { segments: string[] };
 
@@ -70,8 +80,8 @@ const ROUTES: RouteDef[] = [
   { method: "GET", pattern: "/search", handler: ops.search },
   { method: "GET", pattern: "/usage", handler: ops.getUsage },
   { method: "GET", pattern: "/audit", handler: ops.listAudit },
-  { method: "GET", pattern: "/export/manifest", handler: ops.exportManifest },
-  { method: "GET", pattern: "/export/:entity", handler: ops.exportEntity },
+  { method: "GET", pattern: "/export/manifest", handler: ops.exportManifest, download: true },
+  { method: "GET", pattern: "/export/:entity", handler: ops.exportEntity, download: true },
 
   { method: "GET", pattern: "/companies", handler: registry.listCompanies },
   { method: "POST", pattern: "/companies", handler: registry.createCompany },
@@ -122,7 +132,7 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/linkedin/:id/submit", handler: dist.submitLinkedIn },
   { method: "POST", pattern: "/linkedin/:id/approve", handler: dist.approveLinkedIn },
   { method: "POST", pattern: "/linkedin/:id/publish", handler: dist.publishLinkedIn },
-  { method: "GET", pattern: "/linkedin/:id/export", handler: dist.exportLinkedIn },
+  { method: "GET", pattern: "/linkedin/:id/export", handler: dist.exportLinkedIn, download: true },
 
   { method: "GET", pattern: "/newsletters", handler: dist.listNewsletters },
   { method: "POST", pattern: "/newsletters", handler: dist.createNewsletter },
@@ -135,7 +145,12 @@ const ROUTES: RouteDef[] = [
     handler: dist.removeNewsletterItem,
   },
   { method: "POST", pattern: "/newsletters/:id/approve", handler: dist.approveNewsletter },
-  { method: "GET", pattern: "/newsletters/:id/export", handler: dist.exportNewsletter },
+  {
+    method: "GET",
+    pattern: "/newsletters/:id/export",
+    handler: dist.exportNewsletter,
+    download: true,
+  },
 
   { method: "GET", pattern: "/editorial-dna", handler: dist.getEditorialDna },
   { method: "POST", pattern: "/editorial-dna/rules", handler: dist.createRule },
@@ -272,7 +287,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
       });
     }
 
-    const { user } = await authenticate(request, repo, at);
+    const { user } = await authenticate(request, repo, at, { allowCookie: !!route.download });
     return await route.handler({
       ...base,
       user,

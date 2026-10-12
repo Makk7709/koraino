@@ -13,6 +13,7 @@ import {
   getConnectionKeyForUser,
   saveConnectionKeyForUser,
 } from "../appUserConnections.server";
+import { publicOrigin } from "../publicUrl";
 
 /**
  * Connecteurs « par utilisateur » : chaque utilisateur de l'app relie son
@@ -32,13 +33,6 @@ function clientApiKey(): string {
     throw new Error("LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY is not set");
   }
   return key;
-}
-
-/** Origine publique de l'app (x-forwarded-host derrière le proxy local). */
-function publicOrigin(ctx: Parameters<Handler>[0]): string {
-  const forwarded = ctx.request.headers.get("x-forwarded-host");
-  if (ctx.url.hostname === "localhost" && forwarded) return `https://${forwarded}`;
-  return ctx.url.origin;
 }
 
 /** Statut de la connexion LinkedIn de l'utilisateur courant. */

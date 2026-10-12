@@ -232,22 +232,20 @@ describe("gestion des utilisateurs (mode supabase)", () => {
     expect(list.body.find((u) => u.id === res.body.user.id)?.hasAccount).toBe(true);
   });
 
-  it("construit le lien d'invitation sur l'hôte public transmis par le proxy", async () => {
+  it("ignore x-forwarded-host pour le lien d'invitation", async () => {
     await call(
       "POST",
       "/users",
       asAdmin({
         body: { ...NINA, roles: ["lecteur"] },
-        headers: { "x-forwarded-host": "kora.example.org" },
+        headers: { "x-forwarded-host": "attaquant.example" },
       }),
     );
-    expect(fake.invites[0]?.redirectTo).toBe(
-      "https://kora.example.org/connexion/nouveau-mot-de-passe",
-    );
+    expect(fake.invites[0]?.redirectTo).toBe("http://localhost/connexion/nouveau-mot-de-passe");
   });
 
-  it("rattache un compte Supabase existant et confirmé sans le réinviter", async () => {
-    const existing = fake.addAccount("paul.girard@example.com");
+  it("rattache un compte Supabase confirmé issu d'une invitation sans le réinviter", async () => {
+    const existing = fake.addAccount("paul.girard@example.com", { invited: true });
     const res = await call<CreatedUser>(
       "POST",
       "/users",
@@ -258,6 +256,8 @@ describe("gestion des utilisateurs (mode supabase)", () => {
     expect(res.status).toBe(201);
     expect(res.body.invitation).toBe("existing_account");
     expect(res.body.user.hasAccount).toBe(true);
+    expect(fake.invites).toHaveLength(0);
+    expect(fake.deleted).toHaveLength(0);
     const me = await call<User>("GET", "/me", { headers: bearer(fake.tokenFor(existing.id)) });
     expect(me.body.id).toBe(res.body.user.id);
   });

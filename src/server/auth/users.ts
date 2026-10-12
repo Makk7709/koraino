@@ -50,18 +50,27 @@ export const accountNotAuthorized = () =>
     "account_not_authorized",
   );
 
+/** Administrateur rattaché à un compte Supabase et déjà connecté au moins une fois. */
+export function isActiveAdmin(u: UserRecord): boolean {
+  return u.roles.includes("admin") && !!u.authUserId && !!u.activatedAt;
+}
+
 /**
  * Utilisateur KORA d'un compte Supabase vérifié : compte rattaché, sinon amorçage d'un
- * administrateur listé dans `KORA_ADMIN_EMAILS` (adresse confirmée), sinon 403.
+ * administrateur listé dans `KORA_ADMIN_EMAILS` (adresse confirmée) tant qu'aucun
+ * administrateur actif n'existe, sinon 403.
  */
 export async function resolveKoraUser(
   repo: Repository,
   claims: TokenClaims,
   now: Date,
 ): Promise<UserRecord> {
-  const linked = (await repo.users.list()).find((u) => u.authUserId === claims.sub);
+  const users = await repo.users.list();
+  const linked = users.find((u) => u.authUserId === claims.sub);
   if (linked) return linked.activatedAt ? linked : markActivated(repo, linked, now);
   if (!claims.email || !adminEmails().has(claims.email)) throw accountNotAuthorized();
+  // Sinon un administrateur listé, supprimé ou rétrogradé, se rétablirait à la requête suivante.
+  if (users.some(isActiveAdmin)) throw accountNotAuthorized();
   return bootstrapAdmin(repo, claims.sub, now);
 }
 
@@ -84,6 +93,7 @@ async function bootstrapAdmin(repo: Repository, sub: string, now: Date): Promise
   const users = await repo.users.list();
   const already = users.find((u) => u.authUserId === sub);
   if (already) return already;
+  if (users.some(isActiveAdmin)) throw accountNotAuthorized();
 
   const at = now.toISOString();
   const existing = users.find((u) => u.email.toLowerCase() === email);

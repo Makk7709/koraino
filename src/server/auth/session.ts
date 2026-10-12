@@ -6,11 +6,14 @@ import { authMode } from "./mode";
 import { verifyAccessToken, type TokenClaims } from "./token";
 import { resolveKoraUser } from "./users";
 
-/** Copie du jeton d'accès pour les téléchargements par lien direct (mode supabase). */
-export const AUTH_COOKIE = "kora_session";
+/**
+ * Copie du jeton d'accès pour les téléchargements par lien direct (mode supabase). Le préfixe
+ * `__Host-` impose Secure, Path=/ et l'absence de Domain : un sous-domaine ne peut pas le poser.
+ */
+export const AUTH_COOKIE = "__Host-kora_session";
 export const MAX_SESSION_SECONDS = 3600;
 
-const COOKIE_ATTRIBUTES = "Path=/; HttpOnly; Secure; SameSite=Lax";
+const COOKIE_ATTRIBUTES = "Path=/; HttpOnly; Secure; SameSite=Strict";
 
 export function authSessionCookie(token: string, maxAge: number): string {
   return `${AUTH_COOKIE}=${encodeURIComponent(token)}; ${COOKIE_ATTRIBUTES}; Max-Age=${Math.max(0, Math.floor(maxAge))}`;
@@ -20,18 +23,30 @@ export function clearAuthSessionCookie(): string {
   return `${AUTH_COOKIE}=; ${COOKIE_ATTRIBUTES}; Max-Age=0`;
 }
 
+/** Navigation lancée depuis l'application elle-même ou saisie directe (absent : ancien navigateur). */
+function sameOriginNavigation(request: Request): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  return site === null || site === "same-origin" || site === "none";
+}
+
 /**
- * `Authorization: Bearer` en priorité ; le cookie `kora_session` n'est accepté qu'en lecture
- * (GET/HEAD) : toute écriture doit présenter le jeton explicitement.
+ * `Authorization: Bearer` en priorité. Le cookie n'est lu que pour les téléchargements par
+ * lien direct (`allowCookie`, routes `download`), en GET/HEAD et hors requête intersite :
+ * toute autre requête doit présenter le jeton explicitement.
  */
-export function readAccessToken(request: Request): string | null {
+export function readAccessToken(
+  request: Request,
+  opts: { allowCookie?: boolean } = {},
+): string | null {
   const header = request.headers.get("authorization");
   if (header !== null) {
     const match = /^Bearer\s+(\S+)\s*$/i.exec(header.trim());
     return match?.[1] ?? null;
   }
+  if (!opts.allowCookie) return null;
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") return null;
+  if (!sameOriginNavigation(request)) return null;
   return parseCookies(request.headers.get("cookie"))[AUTH_COOKIE] || null;
 }
 
@@ -47,6 +62,7 @@ export async function authenticate(
   request: Request,
   repo: Repository,
   now: Date,
+  opts: { allowCookie?: boolean } = {},
 ): Promise<Authenticated> {
   if (authMode() === "demo") {
     const cookies = parseCookies(request.headers.get("cookie"));
@@ -56,7 +72,7 @@ export async function authenticate(
     if (!user) throw new Error("Utilisateur par défaut absent du store");
     return { user, token: null, claims: null };
   }
-  const token = readAccessToken(request);
+  const token = readAccessToken(request, opts);
   if (!token) throw unauthenticated();
   const claims = await verifyAccessToken(token);
   if (!claims) throw unauthenticated();

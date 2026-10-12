@@ -67,9 +67,24 @@ function verifierClient(): SupabaseClient {
   return client;
 }
 
+const AUTHENTICATED = "authenticated";
+
+function hasAudience(aud: unknown): boolean {
+  return aud === AUTHENTICATED || (Array.isArray(aud) && aud.includes(AUTHENTICATED));
+}
+
 async function verifyWithSupabase(token: string): Promise<TokenClaims | null> {
   if (token.split(".").length !== 3) return null;
-  const { data, error } = await verifierClient().auth.getClaims(token);
+  const auth = verifierClient().auth;
+  let result: Awaited<ReturnType<typeof auth.getClaims>>;
+  try {
+    result = await auth.getClaims(token);
+  } catch (error) {
+    // `alg` inattendu, clé incompatible, en-tête illisible : getClaims lève hors AuthError.
+    if (isAuthRetryableFetchError(error)) throw authUnavailable();
+    return null;
+  }
+  const { data, error } = result;
   if (error) {
     if (isAuthRetryableFetchError(error)) throw authUnavailable();
     return null;
@@ -77,6 +92,7 @@ async function verifyWithSupabase(token: string): Promise<TokenClaims | null> {
   const claims = data?.claims;
   if (!claims || typeof claims.sub !== "string" || !claims.sub) return null;
   if (claims["is_anonymous"] === true) return null;
+  if (claims.role !== AUTHENTICATED || !hasAudience(claims.aud)) return null;
   return {
     sub: claims.sub,
     email: typeof claims.email === "string" ? claims.email.toLowerCase() : null,
@@ -84,7 +100,10 @@ async function verifyWithSupabase(token: string): Promise<TokenClaims | null> {
   };
 }
 
-/** Null si le jeton est absent, mal formé, expiré ou de signature invalide. */
+/**
+ * Null si le jeton est absent, mal formé, expiré, de signature ou d'algorithme invalide, ou
+ * s'il n'est pas un jeton d'utilisateur connecté (`role` / `aud` différents de `authenticated`).
+ */
 export function verifyAccessToken(token: string): Promise<TokenClaims | null> {
   return (verifierOverride ?? verifyWithSupabase)(token);
 }

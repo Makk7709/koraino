@@ -3,10 +3,11 @@ import { disconnectAppUser } from "@/integrations/lovable/appUserConnector";
 import { deleteConnectionKeyForUser, getConnectionKeyForUser } from "../appUserConnections.server";
 import { inviteAccount } from "../auth/admin";
 import { authMode } from "../auth/mode";
-import { toPublicUser, userIdForEmail } from "../auth/users";
+import { isActiveAdmin, toPublicUser, userIdForEmail } from "../auth/users";
 import type { Ctx, Handler } from "../context";
 import { assertCan, roleLabel } from "../domain/permissions";
 import { conflict, json, noContent, notFound, unprocessable } from "../http";
+import { publicOrigin } from "../publicUrl";
 import { audit } from "../services/journal";
 import type { UserRecord } from "../store/records";
 import { defined, parse, schemas } from "../validation";
@@ -25,12 +26,8 @@ const INVITATION_LABEL: Record<InvitationStatus, string> = {
 
 const rolesText = (roles: Role[]) => roles.map(roleLabel).join(", ");
 
-/** Origine publique de l'app (x-forwarded-host derrière le proxy local). */
-function publicOrigin(ctx: Ctx): string {
-  const forwarded = ctx.request.headers.get("x-forwarded-host");
-  if (ctx.url.hostname === "localhost" && forwarded) return `https://${forwarded}`;
-  return ctx.url.origin;
-}
+const USERS_LOCK = "users:admins";
+const USERS_LOCK_TTL_MS = 15_000;
 
 async function getUserOr404(ctx: Ctx): Promise<UserRecord> {
   const user = await ctx.repo.users.get(ctx.params["id"]!);
@@ -38,9 +35,38 @@ async function getUserOr404(ctx: Ctx): Promise<UserRecord> {
   return user;
 }
 
-async function assertNotLastAdmin(ctx: Ctx, message: string): Promise<void> {
-  const admins = (await ctx.repo.users.list()).filter((u) => u.roles.includes("admin"));
-  if (admins.length <= 1) throw unprocessable("last_admin", message);
+/**
+ * Modification ou suppression d'un utilisateur sous verrou : sans transactions en base, deux
+ * administrateurs qui se rétrogradent l'un l'autre passeraient chacun le contrôle « dernier
+ * administrateur ». Les droits de l'auteur sont relus sous le verrou.
+ */
+async function withUsersLock(ctx: Ctx, fn: () => Promise<Response>): Promise<Response> {
+  const token = await ctx.repo.acquireLock(USERS_LOCK, USERS_LOCK_TTL_MS);
+  if (!token) {
+    throw conflict(
+      "users_busy",
+      "Une autre modification des utilisateurs est en cours : réessayez dans quelques secondes.",
+    );
+  }
+  try {
+    assertCan((await ctx.repo.users.get(ctx.user.id)) ?? { roles: [] }, "users.manage");
+    return await fn();
+  } finally {
+    await ctx.repo.releaseLock(USERS_LOCK, token).catch((e: unknown) => {
+      console.error(`[users] verrou ${USERS_LOCK} non libéré`, e);
+    });
+  }
+}
+
+/**
+ * Il doit rester un autre administrateur que la cible. En mode supabase, seuls comptent les
+ * administrateurs actifs : un administrateur sans compte ne peut pas se connecter.
+ */
+async function assertNotLastAdmin(ctx: Ctx, target: UserRecord, message: string): Promise<void> {
+  const counts =
+    authMode() === "supabase" ? isActiveAdmin : (u: UserRecord) => u.roles.includes("admin");
+  const others = (await ctx.repo.users.list()).filter((u) => u.id !== target.id && counts(u));
+  if (!others.length) throw unprocessable("last_admin", message);
 }
 
 /** Invite l'adresse (mode supabase) et rattache le compte Supabase renvoyé à l'utilisateur. */
@@ -127,35 +153,44 @@ export const createUser: Handler = async (ctx) => {
 export const updateUser: Handler = async (ctx) => {
   assertCan(ctx.user, "users.manage");
   const input = parse(schemas.updateUser, ctx.body);
-  const target = await getUserOr404(ctx);
-  if (input.roles && target.roles.includes("admin") && !input.roles.includes("admin")) {
-    await assertNotLastAdmin(
-      ctx,
-      "Impossible de retirer le rôle administrateur : c'est le dernier administrateur.",
-    );
-    if (target.id === ctx.user.id) {
-      throw unprocessable(
-        "self_demotion",
-        "Vous ne pouvez pas retirer votre propre rôle administrateur : demandez-le à un autre administrateur.",
+  return withUsersLock(ctx, async () => {
+    const target = await getUserOr404(ctx);
+    if (input.roles && target.roles.includes("admin") && !input.roles.includes("admin")) {
+      await assertNotLastAdmin(
+        ctx,
+        target,
+        "Impossible de retirer le rôle administrateur : c'est le dernier administrateur.",
+      );
+      if (target.id === ctx.user.id) {
+        throw unprocessable(
+          "self_demotion",
+          "Vous ne pouvez pas retirer votre propre rôle administrateur : demandez-le à un autre administrateur.",
+        );
+      }
+    }
+    const updated: UserRecord = {
+      ...target,
+      ...defined({ name: input.name, team: input.team, roles: input.roles }),
+    };
+    const changes = [
+      updated.name !== target.name ? `nom « ${target.name} » → « ${updated.name} »` : null,
+      updated.team !== target.team ? `équipe « ${target.team} » → « ${updated.team} »` : null,
+      rolesText(updated.roles) !== rolesText(target.roles)
+        ? `rôles ${rolesText(target.roles)} → ${rolesText(updated.roles)}`
+        : null,
+    ].filter(Boolean);
+    if (changes.length) {
+      await ctx.repo.users.update(updated);
+      await audit(
+        ctx,
+        "user.update",
+        "user",
+        updated.id,
+        `${updated.name} : ${changes.join(" ; ")}`,
       );
     }
-  }
-  const updated: UserRecord = {
-    ...target,
-    ...defined({ name: input.name, team: input.team, roles: input.roles }),
-  };
-  const changes = [
-    updated.name !== target.name ? `nom « ${target.name} » → « ${updated.name} »` : null,
-    updated.team !== target.team ? `équipe « ${target.team} » → « ${updated.team} »` : null,
-    rolesText(updated.roles) !== rolesText(target.roles)
-      ? `rôles ${rolesText(target.roles)} → ${rolesText(updated.roles)}`
-      : null,
-  ].filter(Boolean);
-  if (changes.length) {
-    await ctx.repo.users.update(updated);
-    await audit(ctx, "user.update", "user", updated.id, `${updated.name} : ${changes.join(" ; ")}`);
-  }
-  return json(toPublicUser(updated));
+    return json(toPublicUser(updated));
+  });
 };
 
 /** Révocation (au mieux) puis suppression de la connexion LinkedIn de l'utilisateur. */
@@ -178,17 +213,19 @@ async function removeLinkedInConnection(userId: string): Promise<void> {
 /** Le compte Supabase n'est pas supprimé : sans utilisateur KORA rattaché, il n'ouvre plus rien. */
 export const deleteUser: Handler = async (ctx) => {
   assertCan(ctx.user, "users.manage");
-  const target = await getUserOr404(ctx);
-  if (target.roles.includes("admin")) {
-    await assertNotLastAdmin(ctx, "Impossible de supprimer le dernier administrateur.");
-  }
-  if (target.id === ctx.user.id) {
-    throw unprocessable("self_delete", "Vous ne pouvez pas supprimer votre propre compte.");
-  }
-  await removeLinkedInConnection(target.id);
-  await ctx.repo.users.remove(target.id);
-  await audit(ctx, "user.delete", "user", target.id, `${target.name} (${target.email}) supprimé`);
-  return noContent();
+  return withUsersLock(ctx, async () => {
+    const target = await getUserOr404(ctx);
+    if (target.roles.includes("admin")) {
+      await assertNotLastAdmin(ctx, target, "Impossible de supprimer le dernier administrateur.");
+    }
+    if (target.id === ctx.user.id) {
+      throw unprocessable("self_delete", "Vous ne pouvez pas supprimer votre propre compte.");
+    }
+    await removeLinkedInConnection(target.id);
+    await ctx.repo.users.remove(target.id);
+    await audit(ctx, "user.delete", "user", target.id, `${target.name} (${target.email}) supprimé`);
+    return noContent();
+  });
 };
 
 export const resendInvitation: Handler = async (ctx) => {

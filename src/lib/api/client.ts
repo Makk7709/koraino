@@ -133,7 +133,7 @@ export const api = {
   resendInvitation: (id: string) => apiFetch<InvitationResult>(`/users/${id}/invite`, json("POST")),
 
   /* Authentification (mode supabase) */
-  /** Vérifie le jeton côté serveur et pose le cookie `kora_session` (liens de téléchargement). */
+  /** Vérifie le jeton côté serveur et pose le cookie `__Host-kora_session` (liens de téléchargement). */
   openServerSession: (accessToken: string) =>
     apiFetch<User>("/auth/session", {
       method: "POST",

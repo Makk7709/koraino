@@ -1,4 +1,5 @@
 import type { AuthMode } from "@/lib/api/types";
+import { usesDatabase } from "../database";
 
 export type { AuthMode };
 
@@ -10,7 +11,7 @@ let override: AuthMode | null = null;
  */
 export function authMode(): AuthMode {
   if (override) return override;
-  return !process.env["VITEST"] && process.env["SUPABASE_URL"] ? "supabase" : "demo";
+  return usesDatabase() ? "supabase" : "demo";
 }
 
 export function setAuthModeForTests(mode: AuthMode | null): void {
