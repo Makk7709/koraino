@@ -44,3 +44,9 @@ export function setAdapters(partial: Partial<Adapters>): void {
 export function resetAdapters(): void {
   (globalThis as Record<string, unknown>)[KEY] = defaults();
 }
+
+/** Résumé : gabarit par défaut, amélioré par l'IA quand une clé est configurée. */
+export async function enhanceSummary(input: { title: string; text: string }): Promise<string> {
+  const base = adapters().textModel.summarize(input);
+  return (await adapters().ai?.enhanceSummary(input, base)) ?? base;
+}
