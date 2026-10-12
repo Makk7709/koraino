@@ -253,10 +253,10 @@ async function runSource(
         units: 1,
         label: `Collecte ${source.label}`,
       },
-      () => {
+      async () => {
         const collector = adapters().collector;
         let attempt = 1;
-        let result = collector.collect({
+        let result = await collector.collect({
           source,
           company,
           attempt,
@@ -265,7 +265,7 @@ async function runSource(
         });
         while (!result.ok && attempt < MAX_ATTEMPTS) {
           attempt += 1;
-          result = collector.collect({
+          result = await collector.collect({
             source,
             company,
             attempt,

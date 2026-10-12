@@ -4,6 +4,7 @@ import { assertCan } from "../domain/permissions";
 import { checkHost, validateSourceUrl } from "../domain/security";
 import { initials, normalize } from "../domain/text";
 import { conflict, json, noContent, notFound, unprocessable } from "../http";
+import { googleNewsUrl } from "../adapters/collector";
 import { BRAND_COLORS } from "../store/catalog";
 import { hash32 } from "../store/prng";
 import type { CompanyRecord, SourceRecord } from "../store/records";
@@ -116,6 +117,24 @@ export const createCompany: Handler = async (ctx) => {
     fictional: false,
   };
   await ctx.repo.companies.insert(rec);
+  // Veille Google News automatique sur le nom de l'entreprise.
+  await ctx.repo.sources.insert({
+    id: ctx.repo.nextId("src"),
+    companyId: rec.id,
+    type: "recherche_web",
+    label: `Google News — ${rec.name}`,
+    url: googleNewsUrl(rec.name),
+    frequency: "quotidienne",
+    access: "en_attente",
+    lastRunAt: null,
+    lastSuccessAt: null,
+    failureCode: null,
+    failureReason: null,
+    attempts: 0,
+    createdAt: ctx.now.toISOString(),
+    runCount: 0,
+    simulation: { mode: "auto" },
+  });
   await audit(
     ctx,
     "company.create",

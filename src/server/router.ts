@@ -217,7 +217,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
       throw new HttpError(404, "not_found", `Ressource inconnue : ${path}.`);
     }
 
-    const repo = getRepository();
+    const repo = await getRepository();
     const cookies = parseCookies(request.headers.get("cookie"));
     const user =
       (cookies[SESSION_COOKIE] ? await repo.users.get(cookies[SESSION_COOKIE]) : undefined) ??

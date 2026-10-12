@@ -25,7 +25,7 @@ async function spend(
   kind: "search_query" | "generation_article" = "search_query",
   units = 0,
 ) {
-  await getRepository().usage.insert({
+  await (await getRepository()).usage.insert({
     id: `use_test_${Math.random().toString(36).slice(2)}`,
     at: NOW.toISOString(),
     kind,
@@ -173,7 +173,7 @@ describe("consommation et quotas", () => {
     expect(created.body).toMatchObject({
       name: "Chartreuse Instruments",
       priority: "normale",
-      sourceCount: 0,
+      sourceCount: 1,
     });
     const duplicate = await call<ApiErrorBody>("POST", "/companies", { body: input });
     expect(duplicate.status).toBe(422); // de nouveau plein : le quota est vérifié avant le doublon

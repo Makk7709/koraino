@@ -395,7 +395,7 @@ describe("fusion et défusion", () => {
   });
 
   it("fusionne un signal incertain avec son jumeau", async () => {
-    const repo = getRepository();
+    const repo = await getRepository();
     const uncertain = (await repo.signals.list()).find(
       (s) => s.review?.kind === "fusion_incertaine",
     );

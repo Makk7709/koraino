@@ -1,6 +1,7 @@
 import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
+import { DbRepository } from "./db";
 import { buildSeed, type SeedData } from "./seed";
 
 class MemoryCollection<T extends { id: string }> implements Collection<T> {
@@ -111,7 +112,13 @@ function holder(): Holder | undefined {
 }
 
 /** Dépôt singleton (survit au rechargement à chaud du code serveur). */
-export function getRepository(): Repository {
+export async function getRepository(): Promise<Repository> {
+  if (!process.env["VITEST"] && process.env["SUPABASE_URL"]) {
+    const g = globalThis as Record<string, unknown>;
+    const db = (g['__koraDb__'] ??= new DbRepository()) as DbRepository;
+    await db.ensureReady();
+    return db;
+  }
   const h = holder();
   if (h && h.version === STORE_VERSION) return h.repo;
   return resetStore();

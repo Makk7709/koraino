@@ -14,7 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      kora_records: {
+        Row: {
+          collection: string
+          created_at: string
+          data: Json
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          collection: string
+          created_at?: string
+          data: Json
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          collection?: string
+          created_at?: string
+          data?: Json
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      kora_settings: {
+        Row: {
+          data: Json
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          data: Json
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          data?: Json
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
