@@ -18,6 +18,8 @@ import { Route as ParametresRouteImport } from './routes/parametres'
 import { Route as SignauxRouteImport } from './routes/signaux'
 import { Route as VeilleRouteImport } from './routes/veille'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as ConnexionIndexRouteImport } from './routes/connexion/index'
+import { Route as ConnexionNouveauMotDePasseRouteImport } from './routes/connexion/nouveau-mot-de-passe'
 import { Route as ApiOauthLinkedinReturnRouteImport } from './routes/api/oauth/linkedin/return'
 
 const IndexRoute = IndexRouteImport.update({
@@ -65,6 +67,17 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConnexionIndexRoute = ConnexionIndexRouteImport.update({
+  id: '/connexion/',
+  path: '/connexion/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnexionNouveauMotDePasseRoute =
+  ConnexionNouveauMotDePasseRouteImport.update({
+    id: '/connexion/nouveau-mot-de-passe',
+    path: '/connexion/nouveau-mot-de-passe',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiOauthLinkedinReturnRoute = ApiOauthLinkedinReturnRouteImport.update({
   id: '/api/oauth/linkedin/return',
   path: '/api/oauth/linkedin/return',
@@ -81,6 +94,8 @@ export interface FileRoutesByFullPath {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/connexion/nouveau-mot-de-passe': typeof ConnexionNouveauMotDePasseRoute
+  '/connexion/': typeof ConnexionIndexRoute
   '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRoutesByTo {
@@ -93,6 +108,8 @@ export interface FileRoutesByTo {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/connexion/nouveau-mot-de-passe': typeof ConnexionNouveauMotDePasseRoute
+  '/connexion': typeof ConnexionIndexRoute
   '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRoutesById {
@@ -106,6 +123,8 @@ export interface FileRoutesById {
   '/signaux': typeof SignauxRoute
   '/veille': typeof VeilleRoute
   '/api/$': typeof ApiSplatRoute
+  '/connexion/nouveau-mot-de-passe': typeof ConnexionNouveauMotDePasseRoute
+  '/connexion/': typeof ConnexionIndexRoute
   '/api/oauth/linkedin/return': typeof ApiOauthLinkedinReturnRoute
 }
 export interface FileRouteTypes {
@@ -120,6 +139,8 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/connexion/nouveau-mot-de-passe'
+    | '/connexion/'
     | '/api/oauth/linkedin/return'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -132,6 +153,8 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/connexion/nouveau-mot-de-passe'
+    | '/connexion'
     | '/api/oauth/linkedin/return'
   id:
     | '__root__'
@@ -144,6 +167,8 @@ export interface FileRouteTypes {
     | '/signaux'
     | '/veille'
     | '/api/$'
+    | '/connexion/nouveau-mot-de-passe'
+    | '/connexion/'
     | '/api/oauth/linkedin/return'
   fileRoutesById: FileRoutesById
 }
@@ -157,6 +182,8 @@ export interface RootRouteChildren {
   SignauxRoute: typeof SignauxRoute
   VeilleRoute: typeof VeilleRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ConnexionNouveauMotDePasseRoute: typeof ConnexionNouveauMotDePasseRoute
+  ConnexionIndexRoute: typeof ConnexionIndexRoute
   ApiOauthLinkedinReturnRoute: typeof ApiOauthLinkedinReturnRoute
 }
 
@@ -225,6 +252,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/connexion/': {
+      id: '/connexion/'
+      path: '/connexion'
+      fullPath: '/connexion/'
+      preLoaderRoute: typeof ConnexionIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connexion/nouveau-mot-de-passe': {
+      id: '/connexion/nouveau-mot-de-passe'
+      path: '/connexion/nouveau-mot-de-passe'
+      fullPath: '/connexion/nouveau-mot-de-passe'
+      preLoaderRoute: typeof ConnexionNouveauMotDePasseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/oauth/linkedin/return': {
       id: '/api/oauth/linkedin/return'
       path: '/api/oauth/linkedin/return'
@@ -245,6 +286,8 @@ const rootRouteChildren: RootRouteChildren = {
   SignauxRoute: SignauxRoute,
   VeilleRoute: VeilleRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ConnexionNouveauMotDePasseRoute: ConnexionNouveauMotDePasseRoute,
+  ConnexionIndexRoute: ConnexionIndexRoute,
   ApiOauthLinkedinReturnRoute: ApiOauthLinkedinReturnRoute,
 }
 export const routeTree = rootRouteImport
