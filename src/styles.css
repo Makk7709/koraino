@@ -43,6 +43,11 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --font-serif: "Instrument Serif", Georgia, serif;
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-ring-offset-background: var(--background);
@@ -62,39 +67,41 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
+  --radius: 0.125rem;
+  --background: oklch(0.975 0.008 85);
+  --foreground: oklch(0.18 0.01 60);
+  --card: oklch(0.945 0.012 85);
+  --card-foreground: oklch(0.18 0.01 60);
+  --popover: oklch(0.975 0.008 85);
+  --popover-foreground: oklch(0.18 0.01 60);
+  --primary: oklch(0.6 0.19 38);
+  --primary-foreground: oklch(0.98 0.005 85);
+  --secondary: oklch(0.92 0.015 85);
+  --secondary-foreground: oklch(0.18 0.01 60);
+  --muted: oklch(0.92 0.015 85);
+  --muted-foreground: oklch(0.48 0.015 60);
+  --accent: oklch(0.92 0.015 85);
+  --accent-foreground: oklch(0.18 0.01 60);
+  --destructive: oklch(0.55 0.21 25);
+  --destructive-foreground: oklch(0.98 0.005 85);
+  --success: oklch(0.52 0.12 150);
+  --warning: oklch(0.7 0.15 75);
+  --border: oklch(0.86 0.015 80);
+  --input: oklch(0.82 0.015 80);
+  --ring: oklch(0.6 0.19 38);
+  --chart-1: oklch(0.6 0.19 38);
+  --chart-2: oklch(0.52 0.12 150);
+  --chart-3: oklch(0.4 0.05 250);
+  --chart-4: oklch(0.7 0.15 75);
+  --chart-5: oklch(0.5 0.02 60);
+  --sidebar: oklch(0.945 0.012 85);
+  --sidebar-foreground: oklch(0.18 0.01 60);
+  --sidebar-primary: oklch(0.6 0.19 38);
+  --sidebar-primary-foreground: oklch(0.98 0.005 85);
+  --sidebar-accent: oklch(0.92 0.015 85);
+  --sidebar-accent-foreground: oklch(0.18 0.01 60);
+  --sidebar-border: oklch(0.86 0.015 80);
+  --sidebar-ring: oklch(0.6 0.19 38);
 }
 
 .dark {
@@ -141,4 +148,15 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
+}
+
+@layer components {
+  .font-display { font-family: var(--font-serif); font-weight: 400; letter-spacing: -0.01em; }
+  .label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  .tag { font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.15rem 0.45rem; border: 1px solid currentColor; }
+  .tag-muted { color: var(--muted-foreground); }
+  .tag-ok { color: var(--success); }
+  .tag-warn { color: oklch(0.55 0.13 70); }
+  .tag-bad { color: var(--destructive); }
+  .tag-primary { color: var(--primary); }
 }
