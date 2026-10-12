@@ -25,7 +25,7 @@ async function spend(
   kind: "search_query" | "generation_article" = "search_query",
   units = 0,
 ) {
-  await getRepository().usage.insert({
+  await (await getRepository()).usage.insert({
     id: `use_test_${Math.random().toString(36).slice(2)}`,
     at: NOW.toISOString(),
     kind,

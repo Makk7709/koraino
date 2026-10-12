@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
 import { buildSeed } from "./seed";
@@ -76,7 +77,7 @@ const WORKSPACE = "kora";
 
 export class DbRepository implements Repository {
   readonly workspaceId = WORKSPACE;
-  users = new DbCollection<Repository["users"] extends Collection<infer U> ? U : never>("users");
+  users = new DbCollection<any>("users");
   companies = new DbCollection<any>("companies");
   sources = new DbCollection<any>("sources");
   runs = new DbCollection<any>("runs");
@@ -118,7 +119,6 @@ export class DbRepository implements Repository {
       if (ins.error) throw new Error(ins.error.message);
       const settings: Settings = {
         ...seed.settings,
-        workspaceId: WORKSPACE,
         reservedEur: 0,
         notifiedAlerts: [],
       };
