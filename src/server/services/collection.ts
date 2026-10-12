@@ -1,5 +1,5 @@
 import type { CollectionRun } from "@/lib/api/types";
-import { adapters } from "../adapters";
+import { adapters, enhanceSummary } from "../adapters";
 import type { CollectResult, RawItem } from "../adapters/collector";
 import type { Ctx } from "../context";
 import { budgetExhausted, COSTS } from "../domain/budget";

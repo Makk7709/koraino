@@ -1,5 +1,5 @@
 import type { ScoringGrid, Signal, SignalStatus } from "@/lib/api/types";
-import { adapters } from "../adapters";
+import { adapters, enhanceSummary } from "../adapters";
 import type { Ctx, Handler } from "../context";
 import { assertCan } from "../domain/permissions";
 import { applyGrid, isDecided, validateWeights } from "../domain/scoring";
