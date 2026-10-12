@@ -57,6 +57,7 @@ import {
 } from "@/components/articles/ui";
 import { LinkedInPreview } from "./LinkedInPreview";
 import { LINKEDIN_MAX_CHARS, fullText, hashtag, selectedVariant, variantLetter } from "./text";
+import { resolutionBlockedReason } from "./resolution";
 import { UnconfirmedPublication } from "./UnconfirmedPublication";
 
 /** Une autre demande (onglet, collègue) publie déjà cette version. */
@@ -383,7 +384,9 @@ export function PostDetail({
               <UnconfirmedPublication
                 attempt={unconfirmed}
                 disabledReason={
-                  perms.canValidate ? null : "La vérification est réservée aux validateurs."
+                  perms.canValidate
+                    ? resolutionBlockedReason(unconfirmed, perms.me)
+                    : "La vérification est réservée aux validateurs."
                 }
                 pending={publish.isPending}
                 onResolve={(resolution) => runPublish({ resolution })}

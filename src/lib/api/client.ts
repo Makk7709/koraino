@@ -14,7 +14,9 @@ import type {
   ExportEntity,
   HumanImport,
   ImportProposal,
+  LinkedInConnectComplete,
   LinkedInConnection,
+  LinkedInConnectStart,
   LinkedInPost,
   LinkedInPublishInput,
   NewsletterEdition,
@@ -252,10 +254,9 @@ export const api = {
 
   /* Connecteur LinkedIn par utilisateur : chacun relie son propre compte. */
   linkedinConnection: () => apiFetch<LinkedInConnection>("/me/linkedin"),
-  startLinkedInConnect: () =>
-    apiFetch<{ authorizationUrl: string }>("/me/linkedin/connect", json("POST")),
-  completeLinkedInConnection: (code: string) =>
-    apiFetch<{ ok: boolean }>("/me/linkedin/complete", json("POST", { code })),
+  startLinkedInConnect: () => apiFetch<LinkedInConnectStart>("/me/linkedin/connect", json("POST")),
+  completeLinkedInConnection: (input: LinkedInConnectComplete) =>
+    apiFetch<{ ok: boolean }>("/me/linkedin/complete", json("POST", input)),
   disconnectLinkedIn: () => apiFetch<{ ok: boolean }>("/me/linkedin/disconnect", json("POST")),
 
   /* Newsletter (WF5) */

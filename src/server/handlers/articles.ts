@@ -456,6 +456,7 @@ export const publishArticle: Handler = async (ctx) => {
           message: check.message,
           at,
           by: ctx.user.name,
+          byUserId: ctx.user.id,
         }
       : {
           id: ctx.repo.nextId("pub"),
@@ -473,6 +474,7 @@ export const publishArticle: Handler = async (ctx) => {
           mode: channel === "wordpress" ? "brouillon_distant" : "export",
           at,
           by: ctx.user.name,
+          byUserId: ctx.user.id,
         };
     if (previous) await ctx.repo.publications.update(attempt);
     else await ctx.repo.publications.insert(attempt);
@@ -516,6 +518,7 @@ export const publishArticle: Handler = async (ctx) => {
       mode: "brouillon_distant",
       at,
       by: ctx.user.name,
+      byUserId: ctx.user.id,
     };
     next = {
       ...next,
@@ -538,6 +541,7 @@ export const publishArticle: Handler = async (ctx) => {
       mode: "export",
       at,
       by: ctx.user.name,
+      byUserId: ctx.user.id,
     };
   }
   await ctx.repo.publications.insert(attempt);

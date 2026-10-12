@@ -58,8 +58,13 @@ export const Route = createFileRoute('/api/oauth/linkedin/return')({
 </body>
 </html>`;
 
+        // L'URL porte le code à usage unique : ni cache, ni fuite par l'en-tête Referer.
         return new Response(html, {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+          },
         });
       },
     },

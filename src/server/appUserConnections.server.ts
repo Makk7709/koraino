@@ -1,4 +1,5 @@
 import { decryptConnectionKey, encryptConnectionKey } from "./connectionKeyCrypto";
+import { HttpError } from "./http";
 
 /**
  * Stockage de la clé de connexion App User Connector, chiffrée, par utilisateur
@@ -29,7 +30,24 @@ export async function saveConnectionKeyForUser(
   if (error) throw error;
 }
 
-/** Null si aucune connexion (ou si la base n'est pas disponible, p. ex. Vitest). */
+/**
+ * Lecture ou déchiffrement impossible : surtout pas « non connecté », qui ferait basculer la
+ * publication sur l'export manuel. Répondu 503 tel quel par le routeur.
+ */
+export class ConnectionKeyUnavailableError extends HttpError {
+  constructor() {
+    super(
+      503,
+      "linkedin_unavailable",
+      "Impossible de lire votre connexion LinkedIn pour le moment : réessayez plus tard.",
+    );
+  }
+}
+
+/**
+ * Null seulement s'il n'existe aucune connexion (toujours hors base, p. ex. Vitest) ;
+ * lève `ConnectionKeyUnavailableError` si la ligne ne peut être lue ou déchiffrée.
+ */
 export async function getConnectionKeyForUser(
   userId: string,
   connectorId: string,
@@ -47,7 +65,7 @@ export async function getConnectionKeyForUser(
     return data ? decryptConnectionKey(data.connection_key_ciphertext) : null;
   } catch (error) {
     console.error("[app_user_connections] lecture impossible :", error);
-    return null;
+    throw new ConnectionKeyUnavailableError();
   }
 }
 

@@ -1,5 +1,7 @@
+import type { LinkedInConnectStart } from "@/lib/api/types";
 import type { Handler } from "../context";
-import { badRequest, json } from "../http";
+import { badRequest, conflict, json } from "../http";
+import { consumePendingConnect, openPendingConnect } from "../linkedin/pendingConnect";
 import { audit } from "../services/journal";
 import {
   appUserReconnectRequired,
@@ -79,14 +81,25 @@ export const startLinkedInConnect: Handler = async (ctx) => {
     ...(existing ? { connectionAPIKey: existing } : {}),
     credentialsConfiguration: { scopes: LINKEDIN_SCOPES },
   });
-  return json({ authorizationUrl });
+  const state = await openPendingConnect(ctx.repo, ctx.user.id);
+  return json({ authorizationUrl, state } satisfies LinkedInConnectStart);
 };
 
-/** Échange le code à usage unique contre la clé de connexion, puis la stocke chiffrée. */
+/**
+ * Échange le code à usage unique contre la clé de connexion, puis la stocke chiffrée.
+ * Exige la connexion en attente ouverte par CET utilisateur (`state`), consommée ici.
+ */
 export const completeLinkedInConnection: Handler = async (ctx) => {
-  const body = ctx.body as { code?: unknown } | undefined;
+  const body = ctx.body as { code?: unknown; state?: unknown } | undefined;
   const code = typeof body?.code === "string" ? body.code : "";
   if (!code) throw badRequest("missing_code", "Code OAuth manquant.");
+  const state = typeof body?.state === "string" ? body.state : "";
+  if (!(await consumePendingConnect(ctx.repo, ctx.user.id, state))) {
+    throw conflict(
+      "linkedin_connect_not_pending",
+      "Aucune connexion LinkedIn n'est en attente pour votre compte (demande expirée ou déjà utilisée) : relancez « Connecter mon compte LinkedIn ».",
+    );
+  }
   const { connectionAPIKey, connectorId } = await exchangeAppUserOAuthCode(
     GATEWAY_BASE_URL,
     code,

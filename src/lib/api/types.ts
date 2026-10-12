@@ -322,6 +322,8 @@ export interface PublicationAttempt {
   mode: "brouillon_distant" | "export" | "publication";
   at: string;
   by: string;
+  /** Utilisateur qui a lancé la tentative ; absent sur les tentatives antérieures à ce suivi. */
+  byUserId?: string | null;
 }
 
 export type LinkedInStatus = "brouillon" | "a_valider" | "approuve" | "exporte" | "publie";
@@ -354,6 +356,18 @@ export interface LinkedInConnection {
   memberId?: string | null;
   reconnectRequired?: boolean;
   error?: string | null;
+}
+
+/** Réponse de POST /me/linkedin/connect : `state` est à rendre tel quel à /me/linkedin/complete. */
+export interface LinkedInConnectStart {
+  authorizationUrl: string;
+  state: string;
+}
+
+/** Corps de POST /me/linkedin/complete. */
+export interface LinkedInConnectComplete {
+  code: string;
+  state: string;
 }
 
 export type NewsletterStatus = "composition" | "approuvee" | "exportee";

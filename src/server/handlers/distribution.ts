@@ -2,7 +2,10 @@ import { z } from "zod";
 import type { Approval, LinkedInStatus, PublicationAttempt } from "@/lib/api/types";
 import { publishWithConnectionKey, type LinkedInPostOutcome } from "../linkedin/publish";
 import { adapters } from "../adapters";
-import { getConnectionKeyForUser } from "../appUserConnections.server";
+import {
+  ConnectionKeyUnavailableError,
+  getConnectionKeyForUser,
+} from "../appUserConnections.server";
 import { LINKEDIN_CONNECTOR_ID } from "./connectors";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
@@ -16,7 +19,16 @@ import {
   invalidateApproval,
   MODIFIED_AFTER_APPROVAL,
 } from "../domain/workflow";
-import { badRequest, conflict, fileResponse, json, notFound, unprocessable } from "../http";
+import {
+  badRequest,
+  conflict,
+  fileResponse,
+  forbidden,
+  HttpError,
+  json,
+  notFound,
+  unprocessable,
+} from "../http";
 import type { LinkedInPostRecord, NewsletterRecord } from "../store/records";
 import { audit, notify } from "../services/journal";
 import {
@@ -296,6 +308,37 @@ const nothingToResolve = () =>
   );
 
 /**
+ * « Non publié » republie depuis le compte relié de la personne qui répond : seul l'auteur de la
+ * tentative (ou un admin) tranche. Sans auteur connu (tentative ancienne), admin uniquement.
+ */
+function assertMayResolve(ctx: Ctx, pending: PublicationAttempt): void {
+  if (ctx.user.roles.includes("admin")) return;
+  if (pending.byUserId && pending.byUserId === ctx.user.id) return;
+  throw forbidden(
+    pending.byUserId
+      ? `Seul ${pending.by}, qui a lancé cette publication, ou un administrateur peut indiquer si elle figure sur LinkedIn.`
+      : "L'auteur de cette publication n'est pas connu : seul un administrateur peut indiquer si elle figure sur LinkedIn.",
+    "resolution_forbidden",
+  );
+}
+
+/**
+ * Statut final écrit sur la version relue sous verrou : un changement concurrent (approbation,
+ * rattachement) est conservé. Si une nouvelle version a été enregistrée pendant l'appel, le
+ * post n'est pas touché : c'est la version publiée qui porte le résultat, la suivante reste à valider.
+ */
+async function settlePost(
+  ctx: Ctx,
+  published: LinkedInPostRecord,
+  status: LinkedInStatus,
+  at: string,
+): Promise<void> {
+  const current = await ctx.repo.linkedin.get(published.id);
+  if (!current || current.version !== published.version) return;
+  await ctx.repo.linkedin.update({ ...current, status, updatedAt: at });
+}
+
+/**
  * Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent).
  * Un verrou par post et version sérialise les demandes simultanées (double clic, onglets) ;
  * une tentative `verification_requise` posée avant l'appel bloque toute republication tant
@@ -333,13 +376,20 @@ export const publishLinkedIn: Handler = async (ctx) => {
     mode: "export" as const,
     at,
     by: ctx.user.name,
+    byUserId: ctx.user.id,
   };
   if (!check.ok) {
     const previous = attempts.find(
       (p) => p.idempotencyKey === key && p.status === "bloque" && p.code === check.code,
     );
     const attempt: PublicationAttempt = previous
-      ? { ...previous, attempts: previous.attempts + 1, at, by: ctx.user.name }
+      ? {
+          ...previous,
+          attempts: previous.attempts + 1,
+          at,
+          by: ctx.user.name,
+          byUserId: ctx.user.id,
+        }
       : {
           ...base,
           id: ctx.repo.nextId("pub"),
@@ -376,6 +426,7 @@ export const publishLinkedIn: Handler = async (ctx) => {
     const pending = findUnconfirmed(fresh, key);
     if (pending && !resolution) throw verificationRequired(pending);
     if (!pending && resolution) throw nothingToResolve();
+    if (pending) assertMayResolve(ctx, pending);
 
     if (pending && resolution === "published") {
       const confirmed: PublicationAttempt = {
@@ -386,7 +437,7 @@ export const publishLinkedIn: Handler = async (ctx) => {
         remoteId: null,
       };
       await ctx.repo.publications.update(confirmed);
-      await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+      await settlePost(ctx, rec, "publie", at);
       await audit(
         ctx,
         "publication.confirmed",
@@ -434,6 +485,23 @@ export const publishLinkedIn: Handler = async (ctx) => {
       result = await userPublisher(ctx.user.id, commentary);
     } catch (e) {
       // `publishWithConnectionKey` ne lève pas : une exception survient avant tout envoi.
+      if (e instanceof ConnectionKeyUnavailableError) {
+        const failed: PublicationAttempt = {
+          ...marker,
+          status: "echec",
+          code: e.code,
+          message: e.message,
+        };
+        await ctx.repo.publications.update(failed);
+        await audit(
+          ctx,
+          "publication.failed",
+          "publication",
+          failed.id,
+          `LinkedIn « ${rec.title} » — ${e.message}`,
+        );
+        throw new HttpError(e.status, e.code, e.message, { attempt: toPublication(failed) });
+      }
       await ctx.repo.publications.update({
         ...marker,
         status: "echec",
@@ -452,7 +520,7 @@ export const publishLinkedIn: Handler = async (ctx) => {
         remoteId: result.remoteId,
       };
       await ctx.repo.publications.update(attempt);
-      await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+      await settlePost(ctx, rec, "publie", at);
       await audit(
         ctx,
         "publication.success",
@@ -493,7 +561,7 @@ export const publishLinkedIn: Handler = async (ctx) => {
       mode: "export",
     };
     await ctx.repo.publications.update(attempt);
-    await ctx.repo.linkedin.update({ ...rec, status: "exporte", updatedAt: at });
+    await settlePost(ctx, rec, "exporte", at);
     await audit(
       ctx,
       "publication.success",
@@ -702,6 +770,7 @@ export const exportNewsletter: Handler = async (ctx) => {
         mode: "export",
         at,
         by: ctx.user.name,
+        byUserId: ctx.user.id,
       };
       await ctx.repo.publications.insert(attempt);
       await ctx.repo.newsletters.update({ ...rec, status: "exportee", updatedAt: at });

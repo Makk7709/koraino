@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "./client";
-import type { SignalListQuery, UserInput, UserPatch } from "./types";
+import type { LinkedInConnectComplete, SignalListQuery, UserInput, UserPatch } from "./types";
 
 /** Clés React Query. Toute mutation invalide la racine `["kora"]` concernée. */
 export const qk = {
@@ -117,7 +117,9 @@ export const useLinkedInConnection = () =>
   useQuery({ queryKey: qk.linkedinConnection, queryFn: api.linkedinConnection });
 export const useLinkedInLink = () => useMutation({ mutationFn: () => api.startLinkedInConnect() });
 export const useLinkedInComplete = () =>
-  useMutation({ mutationFn: (code: string) => api.completeLinkedInConnection(code) });
+  useMutation({
+    mutationFn: (input: LinkedInConnectComplete) => api.completeLinkedInConnection(input),
+  });
 export const useLinkedInUnlink = () =>
   useKoraMutation(() => api.disconnectLinkedIn(), {
     success: "Compte LinkedIn déconnecté.",
