@@ -652,6 +652,11 @@ export interface PublishInput {
   channel: Channel;
 }
 
+/** Corps optionnel de POST /linkedin/:id/publish : verdict humain sur une publication non confirmée. */
+export interface LinkedInPublishInput {
+  resolution?: "published" | "not_published";
+}
+
 export interface ScoringGridInput {
   weights: Record<Criterion, number>;
   note?: string | null;

@@ -29,7 +29,13 @@ import {
   useLinkedInConnection,
   usePublications,
 } from "@/lib/api/hooks";
-import type { Company, LinkedInPost, LinkedInVariant } from "@/lib/api/types";
+import type {
+  Company,
+  LinkedInPost,
+  LinkedInPublishInput,
+  LinkedInVariant,
+  PublicationAttempt,
+} from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { LinkedInMark } from "@/components/articles/channel";
 import { usePermissions } from "@/components/articles/hooks";
@@ -51,11 +57,20 @@ import {
 } from "@/components/articles/ui";
 import { LinkedInPreview } from "./LinkedInPreview";
 import { LINKEDIN_MAX_CHARS, fullText, hashtag, selectedVariant, variantLetter } from "./text";
+import { UnconfirmedPublication } from "./UnconfirmedPublication";
 
 /** Une autre demande (onglet, collègue) publie déjà cette version. */
 const PUBLICATION_IN_PROGRESS = "publication_in_progress";
 /** Délai laissé à la publication concurrente avant de relire son résultat. */
 const IN_PROGRESS_REFRESH_MS = 5000;
+/** Succès déclaré par un humain après vérification du fil LinkedIn. */
+const CONFIRMED_BY_USER = "linkedin_confirmed_by_user";
+
+/** Tentative jointe à une erreur de publication (422 / 409 de vérification). */
+function attemptOf(error: unknown): PublicationAttempt | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  return (error.details as { attempt?: PublicationAttempt } | undefined)?.attempt;
+}
 
 interface PostDraft {
   text: string;
@@ -146,27 +161,32 @@ export function PostDetail({
     success: (p) => `Version ${p.version} approuvée`,
     onSuccess: setPost,
   });
-  const publish = useKoraMutation(() => api.publishLinkedInPost(post.id), {
-    success: (r) =>
-      r.status !== "succes"
-        ? ""
-        : r.mode === "publication"
-          ? "Post publié sur LinkedIn"
-          : "Export LinkedIn prêt",
-  });
+  const publish = useKoraMutation(
+    (input?: LinkedInPublishInput) => api.publishLinkedInPost(post.id, input),
+    {
+      success: (r) =>
+        r.status !== "succes"
+          ? ""
+          : r.code === CONFIRMED_BY_USER
+            ? "Publication confirmée"
+            : r.mode === "publication"
+              ? "Post publié sur LinkedIn"
+              : "Export LinkedIn prêt",
+    },
+  );
   // `isPending` ne désactive le bouton qu'au rendu suivant : un second clic ou une
   // répétition de touche passerait encore.
   const publishing = useRef(false);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(refreshTimer.current), []);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["kora"] });
-  const runPublish = () => {
+  const runPublish = (input?: LinkedInPublishInput) => {
     if (publishing.current) return;
     publishing.current = true;
-    publish.mutate(undefined, {
+    publish.mutate(input, {
       onError: (e) => {
-        if (!(e instanceof ApiError) || e.code !== PUBLICATION_IN_PROGRESS) return;
         refresh();
+        if (!(e instanceof ApiError) || e.code !== PUBLICATION_IN_PROGRESS) return;
         clearTimeout(refreshTimer.current);
         refreshTimer.current = setTimeout(refresh, IN_PROGRESS_REFRESH_MS);
       },
@@ -186,6 +206,12 @@ export function PostDetail({
   const settledElsewhere =
     inProgress && lastAttempt?.status === "succes" && lastAttempt.version === post.version;
   const refused = publish.isError && !settledElsewhere;
+  const settledNow = lastAttempt?.status === "succes" && lastAttempt.version === post.version;
+  const unconfirmed = settledNow
+    ? null
+    : ([attemptOf(publish.error), lastAttempt].find(
+        (a) => a?.status === "verification_requise" && a.version === post.version,
+      ) ?? null);
   const exported =
     post.status === "exporte" ||
     post.status === "publie" ||
@@ -219,7 +245,9 @@ export function PostDetail({
       ? "Enregistrez ou annulez vos modifications d'abord."
       : !perms.canValidate
         ? "L'export vers LinkedIn est réservé aux validateurs."
-        : null;
+        : unconfirmed
+          ? "Indiquez d'abord si la publication précédente figure sur LinkedIn."
+          : null;
   const next =
     post.status === "brouillon" ? "submit" : post.status === "a_valider" ? "approve" : "export";
 
@@ -270,7 +298,7 @@ export function PostDetail({
       icon: Upload,
       disabled: !!exportHint || publish.isPending,
       hint: exportHint,
-      run: runPublish,
+      run: () => runPublish(),
     },
   } as const;
 
@@ -349,9 +377,18 @@ export function PostDetail({
         {buttons[next].hint && (
           <p className="mt-2 text-[11.5px] text-muted-foreground">{buttons[next].hint}</p>
         )}
-        {(refused || lastAttempt) && (
+        {(unconfirmed || refused || lastAttempt) && (
           <div className="mt-3">
-            {refused && inProgress ? (
+            {unconfirmed ? (
+              <UnconfirmedPublication
+                attempt={unconfirmed}
+                disabledReason={
+                  perms.canValidate ? null : "La vérification est réservée aux validateurs."
+                }
+                pending={publish.isPending}
+                onResolve={(resolution) => runPublish({ resolution })}
+              />
+            ) : refused && inProgress ? (
               <Banner tone="warning" title="Publication déjà en cours">
                 {errorMessage(publish.error)}
               </Banner>

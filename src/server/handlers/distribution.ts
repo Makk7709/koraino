@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Approval, LinkedInStatus, PublicationAttempt } from "@/lib/api/types";
 import { publishWithConnectionKey, type LinkedInPostOutcome } from "../linkedin/publish";
 import { adapters } from "../adapters";
@@ -267,18 +268,54 @@ export function setLinkedInUserPublisherForTests(fn: typeof publishViaUserAccoun
   userPublisher = fn ?? publishViaUserAccount;
 }
 
+/** Corps optionnel : verdict humain sur une publication restée sans confirmation. */
+const publishLinkedInBody = z.object({
+  resolution: z.enum(["published", "not_published"]).optional(),
+});
+
+/**
+ * Code de la tentative enregistrée juste avant l'appel LinkedIn. S'il subsiste, la
+ * publication est soit encore en vol (verrou détenu), soit interrompue au résultat inconnu.
+ */
+const CONFIRMATION_PENDING = "linkedin_confirmation_pending";
+
+const findUnconfirmed = (attempts: PublicationAttempt[], key: string) =>
+  attempts.find((p) => p.idempotencyKey === key && p.status === "verification_requise");
+
+const verificationRequired = (pending: PublicationAttempt) =>
+  conflict(
+    "publication_verification_required",
+    "Une publication précédente n'a pas pu être confirmée. Vérifiez sur LinkedIn si le post a bien été publié, puis indiquez-le à KORA.",
+    { attempt: toPublication(pending) },
+  );
+
+const nothingToResolve = () =>
+  conflict(
+    "verification_not_pending",
+    "Aucune publication de cette version n'attend de vérification : actualisez la page.",
+  );
+
 /**
  * Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent).
- * Un verrou par post et version sérialise les demandes simultanées (double clic, onglets).
+ * Un verrou par post et version sérialise les demandes simultanées (double clic, onglets) ;
+ * une tentative `verification_requise` posée avant l'appel bloque toute republication tant
+ * qu'un humain n'a pas indiqué si le post est bien sur LinkedIn (`resolution`).
  */
 export const publishLinkedIn: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getPostOr404(ctx);
+  const { resolution } = parse(publishLinkedInBody, ctx.body);
   const key = idempotencyKey(rec.id, rec.version, "linkedin");
   const at = ctx.now.toISOString();
   const attempts = await ctx.repo.publications.list();
   const done = attempts.find((p) => p.idempotencyKey === key && p.status === "succes");
   if (done) return json(toPublication(done));
+  const unconfirmed = findUnconfirmed(attempts, key);
+  // Un marqueur sans résultat peut appartenir à une publication en vol : le verrou tranche.
+  if (unconfirmed && !resolution && unconfirmed.code !== CONFIRMATION_PENDING) {
+    throw verificationRequired(unconfirmed);
+  }
+  if (!unconfirmed && resolution) throw nothingToResolve();
 
   const check = checkPublishable({
     approvals: rec.approval ? [rec.approval] : [],
@@ -332,30 +369,89 @@ export const publishLinkedIn: Handler = async (ctx) => {
     );
   }
   try {
-    // La demande concurrente a pu aboutir entre la première lecture et la prise du verrou.
-    const settled = (await ctx.repo.publications.list()).find(
-      (p) => p.idempotencyKey === key && p.status === "succes",
-    );
+    // Une demande concurrente a pu aboutir (ou échouer) entre la première lecture et le verrou.
+    const fresh = await ctx.repo.publications.list();
+    const settled = fresh.find((p) => p.idempotencyKey === key && p.status === "succes");
     if (settled) return json(toPublication(settled));
+    const pending = findUnconfirmed(fresh, key);
+    if (pending && !resolution) throw verificationRequired(pending);
+    if (!pending && resolution) throw nothingToResolve();
+
+    if (pending && resolution === "published") {
+      const confirmed: PublicationAttempt = {
+        ...pending,
+        status: "succes",
+        code: "linkedin_confirmed_by_user",
+        message: `Confirmé publié sur LinkedIn par ${ctx.user.name}.`,
+        remoteId: null,
+      };
+      await ctx.repo.publications.update(confirmed);
+      await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
+      await audit(
+        ctx,
+        "publication.confirmed",
+        "publication",
+        confirmed.id,
+        `LinkedIn « ${rec.title} » : présence du post confirmée (version ${rec.version})`,
+      );
+      return json(toPublication(confirmed));
+    }
+    if (pending) {
+      const absent: PublicationAttempt = {
+        ...pending,
+        status: "echec",
+        code: "linkedin_absence_confirmed",
+        message: `Absence confirmée par ${ctx.user.name} : le post n'était pas sur LinkedIn.`,
+      };
+      await ctx.repo.publications.update(absent);
+      await audit(
+        ctx,
+        "publication.absence_confirmed",
+        "publication",
+        absent.id,
+        `LinkedIn « ${rec.title} » : absence du post confirmée, nouvelle publication (version ${rec.version})`,
+      );
+    }
 
     const linkedin = adapters().linkedin;
     const variant = rec.variants.find((v) => v.id === rec.selectedVariantId) ?? rec.variants[0]!;
     const hashtags = variant.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ");
     const commentary = [variant.text, "", hashtags].join("\n");
-    const result = await userPublisher(ctx.user.id, commentary);
+    // Enregistrée AVANT l'appel : si le Worker meurt ensuite, elle bloque toute republication.
+    const marker: PublicationAttempt = {
+      ...base,
+      id: ctx.repo.nextId("pub"),
+      status: "verification_requise",
+      code: CONFIRMATION_PENDING,
+      message: "Publication LinkedIn envoyée, confirmation en attente.",
+      attempts: 1,
+      mode: "publication",
+    };
+    await ctx.repo.publications.insert(marker);
+
+    let result: LinkedInPublishResult;
+    try {
+      result = await userPublisher(ctx.user.id, commentary);
+    } catch (e) {
+      // `publishWithConnectionKey` ne lève pas : une exception survient avant tout envoi.
+      await ctx.repo.publications.update({
+        ...marker,
+        status: "echec",
+        code: "linkedin_internal_error",
+        message: "Erreur interne avant l'envoi à LinkedIn : rien n'a été publié, réessayez.",
+      });
+      throw e;
+    }
 
     if (result.kind === "published") {
       const attempt: PublicationAttempt = {
-        ...base,
-        id: ctx.repo.nextId("pub"),
+        ...marker,
         status: "succes",
         code: null,
-        message: "Post publié sur LinkedIn via le compte relié.",
-        attempts: 1,
+        message: `Post publié sur LinkedIn via le compte relié${result.url ? ` : ${result.url}` : "."}`,
         remoteId: result.remoteId,
-        mode: "publication",
       };
-      await ctx.repo.publications.insert(attempt);
+      await ctx.repo.publications.update(attempt);
       await ctx.repo.linkedin.update({ ...rec, status: "publie", updatedAt: at });
       await audit(
         ctx,
@@ -370,20 +466,17 @@ export const publishLinkedIn: Handler = async (ctx) => {
     if (result.kind === "reconnect_required" || result.kind === "api_error") {
       const code =
         result.kind === "reconnect_required" ? "linkedin_reconnect_required" : "linkedin_api_error";
+      const unknown = result.kind === "api_error" && !!result.verifyBeforeRetry;
       const attempt: PublicationAttempt = {
-        ...base,
-        id: ctx.repo.nextId("pub"),
-        status: "echec",
+        ...marker,
+        status: unknown ? "verification_requise" : "echec",
         code,
         message: result.message,
-        attempts: 1,
-        remoteId: null,
-        mode: "publication",
       };
-      await ctx.repo.publications.insert(attempt);
+      await ctx.repo.publications.update(attempt);
       await audit(
         ctx,
-        "publication.failed",
+        unknown ? "publication.unconfirmed" : "publication.failed",
         "publication",
         attempt.id,
         `LinkedIn « ${rec.title} » — ${result.message}`,
@@ -393,14 +486,13 @@ export const publishLinkedIn: Handler = async (ctx) => {
 
     // Compte non relié : comportement historique, export manuel (idempotent).
     const attempt: PublicationAttempt = {
-      ...base,
-      id: ctx.repo.nextId("pub"),
+      ...marker,
       status: "succes",
       code: linkedin.apiAvailable ? null : "linkedin_api_unavailable",
       message: linkedin.apiAvailable ? "Post publié." : linkedin.unavailableReason,
-      attempts: 1,
+      mode: "export",
     };
-    await ctx.repo.publications.insert(attempt);
+    await ctx.repo.publications.update(attempt);
     await ctx.repo.linkedin.update({ ...rec, status: "exporte", updatedAt: at });
     await audit(
       ctx,
