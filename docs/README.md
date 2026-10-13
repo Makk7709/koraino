@@ -46,5 +46,5 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 ## Références
 
 - Cahier des charges : *KORA Newsroom IA — Proposition commerciale et technique v2.0*, KOREV AI, 8 septembre 2026.
-- Règles de synchronisation Lovable : [`AGENTS.md`](../AGENTS.md).
+- Règles de contribution : [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Dépôt : https://github.com/Makk7709/koraino

@@ -101,7 +101,7 @@ Le détail du jeu de données est dans le [Dictionnaire des données](04-diction
 
 ## Travailler avec Lovable
 
-Le dépôt est connecté à [Lovable](https://lovable.dev) : chaque commit poussé sur `main` apparaît dans l'éditeur Lovable, et chaque modification faite dans Lovable arrive sur `main` sous forme de commits (par exemple « Connecté l'IA avec OpenAI »). Les règles suivantes, reprises de [`AGENTS.md`](../AGENTS.md), sont impératives :
+Le dépôt est connecté à [Lovable](https://lovable.dev) : chaque commit poussé sur `main` apparaît dans l'éditeur Lovable, et chaque modification faite dans Lovable arrive sur `main` sous forme de commits (par exemple « Connecté l'IA avec OpenAI »). Les règles suivantes, détaillées dans [`CONTRIBUTING.md`](../CONTRIBUTING.md), sont impératives :
 
 - **Ne jamais réécrire un historique déjà poussé** : pas de `git push --force`, pas de rebase, d'amend ou de squash de commits publiés. Lovable perdrait l'historique du projet.
 - **Faire `git pull` avant de commencer** : Lovable peut avoir poussé des commits entre-temps.

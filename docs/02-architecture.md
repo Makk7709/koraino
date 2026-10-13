@@ -66,7 +66,7 @@ Le contrat entre le front et le back est figé dans trois fichiers partagés :
 ```text
 .
 ├── .env                      Valeurs publiques Supabase, versionnées par Lovable (aucun secret)
-├── AGENTS.md                 Règles de synchronisation Lovable (à lire avant tout commit)
+├── CONTRIBUTING.md           Règles de contribution (à lire avant tout commit)
 ├── db/postgres/schema.sql    Schéma relationnel cible (non branché)
 ├── drizzle/migrations/       Migrations appliquées par Lovable (tables kora_records, kora_settings)
 ├── supabase/config.toml      Identifiant du projet Supabase de Lovable Cloud

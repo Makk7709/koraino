@@ -1,32 +1,113 @@
 # KORA Newsroom IA — Inovallée
 
-Espace éditorial d'Inovallée : veille des entreprises de l'écosystème, signaux scorés et sourcés, rédaction assistée, circuit d'approbation, et préparation de la diffusion sur WordPress, LinkedIn et la newsletter.
+Espace éditorial d'Inovallée. KORA suit les entreprises de l'écosystème grenoblois, collecte leurs actualités, les regroupe en signaux notés et sourcés, aide à rédiger des articles, fait approuver chaque version et prépare la diffusion sur WordPress, LinkedIn et la newsletter.
 
 ![Dashboard éditorial](docs/images/dashboard.webp)
 
-## Démarrer
+## Ce que fait l'application
+
+La chaîne de travail va du registre à la diffusion : **registre → collecte → signaux notés → dossier factuel et brouillon → approbation par version et par canal → diffusion**. Toute diffusion repose sur une version approuvée ; une modification invalide l'approbation.
+
+| Écran | Rôle |
+|---|---|
+| Dashboard | Indicateurs, activité éditoriale, actualités détectées, calendrier. |
+| Veille | Sources de chaque entreprise ; lancement de la collecte (flux RSS/Atom et Google News). |
+| Signaux | Articles regroupés par événement, score éditorial sur 10, indicateur documentaire. |
+| Articles | Dossier factuel, brouillons sourcés, import, versions et approbations. |
+| LinkedIn | Variantes de posts ; publication sur le compte LinkedIn de la personne qui publie si elle l'a relié, sinon export. |
+| Newsletter | Composition et export HTML / texte (l'envoi reste manuel). |
+| Entreprises | Registre des entreprises suivies (150 au maximum). |
+| Paramètres | Grille de score, référentiel éditorial, utilisateurs et rôles, quotas et budget, exports, journal d'audit. |
+
+La collecte est réelle et déclenchée à la main. WordPress est encore simulé. Les textes sont produits par des gabarits, puis réécrits par OpenAI si une clé est configurée.
+
+## Stack
+
+- **TanStack Start** (React 19) : pages et API métier `/api` dans le même projet, rendu serveur.
+- **TanStack Query**, **Tailwind CSS v4**, composants **shadcn/ui**.
+- **Vite** et **Nitro**, build pour **Cloudflare Workers**.
+- **Supabase** : base PostgreSQL et authentification.
+- **Vitest**, **TypeScript** strict, **bun** comme gestionnaire de paquets.
+
+## Démarrer en local
+
+Prérequis : Node.js 24 et bun 1.2.
 
 ```bash
 nvm use 24
 bun install
-SUPABASE_URL= bun run dev   # http://localhost:8080, données de démonstration en mémoire
+SUPABASE_URL= bun run dev   # http://localhost:8080
 ```
 
-Sans `SUPABASE_URL=`, le serveur local tente d'utiliser la base Supabase du projet (adresse lue dans `.env`) et répond `500`, faute de la clé de service fournie uniquement par Lovable Cloud. Voir [Démarrage rapide](docs/01-demarrage.md).
+**Le `SUPABASE_URL=` vide est indispensable.** Le fichier `.env` versionné contient l'adresse de la base de production. Une fois la variable vidée, l'application tourne en **mode démonstration** :
+
+- les données sont en mémoire, réinitialisées à chaque redémarrage ;
+- il n'y a pas de connexion à saisir ; on change de profil depuis le menu utilisateur, en haut à droite.
+
+| Profil | Rôles |
+|---|---|
+| Sophie Martin (par défaut) | administratrice, rédactrice, validatrice |
+| Lucas Bernard | rédacteur |
+| Claire Dubois | validatrice |
+| Marc Lefèvre | lecteur |
+
+## Commandes
 
 | Commande | Effet |
 |---|---|
-| `bun run test` | Tests Vitest |
-| `npx tsc --noEmit -p .` | Vérification TypeScript |
-| `bun run lint` | ESLint et Prettier |
-| `bun run build` | Build de production (Cloudflare Workers) |
+| `bun run dev` | Serveur de développement avec rechargement à chaud. |
+| `bun run test` | Suite Vitest (base en mémoire, collecte simulée, sans réseau). |
+| `npx tsc --noEmit -p .` | Vérification TypeScript. |
+| `bun run lint` | ESLint et Prettier. |
+| `bun run build` | Build de production dans `.output/`. |
 
-En production (Lovable Cloud), les données sont stockées dans la base Supabase du projet et la collecte lit réellement les flux RSS et Google News. Secrets lus côté serveur uniquement : `SUPABASE_SERVICE_ROLE_KEY` (fournie par Lovable Cloud) et, facultative, `AI_API_KEY` (clé OpenAI) pour améliorer les textes générés. Le fichier `.env` versionné ne contient que des valeurs publiques.
+## Authentification et rôles
+
+- **Production.** Connexion par e-mail et mot de passe (Supabase Auth). Les comptes se créent **sur invitation uniquement**, depuis Paramètres > Utilisateurs & rôles. Le premier administrateur est l'adresse inscrite dans `KORA_ADMIN_EMAILS`, et seulement tant qu'aucun administrateur actif n'existe.
+- **Mode démonstration et tests.** Pas de connexion : les profils ci-dessus.
+- **Quatre rôles** : administrateur, rédacteur, validateur, lecteur. Les droits sont vérifiés côté serveur à chaque requête.
+
+## Configuration
+
+Les variables publiques sont dans `.env` (versionné). Les secrets sont lus côté serveur uniquement et enregistrés dans la console d'hébergement. Ils ne doivent jamais figurer dans le dépôt.
+
+| Variable | Rôle |
+|---|---|
+| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | Adresse et clé publique de la base (publiques, dans `.env`). |
+| `SUPABASE_SERVICE_ROLE_KEY` | Accès serveur à la base. **Secret.** |
+| `KORA_PUBLIC_URL` | Adresse publique de l'application, utilisée dans les liens d'invitation et le retour OAuth LinkedIn. |
+| `KORA_ADMIN_EMAILS` | Adresse(s) autorisée(s) à devenir le premier administrateur, séparées par des virgules. |
+| `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY` | Accès à la passerelle de connexion LinkedIn (OAuth et publication au nom de l'utilisateur). **Secrets.** |
+| `APP_USER_CONNECTION_KEY_SECRET` | Chiffrement des connexions LinkedIn stockées en base. **Secret, à ne jamais changer** : les connexions existantes deviendraient illisibles. |
+| `AI_API_KEY` | Facultative. Clé OpenAI pour réécrire les textes générés. **Secret.** |
+| `LOVABLE_DB_MIGRATION_URL` | Connexion utilisée pour appliquer les migrations de `drizzle/migrations/`. |
+
+## Organisation du code
+
+```text
+src/
+├── routes/          Pages (routage par fichiers) et routes serveur
+├── components/      Composants par écran, plus ui/ (shadcn)
+├── lib/api/         Contrat front/back : types, client HTTP, hooks
+├── server/          API métier : routeur, handlers, services, domaine, dépôt de données, adaptateurs
+│   ├── auth/        Sessions, comptes et invitations
+│   ├── linkedin/    Connexion et publication LinkedIn
+│   └── store/       Dépôt en base (production) et en mémoire (tests, démonstration)
+├── integrations/    Clients Supabase et passerelle de connexion
+└── test/            Tests Vitest
+drizzle/migrations/  Schéma de la base
+db/data/             Scripts de données ponctuels, exécutés à la main
+docs/                Documentation complète
+```
+
+## Hébergement et base
+
+Hébergement et base : **Lovable Cloud** (base PostgreSQL et authentification Supabase, exécution sur Cloudflare Workers) ; synchronisation avec l'éditeur sur `main`. Chaque commit poussé sur `main` arrive dans l'éditeur, et les modifications faites dans l'éditeur arrivent sur `main`. La mise en production se lance depuis l'éditeur. Un déploiement hors de cette plateforme est décrit dans [Exploitation](docs/09-exploitation.md#déploiement).
+
+## Contribuer
+
+Lire [`CONTRIBUTING.md`](CONTRIBUTING.md) avant le premier commit. La règle principale : **ne jamais réécrire l'historique de `main`** (pas de `push --force`, de rebase ni d'amend de commits déjà poussés).
 
 ## Documentation
 
-Toute la documentation est dans [`docs/`](docs/README.md) : démarrage, architecture, référence API, dictionnaire des données, règles métier, sécurité, frontend, guide utilisateur, exploitation, couverture du cahier des charges et anomalies connues.
-
-## Lovable
-
-Ce projet est connecté à [Lovable](https://lovable.dev/projects/40d714f1-3fc5-491b-9623-447358a56672) : chaque commit poussé sur `main` est synchronisé avec l'éditeur, et inversement. Ne réécrivez jamais un historique déjà poussé (pas de `push --force`, de rebase ni d'amend de commits publiés) et gardez `main` dans un état qui fonctionne. Voir [`AGENTS.md`](AGENTS.md).
+La documentation détaillée est dans [`docs/`](docs/README.md) : démarrage, architecture, référence API, dictionnaire des données, règles métier, sécurité et flux tiers, frontend, guide utilisateur, exploitation, couverture du cahier des charges et anomalies connues.
