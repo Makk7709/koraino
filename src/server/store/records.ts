@@ -18,13 +18,21 @@ import type {
   ScoringGrid,
   Signal,
   Source,
-  User,
+  User as UserDto,
 } from "@/lib/api/types";
 
 /**
  * Enregistrements stockés. Ils reprennent les DTO du contrat, sans les champs calculés
  * (compteurs, indicateur documentaire…) et avec quelques champs internes jamais exposés.
  */
+
+/** Jamais renvoyé tel quel : l'API expose `toPublicUser` (`hasAccount` au lieu de ces champs). */
+export type UserRecord = Omit<UserDto, "hasAccount"> & {
+  /** Compte Supabase Auth rattaché (à l'invitation ou à l'amorçage administrateur). */
+  authUserId?: string | null;
+  /** Première connexion réussie, ou rattachement d'un compte déjà confirmé. */
+  activatedAt?: string | null;
+};
 
 export type CompanyRecord = Omit<Company, "sourceCount" | "failingSourceCount" | "signalCount"> & {
   /** Entreprise fictive du jeu de démonstration (la collecte simulée peut générer des actualités). */
@@ -117,4 +125,6 @@ export interface Settings {
   storageBaseGb: number;
 }
 
-export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt, User };
+export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt };
+/** Nom sous lequel `repository.ts` type la collection `users`. */
+export type User = UserRecord;

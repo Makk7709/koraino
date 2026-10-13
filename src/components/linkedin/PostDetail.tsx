@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Upload,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/kora/BrandMark";
 import { GhostButton, Pill, PrimaryButton } from "@/components/kora/primitives";
@@ -21,9 +21,21 @@ import { LINKEDIN_STATUS, formatDate, formatRelative } from "@/components/kora/l
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Link } from "@tanstack/react-router";
-import { api, downloadUrl } from "@/lib/api/client";
-import { qk, useKoraMutation, usePublications } from "@/lib/api/hooks";
-import type { Company, LinkedInPost, LinkedInVariant } from "@/lib/api/types";
+import { api, ApiError, downloadUrl } from "@/lib/api/client";
+import {
+  errorMessage,
+  qk,
+  useKoraMutation,
+  useLinkedInConnection,
+  usePublications,
+} from "@/lib/api/hooks";
+import type {
+  Company,
+  LinkedInPost,
+  LinkedInPublishInput,
+  LinkedInVariant,
+  PublicationAttempt,
+} from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { LinkedInMark } from "@/components/articles/channel";
 import { usePermissions } from "@/components/articles/hooks";
@@ -45,6 +57,21 @@ import {
 } from "@/components/articles/ui";
 import { LinkedInPreview } from "./LinkedInPreview";
 import { LINKEDIN_MAX_CHARS, fullText, hashtag, selectedVariant, variantLetter } from "./text";
+import { resolutionBlockedReason } from "./resolution";
+import { UnconfirmedPublication } from "./UnconfirmedPublication";
+
+/** Une autre demande (onglet, collègue) publie déjà cette version. */
+const PUBLICATION_IN_PROGRESS = "publication_in_progress";
+/** Délai laissé à la publication concurrente avant de relire son résultat. */
+const IN_PROGRESS_REFRESH_MS = 5000;
+/** Succès déclaré par un humain après vérification du fil LinkedIn. */
+const CONFIRMED_BY_USER = "linkedin_confirmed_by_user";
+
+/** Tentative jointe à une erreur de publication (422 / 409 de vérification). */
+function attemptOf(error: unknown): PublicationAttempt | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  return (error.details as { attempt?: PublicationAttempt } | undefined)?.attempt;
+}
 
 interface PostDraft {
   text: string;
@@ -118,6 +145,7 @@ export function PostDetail({
   const { draft, dirty, setText, setHashtags, reset } = usePostDraft(post);
   const attemptsQuery = usePublications({ channel: "linkedin" });
   const attempts = (attemptsQuery.data ?? []).filter((a) => a.linkedinPostId === post.id);
+  const connected = !!useLinkedInConnection().data?.connected;
   const setPost = (p: LinkedInPost) =>
     qc.setQueryData<LinkedInPost[]>(qk.linkedin, (old) => old?.map((x) => (x.id === p.id ? p : x)));
 
@@ -134,15 +162,57 @@ export function PostDetail({
     success: (p) => `Version ${p.version} approuvée`,
     onSuccess: setPost,
   });
-  const publish = useKoraMutation(() => api.publishLinkedInPost(post.id), {
-    success: (r) => (r.status === "succes" ? "Export LinkedIn prêt" : ""),
-  });
+  const publish = useKoraMutation(
+    (input?: LinkedInPublishInput) => api.publishLinkedInPost(post.id, input),
+    {
+      success: (r) =>
+        r.status !== "succes"
+          ? ""
+          : r.code === CONFIRMED_BY_USER
+            ? "Publication confirmée"
+            : r.mode === "publication"
+              ? "Post publié sur LinkedIn"
+              : "Export LinkedIn prêt",
+    },
+  );
+  // `isPending` ne désactive le bouton qu'au rendu suivant : un second clic ou une
+  // répétition de touche passerait encore.
+  const publishing = useRef(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(refreshTimer.current), []);
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["kora"] });
+  const runPublish = (input?: LinkedInPublishInput) => {
+    if (publishing.current) return;
+    publishing.current = true;
+    publish.mutate(input, {
+      onError: (e) => {
+        refresh();
+        if (!(e instanceof ApiError) || e.code !== PUBLICATION_IN_PROGRESS) return;
+        clearTimeout(refreshTimer.current);
+        refreshTimer.current = setTimeout(refresh, IN_PROGRESS_REFRESH_MS);
+      },
+      onSettled: () => {
+        publishing.current = false;
+      },
+    });
+  };
 
   const variant = selectedVariant(post);
   const canEdit = perms.canWrite && post.status !== "publie";
   const approvedCurrent = !!post.approval?.valid && post.approval.version === post.version;
   const lastAttempt =
     publish.data ?? [...attempts].sort((a, b) => b.at.localeCompare(a.at))[0] ?? null;
+  const inProgress =
+    publish.error instanceof ApiError && publish.error.code === PUBLICATION_IN_PROGRESS;
+  const settledElsewhere =
+    inProgress && lastAttempt?.status === "succes" && lastAttempt.version === post.version;
+  const refused = publish.isError && !settledElsewhere;
+  const settledNow = lastAttempt?.status === "succes" && lastAttempt.version === post.version;
+  const unconfirmed = settledNow
+    ? null
+    : ([attemptOf(publish.error), lastAttempt].find(
+        (a) => a?.status === "verification_requise" && a.version === post.version,
+      ) ?? null);
   const exported =
     post.status === "exporte" ||
     post.status === "publie" ||
@@ -176,7 +246,9 @@ export function PostDetail({
       ? "Enregistrez ou annulez vos modifications d'abord."
       : !perms.canValidate
         ? "L'export vers LinkedIn est réservé aux validateurs."
-        : null;
+        : unconfirmed
+          ? "Indiquez d'abord si la publication précédente figure sur LinkedIn."
+          : null;
   const next =
     post.status === "brouillon" ? "submit" : post.status === "a_valider" ? "approve" : "export";
 
@@ -217,11 +289,17 @@ export function PostDetail({
       run: () => approve.mutate(undefined),
     },
     export: {
-      label: publish.isPending ? "Export…" : "Exporter",
+      label: connected
+        ? publish.isPending
+          ? "Publication…"
+          : "Publier sur LinkedIn"
+        : publish.isPending
+          ? "Export…"
+          : "Exporter",
       icon: Upload,
       disabled: !!exportHint || publish.isPending,
       hint: exportHint,
-      run: () => publish.mutate(undefined),
+      run: () => runPublish(),
     },
   } as const;
 
@@ -300,9 +378,24 @@ export function PostDetail({
         {buttons[next].hint && (
           <p className="mt-2 text-[11.5px] text-muted-foreground">{buttons[next].hint}</p>
         )}
-        {(publish.isError || lastAttempt) && (
+        {(unconfirmed || refused || lastAttempt) && (
           <div className="mt-3">
-            {publish.isError ? (
+            {unconfirmed ? (
+              <UnconfirmedPublication
+                attempt={unconfirmed}
+                disabledReason={
+                  perms.canValidate
+                    ? resolutionBlockedReason(unconfirmed, perms.me)
+                    : "La vérification est réservée aux validateurs."
+                }
+                pending={publish.isPending}
+                onResolve={(resolution) => runPublish({ resolution })}
+              />
+            ) : refused && inProgress ? (
+              <Banner tone="warning" title="Publication déjà en cours">
+                {errorMessage(publish.error)}
+              </Banner>
+            ) : refused ? (
               <RefusalResult error={publish.error} />
             ) : lastAttempt ? (
               <AttemptResult attempt={lastAttempt} />

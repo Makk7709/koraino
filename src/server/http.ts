@@ -14,6 +14,8 @@ export class HttpError extends Error {
 
 export const badRequest = (code: string, message: string, details?: unknown) =>
   new HttpError(400, code, message, details);
+export const unauthenticated = () =>
+  new HttpError(401, "unauthenticated", "Session absente ou expirée : reconnectez-vous.");
 export const forbidden = (message: string, code = "forbidden") => new HttpError(403, code, message);
 export const notFound = (message: string) => new HttpError(404, "not_found", message);
 export const conflict = (code: string, message: string, details?: unknown) =>

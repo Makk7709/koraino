@@ -1,4 +1,5 @@
 import { now } from "../clock";
+import { usesDatabase } from "../database";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
 import { DbRepository } from "./db";
@@ -59,6 +60,7 @@ export class MemoryRepository implements Repository {
   notifications;
   private settings: Settings;
   private counter = 1000;
+  private locks = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(seed: SeedData) {
     this.workspaceId = seed.settings.workspaceId;
@@ -95,6 +97,25 @@ export class MemoryRepository implements Repository {
     this.counter += 1;
     return `${prefix}_n${this.counter}`;
   }
+
+  async acquireLock(key: string, ttlMs: number) {
+    const at = now().getTime();
+    const held = this.locks.get(key);
+    if (held && held.expiresAt > at) return null;
+    const token = this.nextId("lock");
+    this.locks.set(key, { token, expiresAt: at + ttlMs });
+    return token;
+  }
+
+  async replaceLock(key: string, ttlMs: number) {
+    const token = crypto.randomUUID();
+    this.locks.set(key, { token, expiresAt: now().getTime() + ttlMs });
+    return token;
+  }
+
+  async releaseLock(key: string, token: string) {
+    if (this.locks.get(key)?.token === token) this.locks.delete(key);
+  }
 }
 
 /** Incrémenter quand la forme des enregistrements change : le store est alors réinitialisé. */
@@ -113,9 +134,9 @@ function holder(): Holder | undefined {
 
 /** Dépôt singleton (survit au rechargement à chaud du code serveur). */
 export async function getRepository(): Promise<Repository> {
-  if (!process.env["VITEST"] && process.env["SUPABASE_URL"]) {
+  if (usesDatabase()) {
     const g = globalThis as Record<string, unknown>;
-    const db = (g['__koraDb__'] ??= new DbRepository()) as DbRepository;
+    const db = (g["__koraDb__"] ??= new DbRepository()) as DbRepository;
     await db.ensureReady();
     return db;
   }

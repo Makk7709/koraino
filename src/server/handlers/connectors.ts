@@ -1,5 +1,7 @@
+import type { LinkedInConnectStart } from "@/lib/api/types";
 import type { Handler } from "../context";
-import { badRequest, json } from "../http";
+import { badRequest, conflict, json } from "../http";
+import { consumePendingConnect, openPendingConnect } from "../linkedin/pendingConnect";
 import { audit } from "../services/journal";
 import {
   appUserReconnectRequired,
@@ -9,10 +11,12 @@ import {
   exchangeAppUserOAuthCode,
 } from "@/integrations/lovable/appUserConnector";
 import {
+  ConnectionKeyUnavailableError,
   deleteConnectionKeyForUser,
   getConnectionKeyForUser,
   saveConnectionKeyForUser,
 } from "../appUserConnections.server";
+import { publicOrigin } from "../publicUrl";
 
 /**
  * Connecteurs « par utilisateur » : chaque utilisateur de l'app relie son
@@ -27,18 +31,33 @@ export const LINKEDIN_CONNECTOR_ID = "linkedin";
 export const LINKEDIN_SCOPES = ["openid", "profile", "w_member_social"];
 
 function clientApiKey(): string {
-  const key = process.env['LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY'];
+  const key = process.env["LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY"];
   if (!key) {
     throw new Error("LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY is not set");
   }
   return key;
 }
 
-/** Origine publique de l'app (x-forwarded-host derrière le proxy local). */
-function publicOrigin(ctx: Parameters<Handler>[0]): string {
-  const forwarded = ctx.request.headers.get("x-forwarded-host");
-  if (ctx.url.hostname === "localhost" && forwarded) return `https://${forwarded}`;
-  return ctx.url.origin;
+const UNREADABLE_REMOVED =
+  "Connexion LinkedIn illisible supprimée sans révocation : l'accès reste à retirer dans LinkedIn (services autorisés)";
+
+/**
+ * Clé de l'utilisateur avant déconnexion, reconnexion ou suppression du compte. Illisible
+ * (secret changé, ligne corrompue) : la révocation côté passerelle est impossible, mais la
+ * ligne doit rester supprimable, sinon ces trois opérations resteraient bloquées en 503. Si la
+ * base elle-même est en panne, la suppression qui suit échoue à son tour en 503. La
+ * publication garde le 503 : elle ne passe pas par ici.
+ */
+export async function readConnectionKey(
+  userId: string,
+): Promise<{ key: string | null; unreadable: boolean }> {
+  try {
+    return { key: await getConnectionKeyForUser(userId, LINKEDIN_CONNECTOR_ID), unreadable: false };
+  } catch (error) {
+    if (!(error instanceof ConnectionKeyUnavailableError)) throw error;
+    console.error(`[linkedin] connexion de ${userId} illisible : suppression sans révocation`);
+    return { key: null, unreadable: true };
+  }
 }
 
 /** Statut de la connexion LinkedIn de l'utilisateur courant. */
@@ -71,11 +90,12 @@ export const getLinkedInConnection: Handler = async (ctx) => {
 
 /** Démarre le consentement OAuth LinkedIn (popup) et renvoie l'URL d'autorisation. */
 export const startLinkedInConnect: Handler = async (ctx) => {
-  const returnUrl = new URL(
-    "/api/oauth/linkedin/return",
-    publicOrigin(ctx),
-  ).toString();
-  const existing = await getConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+  const returnUrl = new URL("/api/oauth/linkedin/return", publicOrigin(ctx)).toString();
+  const { key: existing, unreadable } = await readConnectionKey(ctx.user.id);
+  if (unreadable) {
+    await deleteConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+    await audit(ctx, "linkedin.disconnect", "user", ctx.user.id, UNREADABLE_REMOVED);
+  }
   const { authorizationUrl } = await authorizeAppUserOAuth({
     gatewayBaseUrl: GATEWAY_BASE_URL,
     connectorId: LINKEDIN_CONNECTOR_ID,
@@ -85,18 +105,26 @@ export const startLinkedInConnect: Handler = async (ctx) => {
     ...(existing ? { connectionAPIKey: existing } : {}),
     credentialsConfiguration: { scopes: LINKEDIN_SCOPES },
   });
-  return json({ authorizationUrl });
+  const state = await openPendingConnect(ctx.repo, ctx.user.id);
+  return json({ authorizationUrl, state } satisfies LinkedInConnectStart);
 };
 
-/** Échange le code à usage unique contre la clé de connexion, puis la stocke chiffrée. */
+/**
+ * Échange le code à usage unique contre la clé de connexion, puis la stocke chiffrée.
+ * Exige la connexion en attente ouverte par CET utilisateur (`state`), consommée ici.
+ */
 export const completeLinkedInConnection: Handler = async (ctx) => {
-  const body = ctx.body as { code?: unknown } | undefined;
+  const body = ctx.body as { code?: unknown; state?: unknown } | undefined;
   const code = typeof body?.code === "string" ? body.code : "";
   if (!code) throw badRequest("missing_code", "Code OAuth manquant.");
-  const { connectionAPIKey, connectorId } = await exchangeAppUserOAuthCode(
-    GATEWAY_BASE_URL,
-    code,
-  );
+  const state = typeof body?.state === "string" ? body.state : "";
+  if (!(await consumePendingConnect(ctx.repo, ctx.user.id, state))) {
+    throw conflict(
+      "linkedin_connect_not_pending",
+      "Aucune connexion LinkedIn n'est en attente pour votre compte (demande expirée ou déjà utilisée) : relancez « Connecter mon compte LinkedIn ».",
+    );
+  }
+  const { connectionAPIKey, connectorId } = await exchangeAppUserOAuthCode(GATEWAY_BASE_URL, code);
   if (connectorId !== LINKEDIN_CONNECTOR_ID) {
     throw badRequest("connector_mismatch", "Le retour OAuth ne correspond pas à LinkedIn.");
   }
@@ -105,9 +133,9 @@ export const completeLinkedInConnection: Handler = async (ctx) => {
   return json({ ok: true });
 };
 
-/** Révocation côté LinkedIn, puis suppression de la clé stockée. */
+/** Révocation côté LinkedIn (impossible si la clé est illisible), puis suppression de la clé stockée. */
 export const disconnectLinkedIn: Handler = async (ctx) => {
-  const key = await getConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
+  const { key, unreadable } = await readConnectionKey(ctx.user.id);
   if (key) {
     await disconnectAppUser({
       gatewayBaseUrl: GATEWAY_BASE_URL,
@@ -116,6 +144,12 @@ export const disconnectLinkedIn: Handler = async (ctx) => {
     });
   }
   await deleteConnectionKeyForUser(ctx.user.id, LINKEDIN_CONNECTOR_ID);
-  await audit(ctx, "linkedin.disconnect", "user", ctx.user.id, "Compte LinkedIn déconnecté");
+  await audit(
+    ctx,
+    "linkedin.disconnect",
+    "user",
+    ctx.user.id,
+    unreadable ? UNREADABLE_REMOVED : "Compte LinkedIn déconnecté",
+  );
   return json({ ok: true });
 };

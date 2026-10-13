@@ -1,9 +1,33 @@
-import { CircleCheck, Minus, ShieldAlert, Users } from "lucide-react";
-import { CountBadge, KoraCard, Pill } from "@/components/kora/primitives";
+import {
+  CircleCheck,
+  Minus,
+  Pencil,
+  Send,
+  ShieldAlert,
+  Trash2,
+  UserPlus,
+  Users,
+} from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { UserFormDialog } from "@/components/auth/UserFormDialog";
+import { CountBadge, KoraCard, Pill, PrimaryButton } from "@/components/kora/primitives";
 import { ROLE, TONE_CLASSES, type Tone } from "@/components/kora/labels";
-import { DataTable, ErrorPanel, Notice, TableSkeleton, Td, Th, Tr } from "@/components/veille/kit";
-import { useMe, useUsers } from "@/lib/api/hooks";
+import {
+  ConfirmDialog,
+  DataTable,
+  ErrorPanel,
+  IconAction,
+  Notice,
+  TableSkeleton,
+  Td,
+  Th,
+  Tr,
+} from "@/components/veille/kit";
+import { useDeleteUser, useMe, useResendInvitation, useUsers } from "@/lib/api/hooks";
 import type { Role, User } from "@/lib/api/types";
+import { accountError, invitationFeedback } from "@/lib/auth/accounts";
+import { useAuth } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { ROLE_TONE } from "./labels";
 
@@ -77,17 +101,76 @@ function RolePills({ roles }: { roles: Role[] }) {
   );
 }
 
+function AccountStatus({ user }: { user: User }) {
+  if (user.hasAccount === undefined) return null;
+  return (
+    <Pill tone={user.hasAccount ? "green" : "amber"} size="sm" className="mt-1">
+      {user.hasAccount ? "Compte activé" : "Invitation en attente"}
+    </Pill>
+  );
+}
+
 function AccountsCard() {
   const users = useUsers();
   const me = useMe();
+  const { mode } = useAuth();
+  const remove = useDeleteUser();
+  const invite = useResendInvitation();
+  const [dialog, setDialog] = useState<{ open: boolean; user: User | null }>({
+    open: false,
+    user: null,
+  });
+  const supabaseMode = mode === "supabase";
+  const isAdmin = me.data?.roles.includes("admin") ?? false;
+  const adminCount = (users.data ?? []).filter((u) => u.roles.includes("admin")).length;
+
+  const deleteUser = (u: User) =>
+    remove.mutate(u.id, {
+      onSuccess: () => toast.success(`${u.name} n'a plus accès à KORA.`),
+      onError: (e) => {
+        const err = accountError(e, "Suppression impossible");
+        toast.error(err.title, { description: err.message });
+      },
+    });
+
+  const resendInvitation = (u: User) =>
+    invite.mutate(u.id, {
+      onSuccess: (res) => {
+        const feedback = invitationFeedback(res.invitation, u.email, res.message);
+        if (feedback.tone === "warning") toast.warning(feedback.text);
+        else toast.success(feedback.text);
+      },
+      onError: (e) => {
+        const err = accountError(e, "Invitation non renvoyée");
+        toast.error(err.title, { description: err.message });
+      },
+    });
+
   return (
     <KoraCard
+      className="@container"
       title="Comptes nominatifs"
       badge={users.data && <CountBadge value={users.data.length} tone="teal" />}
       action={
-        <span className="text-[11px] text-muted-foreground">
-          {INCLUDED_ACCOUNTS} comptes inclus dans l&apos;abonnement
-        </span>
+        <div className="flex shrink-0 items-center gap-3">
+          <span
+            className={cn(
+              "text-[11px] text-muted-foreground",
+              isAdmin && "hidden whitespace-nowrap @lg:inline",
+            )}
+          >
+            {INCLUDED_ACCOUNTS} comptes inclus dans l&apos;abonnement
+          </span>
+          {isAdmin && (
+            <PrimaryButton
+              className="h-8 px-3 text-[12px]"
+              onClick={() => setDialog({ open: true, user: null })}
+            >
+              <UserPlus className="size-3.5" />
+              Ajouter
+            </PrimaryButton>
+          )}
+        </div>
       }
     >
       {users.error ? (
@@ -111,6 +194,12 @@ function AccountsCard() {
           <tbody>
             {users.data.map((u) => {
               const current = u.id === me.data?.id;
+              const lastAdmin = u.roles.includes("admin") && adminCount <= 1;
+              const deleteBlocked = current
+                ? "Vous ne pouvez pas supprimer votre propre compte"
+                : lastAdmin
+                  ? "Dernier administrateur : suppression impossible"
+                  : null;
               return (
                 <Tr key={u.id} selected={current}>
                   <Td>
@@ -119,6 +208,7 @@ function AccountsCard() {
                       <div className="min-w-0">
                         <p className="truncate font-bold">{u.name}</p>
                         <p className="truncate text-[11px] text-muted-foreground">{u.email}</p>
+                        {supabaseMode && <AccountStatus user={u} />}
                       </div>
                     </div>
                   </Td>
@@ -127,11 +217,52 @@ function AccountsCard() {
                     <RolePills roles={u.roles} />
                   </Td>
                   <Td className="text-right">
-                    {current && (
-                      <Pill tone="teal" size="sm" className="font-semibold">
-                        Vous
-                      </Pill>
-                    )}
+                    <div className="flex items-center justify-end gap-1.5">
+                      {current && (
+                        <Pill tone="teal" size="sm" className="font-semibold">
+                          Vous
+                        </Pill>
+                      )}
+                      {isAdmin && (
+                        <>
+                          <IconAction
+                            icon={Pencil}
+                            label={`Modifier les rôles de ${u.name}`}
+                            onClick={() => setDialog({ open: true, user: u })}
+                          />
+                          {supabaseMode && u.hasAccount === false && (
+                            <IconAction
+                              icon={Send}
+                              label={`Renvoyer l'invitation à ${u.email}`}
+                              disabled={invite.isPending && invite.variables === u.id}
+                              onClick={() => resendInvitation(u)}
+                            />
+                          )}
+                          <ConfirmDialog
+                            title={`Supprimer le compte de ${u.name} ?`}
+                            description={
+                              <>
+                                {u.name} ({u.email}) n&apos;aura plus accès à KORA et sa connexion
+                                LinkedIn sera retirée. Ses contenus et le journal d&apos;audit sont
+                                conservés.
+                                {supabaseMode &&
+                                  " Le compte de connexion n'est pas supprimé : il ne donne simplement plus accès à KORA."}
+                              </>
+                            }
+                            confirmLabel="Supprimer"
+                            onConfirm={() => deleteUser(u)}
+                            trigger={
+                              <IconAction
+                                icon={Trash2}
+                                tone="danger"
+                                label={deleteBlocked ?? `Supprimer le compte de ${u.name}`}
+                                disabled={!!deleteBlocked || remove.isPending}
+                              />
+                            }
+                          />
+                        </>
+                      )}
+                    </div>
                   </Td>
                 </Tr>
               );
@@ -140,9 +271,27 @@ function AccountsCard() {
         </DataTable>
       )}
       <p className="mt-3 text-[11px] text-muted-foreground">
-        Pour vérifier les droits d&apos;un autre profil, utilisez « Changer de profil » dans le menu
-        utilisateur en haut à droite.
+        {supabaseMode ? (
+          <>
+            Chaque personne se connecte avec son propre compte. Un nouvel utilisateur reçoit une
+            invitation par e-mail pour choisir son mot de passe.
+          </>
+        ) : (
+          <>
+            Pour vérifier les droits d&apos;un autre profil, utilisez « Changer de profil » dans le
+            menu utilisateur en haut à droite.
+          </>
+        )}
       </p>
+      {isAdmin && (
+        <UserFormDialog
+          open={dialog.open}
+          onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
+          user={dialog.user}
+          currentUserId={me.data?.id}
+          mode={mode}
+        />
+      )}
     </KoraCard>
   );
 }

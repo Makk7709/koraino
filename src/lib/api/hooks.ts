@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "./client";
-import type { SignalListQuery } from "./types";
+import type { LinkedInConnectComplete, SignalListQuery, UserInput, UserPatch } from "./types";
 
 /** Clés React Query. Toute mutation invalide la racine `["kora"]` concernée. */
 export const qk = {
@@ -63,6 +63,31 @@ export function useKoraMutation<TVars, TData>(
 
 export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me });
 export const useUsers = () => useQuery({ queryKey: qk.users, queryFn: api.users });
+
+/**
+ * Gestion des comptes (admin) : invalide les comptes, l'utilisateur courant et le journal.
+ * Pas de toast automatique : les retours dépendent du contexte (invitation, dialogue).
+ */
+function useAccountMutation<TVars, TData>(fn: (vars: TVars) => Promise<TData>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.users });
+      void qc.invalidateQueries({ queryKey: qk.me });
+      void qc.invalidateQueries({ queryKey: ["kora", "audit"] });
+    },
+  });
+}
+
+export const useCreateUser = () => useAccountMutation((input: UserInput) => api.createUser(input));
+export const useUpdateUser = () =>
+  useAccountMutation(({ id, input }: { id: string; input: UserPatch }) =>
+    api.updateUser(id, input),
+  );
+export const useDeleteUser = () => useAccountMutation((id: string) => api.deleteUser(id));
+export const useResendInvitation = () =>
+  useAccountMutation((id: string) => api.resendInvitation(id));
 export const useDashboard = (q?: { from?: string; to?: string }) =>
   useQuery({ queryKey: qk.dashboard(q), queryFn: () => api.dashboard(q) });
 export const useNotifications = () =>
@@ -89,10 +114,11 @@ export const useLinkedInPosts = () =>
   useQuery({ queryKey: qk.linkedin, queryFn: api.linkedinPosts });
 export const useLinkedInConnection = () =>
   useQuery({ queryKey: qk.linkedinConnection, queryFn: api.linkedinConnection });
-export const useLinkedInLink = () =>
-  useMutation({ mutationFn: () => api.startLinkedInConnect() });
+export const useLinkedInLink = () => useMutation({ mutationFn: () => api.startLinkedInConnect() });
 export const useLinkedInComplete = () =>
-  useMutation({ mutationFn: (code: string) => api.completeLinkedInConnection(code) });
+  useMutation({
+    mutationFn: (input: LinkedInConnectComplete) => api.completeLinkedInConnection(input),
+  });
 export const useLinkedInUnlink = () =>
   useKoraMutation(() => api.disconnectLinkedIn(), {
     success: "Compte LinkedIn déconnecté.",

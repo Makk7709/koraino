@@ -16,6 +16,8 @@ export interface User {
   team: string;
   roles: Role[];
   avatarUrl: string | null;
+  /** Compte de connexion activé (mode supabase) ; sinon invitation en attente. */
+  hasAccount?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -320,6 +322,8 @@ export interface PublicationAttempt {
   mode: "brouillon_distant" | "export" | "publication";
   at: string;
   by: string;
+  /** Utilisateur qui a lancé la tentative ; absent sur les tentatives antérieures à ce suivi. */
+  byUserId?: string | null;
 }
 
 export type LinkedInStatus = "brouillon" | "a_valider" | "approuve" | "exporte" | "publie";
@@ -354,6 +358,17 @@ export interface LinkedInConnection {
   error?: string | null;
 }
 
+/** Réponse de POST /me/linkedin/connect : `state` est à rendre tel quel à /me/linkedin/complete. */
+export interface LinkedInConnectStart {
+  authorizationUrl: string;
+  state: string;
+}
+
+/** Corps de POST /me/linkedin/complete. */
+export interface LinkedInConnectComplete {
+  code: string;
+  state: string;
+}
 
 export type NewsletterStatus = "composition" | "approuvee" | "exportee";
 
@@ -590,6 +605,29 @@ export interface Paginated<T> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Authentification & utilisateurs                                     */
+/* ------------------------------------------------------------------ */
+
+/** `supabase` : comptes Supabase Auth sur invitation ; `demo` : changement de profil libre. */
+export type AuthMode = "supabase" | "demo";
+
+export interface AuthConfig {
+  mode: AuthMode;
+}
+
+export type InvitationStatus = "sent" | "existing_account" | "not_applicable" | "failed";
+
+export interface InvitationResult {
+  invitation: InvitationStatus;
+  /** Explication lorsque l'invitation a échoué. */
+  message?: string;
+}
+
+export interface CreatedUser extends InvitationResult {
+  user: User;
+}
+
+/* ------------------------------------------------------------------ */
 /* Corps de requêtes                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -652,7 +690,25 @@ export interface PublishInput {
   channel: Channel;
 }
 
+/** Corps optionnel de POST /linkedin/:id/publish : verdict humain sur une publication non confirmée. */
+export interface LinkedInPublishInput {
+  resolution?: "published" | "not_published";
+}
+
 export interface ScoringGridInput {
   weights: Record<Criterion, number>;
   note?: string | null;
+}
+
+export interface UserInput {
+  name: string;
+  email: string;
+  team?: string;
+  roles: Role[];
+}
+
+export interface UserPatch {
+  name?: string;
+  team?: string;
+  roles?: Role[];
 }

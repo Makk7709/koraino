@@ -14,8 +14,11 @@ import type {
   ExportEntity,
   HumanImport,
   ImportProposal,
+  LinkedInConnectComplete,
   LinkedInConnection,
+  LinkedInConnectStart,
   LinkedInPost,
+  LinkedInPublishInput,
   NewsletterEdition,
   NewsletterItem,
   Notification,
@@ -34,7 +37,12 @@ import type {
   SourceInput,
   UsageSnapshot,
   User,
+  CreatedUser,
+  InvitationResult,
+  UserInput,
+  UserPatch,
 } from "./types";
+import { getAccessToken, handleUnauthenticated } from "@/lib/auth/token";
 
 export class ApiError extends Error {
   constructor(
@@ -57,15 +65,23 @@ function toQuery(params?: object): string {
   return s ? `?${s}` : "";
 }
 
+const isAuthRoute = (path: string) => path === "/auth" || path.startsWith("/auth/");
+
 /**
  * Toute requête mutante porte l'en-tête `x-kora-request` : le serveur refuse les
  * écritures sans cet en-tête (protection CSRF basique pour les routes /api).
+ * En mode supabase, le jeton de session part en `Authorization: Bearer` ; un 401 hors
+ * `/auth/*` renvoie vers la page de connexion.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("x-kora-request", "1");
   if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (!headers.has("authorization")) {
+    const token = await getAccessToken();
+    if (token) headers.set("authorization", `Bearer ${token}`);
   }
   const res = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });
   if (!res.ok) {
@@ -74,6 +90,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       body = (await res.json()) as ApiErrorBody;
     } catch {
       body = null;
+    }
+    if (!isAuthRoute(path)) {
+      if (res.status === 401) void handleUnauthenticated("unauthenticated");
+      else if (res.status === 403 && body?.error?.code === "account_not_authorized") {
+        void handleUnauthenticated("account_not_authorized");
+      }
     }
     throw new ApiError(
       res.status,
@@ -106,6 +128,20 @@ export const api = {
   me: () => apiFetch<User>("/me"),
   switchUser: (userId: string) => apiFetch<User>("/me", json("POST", { userId })),
   users: () => apiFetch<User[]>("/users"),
+  createUser: (input: UserInput) => apiFetch<CreatedUser>("/users", json("POST", input)),
+  updateUser: (id: string, input: UserPatch) =>
+    apiFetch<User>(`/users/${id}`, json("PATCH", input)),
+  deleteUser: (id: string) => apiFetch<void>(`/users/${id}`, json("DELETE")),
+  resendInvitation: (id: string) => apiFetch<InvitationResult>(`/users/${id}/invite`, json("POST")),
+
+  /* Authentification (mode supabase) */
+  /** Vérifie le jeton côté serveur et pose le cookie `__Host-kora_session` (liens de téléchargement). */
+  openServerSession: (accessToken: string) =>
+    apiFetch<User>("/auth/session", {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+    }),
+  closeServerSession: () => apiFetch<void>("/auth/logout", json("POST")),
 
   /* Dashboard & recherche */
   dashboard: (q?: { from?: string; to?: string }) => apiFetch<Dashboard>(`/dashboard${toQuery(q)}`),
@@ -213,15 +249,14 @@ export const api = {
     apiFetch<LinkedInPost>(`/linkedin/${id}/submit`, json("POST")),
   approveLinkedInPost: (id: string, version: number) =>
     apiFetch<LinkedInPost>(`/linkedin/${id}/approve`, json("POST", { version })),
-  publishLinkedInPost: (id: string) =>
-    apiFetch<PublicationAttempt>(`/linkedin/${id}/publish`, json("POST")),
+  publishLinkedInPost: (id: string, input?: LinkedInPublishInput) =>
+    apiFetch<PublicationAttempt>(`/linkedin/${id}/publish`, json("POST", input)),
 
   /* Connecteur LinkedIn par utilisateur : chacun relie son propre compte. */
   linkedinConnection: () => apiFetch<LinkedInConnection>("/me/linkedin"),
-  startLinkedInConnect: () =>
-    apiFetch<{ authorizationUrl: string }>("/me/linkedin/connect", json("POST")),
-  completeLinkedInConnection: (code: string) =>
-    apiFetch<{ ok: boolean }>("/me/linkedin/complete", json("POST", { code })),
+  startLinkedInConnect: () => apiFetch<LinkedInConnectStart>("/me/linkedin/connect", json("POST")),
+  completeLinkedInConnection: (input: LinkedInConnectComplete) =>
+    apiFetch<{ ok: boolean }>("/me/linkedin/complete", json("POST", input)),
   disconnectLinkedIn: () => apiFetch<{ ok: boolean }>("/me/linkedin/disconnect", json("POST")),
 
   /* Newsletter (WF5) */

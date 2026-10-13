@@ -1,6 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Bell, Building2, ChevronDown, FileText, Lightbulb, Radio, Search } from "lucide-react";
+import {
+  Bell,
+  Building2,
+  ChevronDown,
+  FileText,
+  Lightbulb,
+  LogOut,
+  Radio,
+  Search,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   CommandDialog,
@@ -23,6 +32,7 @@ import { ROLE, formatRelative } from "@/components/kora/labels";
 import { api } from "@/lib/api/client";
 import { qk, useKoraMutation, useMe, useNotifications, useUsers } from "@/lib/api/hooks";
 import type { SearchResult, User } from "@/lib/api/types";
+import { signOut, useAuth } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { HeaderLandscape } from "./Artwork";
 
@@ -228,7 +238,79 @@ function Notifications() {
   );
 }
 
+function UserMenuTrigger({ user }: { user: User | undefined }) {
+  return (
+    <DropdownMenuTrigger asChild>
+      <button
+        type="button"
+        aria-label={user ? `Menu utilisateur : ${user.name}` : "Menu utilisateur"}
+        className="flex items-center gap-2.5 rounded-xl px-1.5 py-1 text-left transition hover:bg-white/80"
+      >
+        {user ? <UserAvatar user={user} /> : <span className="size-9 rounded-full bg-muted" />}
+        <span className="hidden min-w-0 xl:block">
+          <span className="block truncate text-[13px] font-semibold text-kora-ink">
+            {user?.name ?? "…"}
+          </span>
+          <span className="block truncate text-[11px] text-kora-ink-soft">{user?.team ?? ""}</span>
+        </span>
+        <ChevronDown className="size-4 text-kora-ink-soft" />
+      </button>
+    </DropdownMenuTrigger>
+  );
+}
+
+/** Mode supabase : identité du compte connecté et déconnexion. */
+function AccountMenu() {
+  const me = useMe();
+  const auth = useAuth();
+  const [leaving, setLeaving] = useState(false);
+  const user = me.data ?? auth.user ?? undefined;
+  const email = user?.email ?? auth.session?.user.email ?? "";
+  return (
+    <DropdownMenu>
+      <UserMenuTrigger user={user} />
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="flex items-center gap-3">
+          {user && <UserAvatar user={user} className="size-10 ring-0" />}
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-kora-ink">
+              {user?.name ?? email}
+            </span>
+            <span className="block truncate text-xs font-normal text-muted-foreground">
+              {email}
+            </span>
+            {user && (
+              <span className="mt-0.5 block truncate text-[11px] font-normal text-kora-ink-soft">
+                {user.roles.map((r) => ROLE[r]).join(" · ")}
+              </span>
+            )}
+          </span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={leaving}
+          onSelect={(e) => {
+            e.preventDefault();
+            setLeaving(true);
+            void signOut();
+          }}
+          className="gap-2.5"
+        >
+          <LogOut className="size-4" />
+          {leaving ? "Déconnexion…" : "Se déconnecter"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function UserMenu() {
+  const { mode } = useAuth();
+  return mode === "supabase" ? <AccountMenu /> : <DemoUserMenu />;
+}
+
+/** Mode démo : changement de profil sans authentification. */
+function DemoUserMenu() {
   const me = useMe();
   const users = useUsers();
   const switchUser = useKoraMutation((id: string) => api.switchUser(id), {
@@ -237,23 +319,7 @@ function UserMenu() {
   const user = me.data;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-2.5 rounded-xl px-1.5 py-1 text-left transition hover:bg-white/80"
-        >
-          {user ? <UserAvatar user={user} /> : <span className="size-9 rounded-full bg-muted" />}
-          <span className="hidden min-w-0 xl:block">
-            <span className="block truncate text-[13px] font-semibold text-kora-ink">
-              {user?.name ?? "…"}
-            </span>
-            <span className="block truncate text-[11px] text-kora-ink-soft">
-              {user?.team ?? ""}
-            </span>
-          </span>
-          <ChevronDown className="size-4 text-kora-ink-soft" />
-        </button>
-      </DropdownMenuTrigger>
+      <UserMenuTrigger user={user} />
       <DropdownMenuContent align="end" className="w-72">
         {user && (
           <>
