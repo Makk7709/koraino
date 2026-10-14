@@ -128,6 +128,26 @@ function inline(text: string): string {
   return out + plain(text.slice(last));
 }
 
+/**
+ * Jeton propre à l'article, recherché sur WordPress pour reprendre un envoi interrompu. Hors
+ * `[A-Za-z0-9_]`, tout est encodé `%XX` : ni espace ni virgule (la recherche WordPress y coupe
+ * les mots), ni `-` initial (exclusion), ni `--` (kses le réduit dans un commentaire).
+ */
+export function articleToken(articleId: string): string {
+  const safe = [...new TextEncoder().encode(articleId)]
+    .map((b) => {
+      const c = String.fromCharCode(b);
+      return /[A-Za-z0-9_]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
+    })
+    .join("");
+  return `kora:article=${safe}`;
+}
+
+/** Commentaire HTML invisible en fin de contenu ; kses le conserve pour un Contributeur. */
+export function articleMarker(articleId: string): string {
+  return `<!-- ${articleToken(articleId)} -->`;
+}
+
 const LIST_ITEM = /^\s*- (.*)$/;
 
 /**

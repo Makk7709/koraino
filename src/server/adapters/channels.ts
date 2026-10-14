@@ -18,6 +18,8 @@ export interface RemotePost {
   dateGmt: string | null;
   modifiedGmt: string | null;
   link: string | null;
+  /** Contenu brut (`content.raw`, contexte d'édition) ; null s'il n'est pas lisible. */
+  content: string | null;
 }
 
 export interface WordPressAccount {
@@ -62,8 +64,11 @@ export interface WordPressClient {
   whoAmI(): Promise<WordPressAccount>;
   /** null si le contenu n'existe pas (ou plus). */
   getPost(remoteId: string): Promise<RemotePost | null>;
-  /** Brouillons et contenus en attente du compte KORA au titre exactement égal, modifiés depuis `since`. */
-  findOwnDrafts(title: string, since: string): Promise<RemotePost[]>;
+  /**
+   * Brouillons et contenus en attente du compte KORA dont le contenu contient `search`, modifiés
+   * pour la dernière fois entre `since` et `until`. L'appelant vérifie le contenu brut.
+   */
+  findOwnDrafts(search: string, since: string, until: string): Promise<RemotePost[]>;
   createDraft(input: WordPressDraftPayload): Promise<RemotePost>;
   /** `status` : celui lu juste avant (un contenu en attente de relecture y reste). */
   updateDraft(
@@ -99,7 +104,7 @@ const SIMULATED_ACCOUNT: WordPressAccount = {
 
 const SIMULATED_ID = /^wp-\d+$/;
 
-interface SimulatedPost extends RemotePost {
+interface SimulatedPost extends Omit<RemotePost, "content"> {
   input: WordPressDraftPayload | null;
 }
 
@@ -134,17 +139,20 @@ export class SimulatedWordPress implements WordPressClient {
     return post ? this.view(post) : null;
   }
 
-  async findOwnDrafts(title: string, since: string) {
-    const key = textKey(title);
+  async findOwnDrafts(search: string, since: string, until: string) {
     const from = Date.parse(since);
+    const to = Date.parse(until);
     return [...this.posts.values()]
-      .filter(
-        (p) =>
+      .filter((p) => {
+        const at = Date.parse(p.modifiedGmt ?? "");
+        return (
           (p.status === "draft" || p.status === "pending") &&
           p.authorId === SIMULATED_ACCOUNT.id &&
-          textKey(p.title) === key &&
-          Date.parse(p.modifiedGmt ?? "") >= from,
-      )
+          (p.input?.content.includes(search) ?? false) &&
+          at >= from &&
+          at <= to
+        );
+      })
       .map((p) => this.view(p));
   }
 
@@ -231,8 +239,8 @@ export class SimulatedWordPress implements WordPressClient {
     return post;
   }
 
-  private view({ input: _input, ...post }: SimulatedPost): RemotePost {
-    return { ...post };
+  private view({ input, ...post }: SimulatedPost): RemotePost {
+    return { ...post, content: input?.content ?? null };
   }
 }
 

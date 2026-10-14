@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { UNVERIFIED } from "@/server/adapters/text-model";
 import {
+  articleMarker,
+  articleToken,
   decodeEntities,
   htmlToText,
   neutralizeShortcodes,
@@ -90,6 +92,14 @@ describe("toWordPressHtml", () => {
     expect(toWordPressHtml("  ", "Un\r\nDeux\r\n\r\n   \r\n\r\nTrois")).toBe(
       "<p>Un<br>Deux</p>\n<p>Trois</p>",
     );
+  });
+});
+
+describe("marqueur d'article", () => {
+  it("jeton sans espace, virgule, tiret ni accent ; commentaire HTML invisible", () => {
+    expect(articleToken("art_n1042")).toBe("kora:article=art_n1042");
+    expect(articleToken("-a--b c,é")).toBe("kora:article=%2Da%2D%2Db%20c%2C%C3%A9");
+    expect(articleMarker("art_n1042")).toBe("<!-- kora:article=art_n1042 -->");
   });
 });
 

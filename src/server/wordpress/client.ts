@@ -17,7 +17,7 @@ export const WORDPRESS_TIMEOUT_MS = 15_000;
 export const WORDPRESS_USER_AGENT = "KORA-Newsroom/1.0";
 const PER_PAGE = 100;
 const MAX_CATEGORY_PAGES = 50;
-const MAX_DRAFT_PAGES = 5;
+const DRAFT_SEARCH_SIZE = 20;
 const TAG_LOOKUPS_IN_PARALLEL = 5;
 /** Recherche d'étiquette par nom quand le slug calculé ne correspond pas : 3 pages au plus. */
 const MAX_TAG_SEARCH_PAGES = 3;
@@ -54,6 +54,7 @@ const postSchema = z.object({
   date_gmt: z.string().nullable().optional(),
   modified_gmt: z.string().nullable().optional(),
   link: z.string().nullable().optional(),
+  content: rendered.optional(),
 });
 const userSchema = z.object({
   id: z.number().int().positive(),
@@ -111,19 +112,6 @@ function retryDelay(headers: Headers): string {
   const seconds = Number(headers.get("retry-after") ?? "");
   if (!Number.isFinite(seconds) || seconds <= 0) return "plus tard";
   return seconds < 120 ? `dans ${Math.ceil(seconds)} s` : `dans ${Math.ceil(seconds / 60)} min`;
-}
-
-/**
- * Mots du titre utilisables par la recherche WordPress : un mot commençant par « - » serait une
- * exclusion, et `& < > "` sont stockés encodés (comparaison LIKE impossible).
- */
-function searchTerms(title: string): string {
-  return title
-    .split(/\s+/)
-    .map((w) => w.replace(/^-+/, ""))
-    .filter((w) => w.length > 1 && !/[&<>"]/.test(w))
-    .slice(0, 12)
-    .join(" ");
 }
 
 /** Recherche d'étiquette : nom entier, ou son plus long fragment sans caractère encodé. */
@@ -262,29 +250,26 @@ export class RestWordPress implements WordPressClient {
     );
   }
 
-  async findOwnDrafts(title: string, since: string) {
+  async findOwnDrafts(search: string, since: string, until: string) {
     const author = await this.#ownId();
-    const key = textKey(title);
     const from = Date.parse(since);
-    const search = searchTerms(title);
-    const posts = await this.#pages(
-      "/posts",
-      {
-        context: "edit",
-        status: "draft,pending",
-        author: String(author),
-        orderby: "modified",
-        order: "desc",
-        ...(search ? { search } : {}),
-      },
-      MAX_DRAFT_PAGES,
-      (item, status) => this.#post({ status, data: item }, "GET"),
-    );
-    const latest = (p: RemotePost) =>
-      Math.max(Date.parse(p.modifiedGmt ?? "") || 0, Date.parse(p.dateGmt ?? "") || 0);
-    return posts.filter(
-      (p) => p.authorId === author && textKey(p.title) === key && latest(p) >= from,
-    );
+    const to = Date.parse(until);
+    // Jeton unique : quelques résultats au plus (contenus bruts inclus, d'où une seule page courte).
+    const { status, data } = await this.#send("GET", "/posts", {
+      context: "edit",
+      status: "draft,pending",
+      author: String(author),
+      search,
+      orderby: "modified",
+      order: "desc",
+      per_page: String(DRAFT_SEARCH_SIZE),
+      _fields: "id,status,title,author,date_gmt,modified_gmt,link,content",
+    });
+    if (!Array.isArray(data)) throw this.#unreadable("GET /posts", status, "GET");
+    const modified = (p: RemotePost) => Date.parse(p.modifiedGmt ?? p.dateGmt ?? "");
+    return data
+      .map((item) => this.#post({ status, data: item }, "GET"))
+      .filter((p) => p.authorId === author && modified(p) >= from && modified(p) <= to);
   }
 
   async createDraft(input: WordPressDraftPayload) {
@@ -422,6 +407,7 @@ export class RestWordPress implements WordPressClient {
       dateGmt: gmt(p.date_gmt),
       modifiedGmt: gmt(p.modified_gmt),
       link: p.link ?? null,
+      content: typeof p.content === "object" ? (p.content.raw ?? null) : null,
     };
   }
 
@@ -667,7 +653,7 @@ export class UnconfiguredWordPress implements WordPressClient {
   async getPost(_remoteId: string): Promise<RemotePost | null> {
     return this.fail();
   }
-  async findOwnDrafts(_title: string, _since: string): Promise<RemotePost[]> {
+  async findOwnDrafts(_search: string, _since: string, _until: string): Promise<RemotePost[]> {
     return this.fail();
   }
   async createDraft(_input: WordPressDraftPayload): Promise<RemotePost> {

@@ -142,6 +142,12 @@ export interface Settings {
   wordpress?: WordPressSettings;
 }
 
+/**
+ * Tentative stockée. `site` (interne, jamais exposé) : site WordPress visé ; absent avant ce
+ * suivi. Une reprise après interruption n'a lieu que sur ce site.
+ */
+export type PublicationRecord = PublicationAttempt & { site?: string | null };
+
 export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt };
 /** Nom sous lequel `repository.ts` type la collection `users`. */
 export type User = UserRecord;

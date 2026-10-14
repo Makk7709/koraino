@@ -6,10 +6,10 @@ import { checkPublishable, idempotencyKey } from "../domain/workflow";
 import { conflict, HttpError, json, notFound } from "../http";
 import { audit, notify } from "../services/journal";
 import { toPublication } from "../services/view";
-import type { ArticleRecord, WordPressLink } from "../store/records";
+import type { ArticleRecord, PublicationRecord, WordPressLink } from "../store/records";
 import { wordpressSettingsOf } from "../store/settings";
 import { notConfigured, WordPressError } from "./errors";
-import { neutralizeShortcodes, toWordPressHtml } from "./html";
+import { articleMarker, articleToken, neutralizeShortcodes, toWordPressHtml } from "./html";
 import { resolveTaxonomy, type Taxonomy } from "./taxonomy";
 
 /** Doit couvrir l'envoi le plus lent : lectures, puis une écriture de 15 s au plus. */
@@ -18,6 +18,11 @@ const LOCK_TTL_MS = 120_000;
 const WRITE_DEADLINE_MS = 90_000;
 /** Écart toléré entre l'horloge de KORA et celle du site pour retrouver un brouillon interrompu. */
 const RECOVERY_MARGIN_MS = 2 * 60_000;
+/**
+ * Fin de la fenêtre de reprise après l'envoi interrompu : WordPress a pu finir l'écriture après
+ * le délai du client. Un brouillon modifié plus tard (retouché depuis) n'est pas repris.
+ */
+const RECOVERY_WINDOW_MS = 10 * 60_000;
 /** Code de la tentative posée juste avant l'écriture ; s'il subsiste, l'envoi a été interrompu. */
 const CONFIRMATION_PENDING = "wordpress_confirmation_pending";
 
@@ -219,15 +224,42 @@ async function refuse(
 }
 
 /**
+ * Identifiants déjà attribués à un AUTRE article (lien ou tentative) sur ce site ; un identifiant
+ * numérique sans site connu (antérieur à ce suivi) est écarté aussi, par prudence.
+ */
+async function takenRemoteIds(
+  ctx: Ctx,
+  client: WordPressClient,
+  articleId: string,
+  attempts: PublicationRecord[],
+): Promise<Set<string>> {
+  const here = (id: string, site: string | null | undefined) =>
+    client.ownsRemote(id, site) || (!site && /^\d+$/.test(id));
+  const taken = new Set<string>();
+  for (const a of await ctx.repo.articles.list()) {
+    const { remoteId, site } = a.wordpress;
+    if (a.id !== articleId && remoteId && here(remoteId, site)) taken.add(remoteId);
+  }
+  for (const p of attempts) {
+    if (p.articleId !== articleId && p.channel === "wordpress" && p.remoteId && here(p.remoteId, p.site)) {
+      taken.add(p.remoteId);
+    }
+  }
+  return taken;
+}
+
+/**
  * Envois interrompus (tentative restée `verification_requise`) : une mise à jour se renvoie
- * sans risque ; une création est recherchée sur WordPress (titre exact, compte KORA) :
- * un candidat est repris, aucun = absence confirmée, plusieurs = 409 avec la liste.
+ * sans risque ; une création n'est recherchée que sur le site où elle a été envoyée, par le
+ * jeton de l'article, dans la fenêtre qui suit l'envoi. N'est repris qu'un brouillon du compte
+ * KORA dont le contenu brut porte le marqueur de CET article et qu'aucun autre article ne
+ * détient : un seul = repris, aucun = absence confirmée, plusieurs = 409 avec la liste.
  */
 async function recoverInterrupted(
   ctx: Ctx,
   client: WordPressClient,
   rec: ArticleRecord,
-  attempts: PublicationAttempt[],
+  attempts: PublicationRecord[],
   notes: string[],
 ): Promise<RemotePost | null> {
   const pending = attempts.filter(
@@ -243,19 +275,37 @@ async function recoverInterrupted(
     });
   }
   const creations = pending.filter((p) => !p.remoteId);
-  if (!creations.length) return null;
-
-  const found = new Map<string, RemotePost>();
-  for (const marker of creations) {
-    const title = rec.versions.find((v) => v.n === marker.version)?.title ?? rec.title;
-    const since = new Date(Date.parse(marker.at) - RECOVERY_MARGIN_MS).toISOString();
-    for (const post of await client.findOwnDrafts(title, since)) found.set(post.id, post);
+  for (const marker of creations.filter((p) => p.site === undefined || p.site !== client.site)) {
+    const next: PublicationRecord = {
+      ...marker,
+      status: "echec",
+      code: "wordpress_recovery_skipped",
+      message:
+        marker.site === undefined
+          ? "Création interrompue avant le suivi du site WordPress : elle n'est pas recherchée. Vérifiez dans WordPress qu'aucun doublon n'existe."
+          : `Création interrompue sur un autre site WordPress (${marker.site ?? "démonstration"}) : elle n'est pas recherchée sur ce site.`,
+    };
+    await ctx.repo.publications.update(next);
+    await audit(ctx, "publication.failed", "publication", next.id, `${rec.title} — ${next.message}`);
   }
-  const candidates = [...found.values()];
+  const here = creations.filter((p) => p.site !== undefined && p.site === client.site);
+  if (!here.length) return null;
+
+  const sent = here.map((p) => Date.parse(p.at));
+  const since = new Date(Math.min(...sent) - RECOVERY_MARGIN_MS).toISOString();
+  const until = new Date(Math.max(...sent) + RECOVERY_WINDOW_MS).toISOString();
+  const proof = articleMarker(rec.id);
+  const [found, taken] = await Promise.all([
+    client.findOwnDrafts(articleToken(rec.id), since, until),
+    takenRemoteIds(ctx, client, rec.id, attempts),
+  ]);
+  // Contenu brut illisible : rien n'est prouvé, rien n'est repris.
+  const candidates = found.filter((p) => p.content?.includes(proof) && !taken.has(p.id));
+  const unproven = found.length - candidates.length;
   if (candidates.length > 1) {
     throw conflict(
       "publication_verification_required",
-      "Plusieurs brouillons identiques existent sur WordPress : supprimez les doublons puis renvoyez.",
+      "Plusieurs brouillons de cet article existent sur WordPress après des envois interrompus : supprimez les doublons dans WordPress puis renvoyez.",
       {
         candidates: candidates.map((p) => ({
           id: p.id,
@@ -263,14 +313,14 @@ async function recoverInterrupted(
           date: p.dateGmt ?? p.modifiedGmt,
           editUrl: client.editUrl(p.id),
         })),
-        attempt: toPublication(creations.at(-1)!),
+        attempt: toPublication(here.at(-1)!),
       },
     );
   }
 
   const [adopted] = candidates;
-  for (const marker of creations) {
-    const next: PublicationAttempt = adopted
+  for (const marker of here) {
+    const next: PublicationRecord = adopted
       ? {
           ...marker,
           status: "succes",
@@ -282,8 +332,9 @@ async function recoverInterrupted(
           ...marker,
           status: "echec",
           code: "wordpress_absence_confirmed",
-          message:
-            "Aucun brouillon retrouvé sur WordPress après l'interruption : un nouveau brouillon est créé.",
+          message: unproven
+            ? "Aucun brouillon attribuable avec certitude à cet article sur WordPress après l'interruption (contenu illisible ou déjà lié à un autre article) : un nouveau brouillon est créé."
+            : "Aucun brouillon retrouvé sur WordPress après l'interruption : un nouveau brouillon est créé.",
         };
     await ctx.repo.publications.update(next);
     await audit(
@@ -371,7 +422,7 @@ async function existingDraft(
 async function failSend(
   ctx: Ctx,
   rec: ArticleRecord,
-  marker: PublicationAttempt,
+  marker: PublicationRecord,
   update: boolean,
   error: unknown,
 ): Promise<unknown> {
@@ -383,7 +434,7 @@ async function failSend(
     : update
       ? `${reason} Mise à jour non confirmée : vous pouvez renvoyer sans risque de doublon.`
       : `${reason} Aucun brouillon n'a été créé.`;
-  const attempt: PublicationAttempt = {
+  const attempt: PublicationRecord = {
     ...marker,
     status: unknown ? "verification_requise" : "echec",
     code: known?.code ?? "wordpress_internal_error",
@@ -459,14 +510,18 @@ async function sendUnderLock(
   const payload: WordPressDraftPayload = {
     // Titre laissé intact : WordPress n'y exécute pas les shortcodes et l'éditeur afficherait l'entité.
     title: content.title,
-    content: toWordPressHtml(content.chapo, content.body),
+    // Marqueur renvoyé à chaque écriture : il prouve l'appartenance du brouillon lors d'une reprise.
+    content: [toWordPressHtml(content.chapo, content.body), articleMarker(rec.id)]
+      .filter(Boolean)
+      .join("\n"),
     excerpt: neutralizeShortcodes(content.excerpt),
     categories: taxonomy.categories,
     tags: taxonomy.tags,
   };
   // Enregistrée AVANT l'écriture : si le Worker meurt ensuite, le prochain envoi vérifie d'abord.
-  const marker: PublicationAttempt = {
+  const marker: PublicationRecord = {
     ...attemptBase(ctx, rec, version),
+    site: client.site,
     id: ctx.repo.nextId("pub"),
     status: "verification_requise",
     code: CONFIRMATION_PENDING,
@@ -494,7 +549,7 @@ async function sendUnderLock(
       ? ["Mode démonstration : brouillon simulé, aucun site contacté."]
       : []),
   ].join(" ");
-  const attempt: PublicationAttempt = {
+  const attempt: PublicationRecord = {
     ...marker,
     status: "succes",
     code: null,

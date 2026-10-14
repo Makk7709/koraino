@@ -10,7 +10,7 @@ import type {
   NewsletterRecord,
   Notification,
   ObservationRecord,
-  PublicationAttempt,
+  PublicationRecord,
   RuleProposalRecord,
   RuleRecord,
   Settings,
@@ -43,7 +43,7 @@ export interface Repository {
   signals: Collection<SignalRecord>;
   grids: Collection<GridRecord>;
   articles: Collection<ArticleRecord>;
-  publications: Collection<PublicationAttempt>;
+  publications: Collection<PublicationRecord>;
   imports: Collection<ImportRecord>;
   linkedin: Collection<LinkedInPostRecord>;
   newsletters: Collection<NewsletterRecord>;

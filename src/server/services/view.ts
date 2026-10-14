@@ -22,6 +22,7 @@ import type {
   LinkedInPostRecord,
   NewsletterRecord,
   ObservationRecord,
+  PublicationRecord,
   RuleProposalRecord,
   RuleRecord,
   SignalRecord,
@@ -196,7 +197,8 @@ export async function articleDetail(
     observations: observations.filter((o) => wanted.has(o.id)),
     publications: publications
       .filter((p) => p.articleId === rec.id)
-      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+      .map(toPublication),
   };
 }
 
@@ -232,6 +234,8 @@ export function toProposal(rec: RuleProposalRecord): RuleProposal {
   return dto;
 }
 
-export function toPublication(rec: PublicationAttempt): PublicationAttempt {
-  return { ...rec, newsletterId: rec.newsletterId ?? null };
+/** `site` reste interne. */
+export function toPublication(rec: PublicationRecord): PublicationAttempt {
+  const { site: _s, ...dto } = rec;
+  return { ...dto, newsletterId: rec.newsletterId ?? null };
 }

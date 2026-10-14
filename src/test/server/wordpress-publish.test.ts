@@ -7,10 +7,14 @@ import type {
   PublicationAttempt,
 } from "@/lib/api/types";
 import { resetAdapters } from "@/server/adapters";
+import { setClock } from "@/server/clock";
+import { idempotencyKey } from "@/server/domain/workflow";
+import type { PublicationRecord } from "@/server/store/records";
 import type { Repository } from "@/server/store/repository";
-import { call, setup, teardown, USERS } from "./helpers";
+import { call, NOW, setup, teardown, USERS } from "./helpers";
 import {
   jsonResponse,
+  KORA_ACCOUNT,
   OTHER_ACCOUNT,
   useFakeWordPress,
   WP_SITE,
@@ -34,11 +38,13 @@ afterEach(() => {
 type Reply = PublicationAttempt & ApiErrorBody;
 
 const isWrite = (r: Recorded) => r.method === "POST";
+const isDraftSearch = (r: Recorded) =>
+  r.method === "GET" && r.url.pathname.endsWith("/posts") && r.url.searchParams.has("search");
 const editUrl = (id: string | number) => `${WP_SITE}/wp-admin/post.php?post=${id}&action=edit`;
 
-async function approvedArticle(): Promise<ArticleDetail> {
+async function approvedArticle(signalId = "sig_verkor"): Promise<ArticleDetail> {
   const created = await call<ArticleDetail>("POST", "/articles", {
-    body: { signalId: "sig_verkor" },
+    body: { signalId },
     user: EDITOR,
   });
   expect(created.status).toBe(201);
@@ -64,6 +70,14 @@ async function approveNewVersion(id: string, title = "Verkor et Renault : versio
   });
   expect(approved.body.status).toBe("approuve");
   return approved.body;
+}
+
+/** Deux articles distincts (signaux différents) au même titre. */
+async function sameTitlePair() {
+  const a = await approvedArticle();
+  const b = await approvedArticle("sig_wattpark");
+  await approveNewVersion(b.id, a.title);
+  return { a, b };
 }
 
 const publish = (id: string, user: string = VALIDATOR) =>
@@ -181,8 +195,7 @@ describe("envoi d'un brouillon WordPress réel", () => {
     expect(update!.body).toMatchObject({
       title: "Verkor et Renault : version relue",
       status: "draft",
-      content:
-        "<p><strong>Chapô relu.</strong></p>\n<p>Corps relu.</p>\n<ul><li>Point clé</li></ul>",
+      content: `<p><strong>Chapô relu.</strong></p>\n<p>Corps relu.</p>\n<ul><li>Point clé</li></ul>\n<!-- kora:article=${art.id} -->`,
     });
     expect(wp.server.posts.size).toBe(1);
     expect(wp.server.posts.get(100)!.title).toBe("Verkor et Renault : version relue");
@@ -454,13 +467,15 @@ describe("reprise après un envoi interrompu", () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });
     await publish(art.id);
-    const twin = wp.server.addPost({ title: wp.server.posts.get(100)!.title });
+    // Second envoi interrompu du même article : même marqueur.
+    const lost = wp.server.posts.get(100)!;
+    const twin = wp.server.addPost({ title: lost.title, content: lost.content });
 
     const res = await publish(art.id);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("publication_verification_required");
     expect(res.body.error.message).toBe(
-      "Plusieurs brouillons identiques existent sur WordPress : supprimez les doublons puis renvoyez.",
+      "Plusieurs brouillons de cet article existent sur WordPress après des envois interrompus : supprimez les doublons dans WordPress puis renvoyez.",
     );
     const { candidates } = res.body.error.details as {
       candidates: { id: string; title: string; date: string | null; editUrl: string }[];
@@ -477,12 +492,142 @@ describe("reprise après un envoi interrompu", () => {
     expect(wp.server.posts.size).toBe(1);
   });
 
+  it("même titre, autre article envoyé avant l'interruption : son brouillon n'est ni repris ni modifié", async () => {
+    const { a, b } = await sameTitlePair();
+    expect((await publish(b.id)).body.remoteId).toBe("100");
+    const before = { ...wp.server.posts.get(100)! };
+    wp.server.fail(isWrite, "network");
+    expect(errorAttempt(await publish(a.id)).status).toBe("verification_requise");
+
+    const res = await publish(a.id);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ remoteId: "101", version: 1 });
+    expect(res.body.message).toContain("créé (version 1)");
+    expect(wp.server.posts.get(100)).toEqual(before);
+    expect(wp.server.writes().map((r) => r.url.pathname)).not.toContain("/wp-json/wp/v2/posts/100");
+    expect((await detail(a.id)).wordpress.remoteId).toBe("101");
+    expect((await detail(b.id)).wordpress.remoteId).toBe("100");
+    const search = wp.server.requests.find(isDraftSearch)!;
+    expect(search.url.searchParams.get("search")).toBe(`kora:article=${a.id}`);
+  });
+
+  it("même titre, autre article créé après l'interruption : son brouillon n'est pas repris", async () => {
+    const { a, b } = await sameTitlePair();
+    wp.server.fail(isWrite, "network");
+    await publish(a.id);
+    expect((await publish(b.id)).body.remoteId).toBe("100");
+    const before = { ...wp.server.posts.get(100)! };
+
+    const res = await publish(a.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)).toEqual(before);
+    expect((await detail(b.id)).wordpress.remoteId).toBe("100");
+  });
+
+  it("marqueur recopié dans le brouillon d'un autre article : écarté, nouveau brouillon", async () => {
+    const { a, b } = await sameTitlePair();
+    wp.server.fail(isWrite, "network");
+    const lost = await publish(a.id);
+    await publish(b.id);
+    // Contenu de A recopié dans le brouillon de B (éditeur de code de WordPress).
+    wp.server.posts.get(100)!.content += `\n<!-- kora:article=${a.id} -->`;
+
+    const res = await publish(a.id);
+    expect(res.body.remoteId).toBe("101");
+    const marker = (await attemptsOf(a.id)).find((p) => p.id === errorAttempt(lost).id);
+    expect(marker).toMatchObject({ status: "echec", code: "wordpress_absence_confirmed" });
+    expect(marker!.message).toContain("déjà lié à un autre article");
+  });
+
+  it("création interrompue sur un autre site ou sans site connu : close sans recherche", async () => {
+    const art = await approvedArticle();
+    const interrupted = (id: string, site?: string | null): PublicationRecord => ({
+      id,
+      idempotencyKey: idempotencyKey(art.id, 1, "wordpress"),
+      articleId: art.id,
+      linkedinPostId: null,
+      newsletterId: null,
+      channel: "wordpress",
+      version: 1,
+      status: "verification_requise",
+      code: "wordpress_confirmation_pending",
+      message: "Création du brouillon WordPress envoyée, confirmation en attente.",
+      attempts: 1,
+      remoteId: null,
+      mode: "brouillon_distant",
+      at: NOW.toISOString(),
+      by: "Claire Dubois",
+      byUserId: null,
+      ...(site === undefined ? {} : { site }),
+    });
+    await repo.publications.insert(interrupted("pub_preprod", "https://preprod.example.test"));
+    await repo.publications.insert(interrupted("pub_ancien"));
+    // Reprenable s'il était recherché : il ne doit pas l'être.
+    wp.server.addPost({ title: art.title, content: `<p>x</p>\n<!-- kora:article=${art.id} -->` });
+
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.requests.some(isDraftSearch)).toBe(false);
+    const attempts = await call<PublicationAttempt[]>("GET", `/publications?articleId=${art.id}`);
+    expect(attempts.text).not.toMatch(/"site"/);
+    const preprod = attempts.body.find((p) => p.id === "pub_preprod")!;
+    expect(preprod).toMatchObject({ status: "echec", code: "wordpress_recovery_skipped" });
+    expect(preprod.message).toContain("autre site WordPress (https://preprod.example.test)");
+    const legacy = attempts.body.find((p) => p.id === "pub_ancien")!;
+    expect(legacy).toMatchObject({ status: "echec", code: "wordpress_recovery_skipped" });
+    expect(legacy.message).toContain("Vérifiez dans WordPress qu'aucun doublon n'existe.");
+  });
+
+  it("contenu brut illisible : rien n'est repris, nouveau brouillon", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    const lost = await publish(art.id);
+    const post = wp.server.posts.get(100)!;
+    const content = post.content;
+    // Extension qui retire `content.raw` des réponses : seul le rendu reste.
+    wp.server.fail(
+      isDraftSearch,
+      jsonResponse([
+        {
+          id: 100,
+          status: "draft",
+          author: KORA_ACCOUNT,
+          modified_gmt: post.modified_gmt,
+          title: { raw: post.title },
+          content: { rendered: content },
+        },
+      ]),
+    );
+
+    const res = await publish(art.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)!.content).toBe(content);
+    const marker = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(lost).id);
+    expect(marker!.message).toContain("contenu illisible");
+  });
+
+  it("brouillon retouché après la fenêtre de reprise : non repris, la retouche reste", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    await publish(art.id);
+    const later = new Date(NOW.getTime() + 60 * 60_000);
+    setClock(() => later);
+    const post = wp.server.posts.get(100)!;
+    post.content += "\n<p>Retouche de la rédaction</p>";
+    post.modified_gmt = later.toISOString().slice(0, 19);
+
+    const res = await publish(art.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)!.content).toContain("Retouche de la rédaction");
+  });
+
   it("une interruption sur la v1 n'entraîne pas de doublon lors de l'envoi de la v2", async () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });
     await publish(art.id);
-    // La v2 garde le même titre : le brouillon perdu de la v1 est retrouvé et mis à jour.
-    await approveNewVersion(art.id, art.title);
+    // Titre changé : le brouillon perdu de la v1 est retrouvé par le marqueur de l'article.
+    await approveNewVersion(art.id);
     const res = await publish(art.id);
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ remoteId: "100", version: 2 });

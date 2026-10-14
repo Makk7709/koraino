@@ -156,23 +156,27 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(pages.map((r) => r.url.searchParams.get("page"))).toEqual(["1", "2", "3"]);
   });
 
-  it("retrouve ses brouillons par titre exact et date, en excluant ceux des autres", async () => {
+  it("retrouve ses brouillons par jeton, dans la fenêtre de dates, en excluant ceux des autres", async () => {
     const { client, server } = fakeWordPress();
-    const title = "Verkor & Renault : -2 % sur les coûts";
-    const old = new Date(NOW.getTime() - 3_600_000).toISOString().slice(0, 19);
-    const mine = server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts" });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", author: OTHER_ACCOUNT });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts (2)" });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", modified_gmt: old });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", status: "publish" });
-    const since = new Date(NOW.getTime() - 120_000).toISOString();
-    const found = await client.findOwnDrafts(title, since);
+    const token = "kora:article=art_n1";
+    const content = `<p>Texte</p>\n<!-- ${token} -->`;
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000).toISOString();
+    // Dates `*_gmt` de WordPress : sans fuseau.
+    const wpAt = (minutes: number) => at(minutes).slice(0, 19);
+    const mine = server.addPost({ content });
+    server.addPost({ content, author: OTHER_ACCOUNT });
+    server.addPost({ content: "<p>Sans jeton</p>" });
+    server.addPost({ content, modified_gmt: wpAt(-60) });
+    server.addPost({ content, modified_gmt: wpAt(30) });
+    server.addPost({ content, status: "publish" });
+    const found = await client.findOwnDrafts(token, at(-2), at(10));
     expect(found.map((p) => p.id)).toEqual([String(mine.id)]);
+    expect(found[0]!.content).toBe(content);
     const search = server.requests.find((r) => r.url.pathname.endsWith("/posts"))!.url.searchParams;
     expect(search.get("author")).toBe(String(KORA_ACCOUNT));
     expect(search.get("status")).toBe("draft,pending");
-    // « -2 » serait une exclusion pour WordPress et « & » est stocké encodé.
-    expect(search.get("search")).toBe("Verkor Renault sur les coûts");
+    expect(search.get("context")).toBe("edit");
+    expect(search.get("search")).toBe(token);
   });
 
   it("contenu publié : illisible en édition pour un Contributeur, relu en lecture publique", async () => {
