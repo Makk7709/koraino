@@ -9,7 +9,7 @@ import { toPublication } from "../services/view";
 import type { ArticleRecord, WordPressLink } from "../store/records";
 import { wordpressSettingsOf } from "../store/settings";
 import { notConfigured, WordPressError } from "./errors";
-import { toWordPressHtml } from "./html";
+import { neutralizeShortcodes, toWordPressHtml } from "./html";
 import { resolveTaxonomy, type Taxonomy } from "./taxonomy";
 
 /** Doit couvrir l'envoi le plus lent : lectures, puis une écriture de 15 s au plus. */
@@ -457,9 +457,10 @@ async function sendUnderLock(
   notes.push(...taxonomy.notes);
 
   const payload: WordPressDraftPayload = {
+    // Titre laissé intact : WordPress n'y exécute pas les shortcodes et l'éditeur afficherait l'entité.
     title: content.title,
     content: toWordPressHtml(content.chapo, content.body),
-    excerpt: content.excerpt,
+    excerpt: neutralizeShortcodes(content.excerpt),
     categories: taxonomy.categories,
     tags: taxonomy.tags,
   };

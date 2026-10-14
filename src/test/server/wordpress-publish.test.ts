@@ -132,6 +132,29 @@ describe("envoi d'un brouillon WordPress réel", () => {
     expect(audit.body.map((e) => e.action)).toContain("publication.success");
   });
 
+  it("shortcodes neutralisés dans le contenu et l'extrait, titre laissé intact", async () => {
+    const art = await approvedArticle();
+    const edited = await call<ArticleDetail>("POST", `/articles/${art.id}/versions`, {
+      body: {
+        title: "[Exclusif] Verkor",
+        chapo: "[gallery ids=1] Chapô",
+        body: "Corps [À vérifier] [embed]https://exemple.fr/v[/embed]",
+        excerpt: "Extrait [contact-form-7 id=3]",
+      },
+      user: EDITOR,
+    });
+    await call("POST", `/articles/${art.id}/approve`, {
+      body: { channel: "wordpress", version: edited.body.currentVersion },
+      user: VALIDATOR,
+    });
+    expect((await publish(art.id)).status).toBe(201);
+    const body = wp.server.writes()[0]!.body!;
+    expect(body["title"]).toBe("[Exclusif] Verkor");
+    expect(body["excerpt"]).toBe("Extrait &#91;contact-form-7 id=3&#93;");
+    expect(String(body["content"])).not.toMatch(/[[\]]/);
+    expect(String(body["content"])).toContain("<mark>&#91;À vérifier&#93;</mark>");
+  });
+
   it("rejoue sans rappeler WordPress tant que le brouillon est le courant", async () => {
     const art = await approvedArticle();
     const first = await publish(art.id);

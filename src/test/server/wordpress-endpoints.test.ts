@@ -209,12 +209,17 @@ describe("PUT /wordpress/settings", () => {
         Innovation: "",
         "Distinction & prix": "%c3%a9conomie",
         Recherche: null,
+        Brevet: "propriete_intellectuelle",
       },
       defaultCategory: "",
     });
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual({
-      categoryMap: { "Levée de fonds": "financement", "Distinction & prix": "%c3%a9conomie" },
+      categoryMap: {
+        "Levée de fonds": "financement",
+        "Distinction & prix": "%c3%a9conomie",
+        Brevet: "propriete_intellectuelle",
+      },
       defaultCategory: null,
     });
     const status = await call<WordPressStatus>("GET", "/wordpress", { user: READER });
@@ -229,6 +234,7 @@ describe("PUT /wordpress/settings", () => {
     [{ categoryMap: { Innovation: "Innovation" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "%C3%A9conomie" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "a b" } }, "Slug WordPress attendu"],
+    [{ categoryMap: { Innovation: "a.b" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "a".repeat(201) } }, "trop long"],
     [{ categoryMap: {}, defaultCategory: "Défaut" }, "Slug WordPress attendu"],
     [{ categoryMap: [] }, ""],
