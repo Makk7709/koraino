@@ -240,9 +240,20 @@ describe("PUT /wordpress/settings", () => {
     expect(res.body.error.message).toContain(message);
   });
 
-  it("réservé aux administrateurs", async () => {
+  it("réservé aux administrateurs, en-tête anti-CSRF exigé", async () => {
     const res = await saveSettings({ categoryMap: {}, defaultCategory: null }, VALIDATOR);
     expect(res.status).toBe(403);
+    const noCsrf = await call<ApiErrorBody>("PUT", "/wordpress/settings", {
+      body: { categoryMap: { Brevet: "brevets" }, defaultCategory: null },
+      user: ADMIN,
+      csrf: false,
+    });
+    expect(noCsrf.status).toBe(403);
+    expect(noCsrf.body.error.code).toBe("csrf_header_missing");
+    expect((await repo.getSettings()).wordpress).toEqual({
+      categoryMap: {},
+      defaultCategory: null,
+    });
   });
 
   it("appliqué à l'envoi : correspondance, slug inconnu cité, catégorie par défaut", async () => {
