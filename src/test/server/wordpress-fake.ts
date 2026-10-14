@@ -178,9 +178,7 @@ export class FakeWordPressServer {
       const search = (q.get("search") ?? "").toLowerCase();
       const found = slugs
         ? this.tags.filter((t) => slugs.includes(t.slug))
-        : this.tags.filter(
-            (t) => t.name.toLowerCase().includes(search) || t.slug.includes(search),
-          );
+        : this.tags.filter((t) => t.name.toLowerCase().includes(search) || t.slug.includes(search));
       return this.page(
         [...found].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })),
         q,

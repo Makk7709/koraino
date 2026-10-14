@@ -481,7 +481,10 @@ describe("rôle du compte WordPress imposé par le serveur", () => {
     wp.server.me.capabilities["publish_posts"] = true;
     const res = await publish(art.id);
     expect(res.status).toBe(503);
-    expect(res.body.error).toMatchObject({ code: "wordpress_role_too_high", message: ROLE_MESSAGE });
+    expect(res.body.error).toMatchObject({
+      code: "wordpress_role_too_high",
+      message: ROLE_MESSAGE,
+    });
     expect(errorAttempt(res)).toMatchObject({ status: "echec", code: "wordpress_role_too_high" });
     expect(wp.server.writes()).toHaveLength(0);
     expect(wp.server.requests.map((r) => r.url.pathname)).toEqual(["/wp-json/wp/v2/users/me"]);
@@ -778,7 +781,10 @@ describe("reprise après un envoi interrompu", () => {
     expect(first.body.error.message).not.toContain("Aucun brouillon n'a été créé");
     expect(first.body.error.message).toContain("Le brouillon n° 100 est lié à l'article");
     expect(errorAttempt(first)).toMatchObject({ status: "verification_requise", remoteId: "100" });
-    expect((await detail(art.id)).wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+    expect((await detail(art.id)).wordpress).toMatchObject({
+      remoteId: "100",
+      status: "brouillon",
+    });
 
     // Statut toujours inconnu : relu, refusé, rien n'est écrit.
     const blocked = await publish(art.id);
@@ -859,7 +865,10 @@ describe("reprise après un envoi interrompu", () => {
     expect(res.status).toBe(201);
     expect(res.body.remoteId).toBe("100");
     expect(wp.server.posts.size).toBe(1);
-    expect((await detail(art.id)).wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+    expect((await detail(art.id)).wordpress).toMatchObject({
+      remoteId: "100",
+      status: "brouillon",
+    });
   });
 
   it("une interruption sur la v1 n'entraîne pas de doublon lors de l'envoi de la v2", async () => {

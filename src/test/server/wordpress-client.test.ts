@@ -211,7 +211,9 @@ describe("RestWordPress : requêtes envoyées", () => {
     server.fail(() => true, jsonResponse({ code: "rest_no_route", message: "Aucune route." }, 404));
     const filtered = await failure(client.getPost(id));
     expect(filtered.code).toBe("wordpress_invalid");
-    expect(filtered.message).toContain("sans indiquer qu'il a été supprimé (HTTP 404 rest_no_route)");
+    expect(filtered.message).toContain(
+      "sans indiquer qu'il a été supprimé (HTTP 404 rest_no_route)",
+    );
     server.fail(() => true, new Response("", { status: 404 }));
     expect((await failure(client.getPost(id))).code).toBe("wordpress_invalid");
     server.fail(() => true, jsonResponse({ code: "rest_gone" }, 410));
@@ -224,7 +226,11 @@ describe("RestWordPress : requêtes envoyées", () => {
     const { client, server } = fakeWordPress();
     server.createStatus = "pitch";
     const custom = await failure(client.createDraft(draft));
-    expect(custom).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: true, remoteId: "100" });
+    expect(custom).toMatchObject({
+      code: "wordpress_invalid",
+      verifyBeforeRetry: true,
+      remoteId: "100",
+    });
     expect(custom.message).toContain("a enregistré le contenu n° 100 avec un statut inattendu");
     // En lecture, rien n'a été écrit : ni identifiant ni vérification.
     const read = await failure(client.getPost("100"));
@@ -413,7 +419,8 @@ describe("RestWordPress : secret", () => {
       `${prefix}${"x".repeat(limit - 12 - prefix.length)}${secret} fin`;
     // Partie du jeton Basic qui encode le mot de passe (« kora-redaction: » = 20 caractères base64).
     const tokenSecret = WP_TOKEN.slice(20);
-    const fragments = (s: string) => Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
+    const fragments = (s: string) =>
+      Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
     const forbidden = [...fragments(WP_PASSWORD_COMPACT), ...fragments(tokenSecret)];
     const faults = [
       jsonResponse({ code: "x", message: straddle(WP_PASSWORD_COMPACT, 200) }, 400),

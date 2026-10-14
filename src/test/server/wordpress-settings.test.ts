@@ -65,7 +65,10 @@ class FakeTables {
           maybeSingle: async () => {
             this.log.push("records.select");
             const found = this.record(filters["collection"]!, filters["id"]!);
-            return { data: found === undefined ? null : { data: structuredClone(found) }, error: null };
+            return {
+              data: found === undefined ? null : { data: structuredClone(found) },
+              error: null,
+            };
           },
         };
         return query;
@@ -143,16 +146,19 @@ const saveMapping = (body: unknown) =>
   call<WordPressStatus & ApiErrorBody>("PUT", "/wordpress/settings", { body, user: USERS.admin });
 
 describe("Correspondance des catégories WordPress hors des réglages partagés (mémoire)", () => {
-  it.each(malformed)("ancien emplacement lu avec tolérance : %s", async (_label, value, expected) => {
-    await repo.saveSettings(withWordPress(value));
-    expect(await repo.getWordPressSettings()).toEqual(expected);
-    const settings = await repo.getSettings();
-    expect(settings.wordpress).toBeUndefined();
-    expect(settings.quotaLimits).toEqual(legacy.quotaLimits);
-    const status = await call<WordPressStatus>("GET", "/wordpress", { user: USERS.lecteur });
-    expect(status.status).toBe(200);
-    expect(status.body.settings).toEqual(expected);
-  });
+  it.each(malformed)(
+    "ancien emplacement lu avec tolérance : %s",
+    async (_label, value, expected) => {
+      await repo.saveSettings(withWordPress(value));
+      expect(await repo.getWordPressSettings()).toEqual(expected);
+      const settings = await repo.getSettings();
+      expect(settings.wordpress).toBeUndefined();
+      expect(settings.quotaLimits).toEqual(legacy.quotaLimits);
+      const status = await call<WordPressStatus>("GET", "/wordpress", { user: USERS.lecteur });
+      expect(status.status).toBe(200);
+      expect(status.body.settings).toEqual(expected);
+    },
+  );
 
   it("l'enregistrement de la correspondance ne réécrit pas les réglages partagés", async () => {
     await repo.saveSettings({ ...withWordPress(undefined), reservedEur: 1.5 });
@@ -252,7 +258,9 @@ describe("Correspondance des catégories WordPress hors des réglages partagés 
     tables.settings = withWordPress(OLD);
     const current = await db.getSettings();
     tables.insertError = { code: "57014", message: "canceling statement due to statement timeout" };
-    await expect(db.saveSettings({ ...current, reservedEur: 1 })).rejects.toThrow("statement timeout");
+    await expect(db.saveSettings({ ...current, reservedEur: 1 })).rejects.toThrow(
+      "statement timeout",
+    );
     expect(tables.settings).toEqual(withWordPress(OLD));
     tables.insertError = null;
     expect(await db.getWordPressSettings()).toEqual(OLD);

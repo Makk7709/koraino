@@ -140,7 +140,11 @@ function wordpressSlug(name: string): string {
 }
 
 /** Réponse 2xx inexploitable : après un envoi, WordPress a peut-être enregistré le contenu. */
-function unreadable(status: number, method: "GET" | "POST", remoteId: string | null = null): WordPressError {
+function unreadable(
+  status: number,
+  method: "GET" | "POST",
+  remoteId: string | null = null,
+): WordPressError {
   return new WordPressError(
     "wordpress_invalid",
     method === "POST"
@@ -265,7 +269,9 @@ export class RestWordPress implements WordPressClient {
     if (reply.status !== 404) return false;
     const code = errorSchema.safeParse(reply.data).data?.code ?? "";
     if (code === "rest_post_invalid_id") return true;
-    this.#log(`[wordpress] GET /posts/${remoteId} → HTTP 404 ${this.#excerpt(code, 60) || "sans code"}`);
+    this.#log(
+      `[wordpress] GET /posts/${remoteId} → HTTP 404 ${this.#excerpt(code, 60) || "sans code"}`,
+    );
     throw new WordPressError(
       "wordpress_invalid",
       `WordPress répond « introuvable » pour le contenu n° ${remoteId} sans indiquer qu'il a été supprimé (HTTP 404${code ? ` ${this.#excerpt(code, 60)}` : ""}) : API REST filtrée ou indisponible ? Réessayez plus tard.`,
@@ -410,7 +416,9 @@ export class RestWordPress implements WordPressClient {
     const parsed = postSchema.safeParse(reply.data);
     if (!parsed.success) {
       const id = write ? idOf(reply.data) : null;
-      this.#log(`[wordpress] ${method} /posts → HTTP ${reply.status} : forme de réponse inattendue`);
+      this.#log(
+        `[wordpress] ${method} /posts → HTTP ${reply.status} : forme de réponse inattendue`,
+      );
       throw unreadable(reply.status, method, id);
     }
     const p = parsed.data;

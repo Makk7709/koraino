@@ -120,7 +120,12 @@ export function effectiveLink(
   }
   if (!last?.remoteId || last.remoteId === link.remoteId) return link;
   if (link.remoteId && Date.parse(link.lastSyncAt ?? "") >= Date.parse(last.at)) return link;
-  return { remoteId: last.remoteId, site: last.site ?? null, status: "brouillon", lastSyncAt: last.at };
+  return {
+    remoteId: last.remoteId,
+    site: last.site ?? null,
+    status: "brouillon",
+    lastSyncAt: last.at,
+  };
 }
 
 /** Succès rejouable : même clé, et son brouillon est toujours le brouillon courant de l'article. */
@@ -363,7 +368,12 @@ async function takenRemoteIds(
     if (a.id !== articleId && remoteId && here(remoteId, site)) taken.add(remoteId);
   }
   for (const p of attempts) {
-    if (p.articleId !== articleId && p.channel === "wordpress" && p.remoteId && here(p.remoteId, p.site)) {
+    if (
+      p.articleId !== articleId &&
+      p.channel === "wordpress" &&
+      p.remoteId &&
+      here(p.remoteId, p.site)
+    ) {
       taken.add(p.remoteId);
     }
   }
@@ -409,7 +419,13 @@ async function recoverInterrupted(
           : `Création interrompue sur un autre site WordPress (${marker.site ?? "démonstration"}) : elle n'est pas recherchée sur ce site.`,
     };
     await ctx.repo.publications.update(next);
-    await audit(ctx, "publication.failed", "publication", next.id, `${rec.title} — ${next.message}`);
+    await audit(
+      ctx,
+      "publication.failed",
+      "publication",
+      next.id,
+      `${rec.title} — ${next.message}`,
+    );
   }
   const here = creations.filter((p) => p.site !== undefined && p.site === client.site);
   if (!here.length) return null;
@@ -596,7 +612,12 @@ async function failSend(
     await settleArticle(
       ctx,
       rec.id,
-      { remoteId: created, site: client.site, status: "brouillon", lastSyncAt: ctx.now.toISOString() },
+      {
+        remoteId: created,
+        site: client.site,
+        status: "brouillon",
+        lastSyncAt: ctx.now.toISOString(),
+      },
       null,
     );
   }
@@ -697,7 +718,11 @@ async function sendUnderLock(
   let post: RemotePost;
   try {
     post = target
-      ? await client.updateDraft(target.id, payload, target.status === "pending" ? "pending" : "draft")
+      ? await client.updateDraft(
+          target.id,
+          payload,
+          target.status === "pending" ? "pending" : "draft",
+        )
       : await client.createDraft(payload);
   } catch (e) {
     throw await failSend(ctx, client, rec, marker, target !== null, e);
@@ -748,7 +773,5 @@ export async function publishWordPress(
     const attempts = await ctx.repo.publications.list();
     throw await refuse(ctx, rec, version, await configurationError(client), attempts);
   }
-  return withArticleLock(ctx, rec.id, () =>
-    sendUnderLock(ctx, client, rec.id, version, options),
-  );
+  return withArticleLock(ctx, rec.id, () => sendUnderLock(ctx, client, rec.id, version, options));
 }

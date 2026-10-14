@@ -79,9 +79,7 @@ describe("toWordPressHtml", () => {
     const body = "Voir [embed]https://exemple.fr/v[/embed] et https://exemple.fr/p?a[]=1&b=[x]";
     const html = toWordPressHtml(chapo, body);
     expect(html).not.toMatch(/[[\]]/);
-    expect(html).toContain(
-      '<a href="https://exemple.fr/p?a&#91;&#93;=1&amp;b=&#91;x&#93;">',
-    );
+    expect(html).toContain('<a href="https://exemple.fr/p?a&#91;&#93;=1&amp;b=&#91;x&#93;">');
     expect(decodeEntities(html.replace(/<[^>]*>/g, ""))).toBe(`${chapo}\n${body}`);
     expect(neutralizeShortcodes("[caption]Légende[/caption]")).toBe(
       "&#91;caption&#93;Légende&#91;/caption&#93;",
