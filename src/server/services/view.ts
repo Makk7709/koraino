@@ -12,6 +12,8 @@ import type {
   SignalDetail,
   Source,
 } from "@/lib/api/types";
+import { adapters } from "../adapters";
+import type { WordPressClient } from "../adapters/channels";
 import { computeEvidence } from "../domain/evidence";
 import type {
   ArticleRecord,
@@ -153,9 +155,25 @@ export async function signalDetail(
 /* Studio                                                              */
 /* ------------------------------------------------------------------ */
 
-export function toArticle(rec: ArticleRecord): Article {
-  const { versions: _v, publishedAt: _p, createdBy: _c, ...dto } = rec;
-  return dto;
+/** `wordpress.site` reste interne ; le lien d'édition n'existe que pour un contenu du site configuré. */
+export function toArticle(
+  rec: ArticleRecord,
+  wordpress: WordPressClient = adapters().wordpress,
+): Article {
+  const { versions: _v, publishedAt: _p, createdBy: _c, wordpress: link, ...dto } = rec;
+  const editUrl =
+    link.remoteId && wordpress.ownsRemote(link.remoteId, link.site)
+      ? wordpress.editUrl(link.remoteId)
+      : null;
+  return {
+    ...dto,
+    wordpress: {
+      remoteId: link.remoteId,
+      status: link.status,
+      lastSyncAt: link.lastSyncAt,
+      editUrl,
+    },
+  };
 }
 
 export async function articleDetail(

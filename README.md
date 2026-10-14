@@ -80,7 +80,12 @@ Les variables publiques sont dans `.env` (versionné). Les secrets sont lus côt
 | `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY` | Accès à la passerelle de connexion LinkedIn (OAuth et publication au nom de l'utilisateur). **Secrets.** |
 | `APP_USER_CONNECTION_KEY_SECRET` | Chiffrement des connexions LinkedIn stockées en base. **Secret, à ne jamais changer** : les connexions existantes deviendraient illisibles. |
 | `AI_API_KEY` | Facultative. Clé OpenAI pour réécrire les textes générés. **Secret.** |
+| `WORDPRESS_URL` | Adresse du site WordPress (`https://`, avec le sous-dossier d'installation éventuel). Les brouillons y sont envoyés par l'API REST. |
+| `WORDPRESS_USERNAME` | Identifiant du compte WordPress dédié à KORA, de rôle **Contributeur** : il crée des brouillons et ne peut rien publier. |
+| `WORDPRESS_APP_PASSWORD` | Mot de passe d'application de ce compte (Profil > Mots de passe d'application), pas son mot de passe de connexion. **Secret.** |
 | `LOVABLE_DB_MIGRATION_URL` | Connexion utilisée pour appliquer les migrations de `drizzle/migrations/`. |
+
+Sans les trois variables `WORDPRESS_*`, l'envoi vers WordPress répond « WordPress n'est pas configuré » en production. En mode démonstration et sous Vitest, il reste simulé : aucun site n'est contacté. L'état de la configuration et la correspondance des catégories se règlent dans Paramètres > WordPress.
 
 ## Organisation du code
 
@@ -92,6 +97,7 @@ src/
 ├── server/          API métier : routeur, handlers, services, domaine, dépôt de données, adaptateurs
 │   ├── auth/        Sessions, comptes et invitations
 │   ├── linkedin/    Connexion et publication LinkedIn
+│   ├── wordpress/   Client REST WordPress, configuration et envoi des brouillons
 │   └── store/       Dépôt en base (production) et en mémoire (tests, démonstration)
 ├── integrations/    Clients Supabase et passerelle de connexion
 └── test/            Tests Vitest
