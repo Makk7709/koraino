@@ -60,12 +60,27 @@ export function remoteToLocal(post: RemotePost | null): WordPressRemoteStatus {
   }
 }
 
+/** Lien après une lecture : `settleArticle` conserve la date du dernier envoi de KORA. */
 const linkTo = (client: WordPressClient, post: RemotePost, at: string): WordPressLink => ({
   remoteId: post.id,
   site: client.site,
   status: remoteToLocal(post),
   lastSyncAt: at,
 });
+
+/** Lien après une écriture de KORA (ou la reprise de sa création) : date de référence de W-03. */
+const sentLink = (client: WordPressClient, post: RemotePost, at: string): WordPressLink => ({
+  ...linkTo(client, post, at),
+  sentModifiedGmt: post.modifiedGmt,
+});
+
+export interface PublishOptions {
+  /** Remplacer les retouches faites dans WordPress depuis le dernier envoi (confirmé par l'utilisateur). */
+  overwriteRemoteChanges: boolean;
+}
+
+const REMOTE_MODIFIED =
+  "Le brouillon a été modifié dans WordPress depuis le dernier envoi de KORA. Reprenez ces retouches dans KORA, ou confirmez l'écrasement.";
 
 /**
  * Identifiant produit par CE site (jamais un identifiant simulé ni celui d'un autre site,
@@ -96,7 +111,8 @@ export function replayableSuccess(
 
 /**
  * Règlement : relit l'article et n'écrit que le lien WordPress, sans écraser les changements
- * concurrents (approbations, versions). Publié côté WordPress : l'article passe `publie`.
+ * concurrents (approbations, versions). Publié côté WordPress : l'article passe `publie`. Un
+ * lien sans `sentModifiedGmt` (simple lecture) garde celui du même brouillon.
  */
 export async function settleArticle(
   ctx: Ctx,
@@ -107,7 +123,16 @@ export async function settleArticle(
   const current = await ctx.repo.articles.get(articleId);
   if (!current) return null;
   const at = ctx.now.toISOString();
-  const next: ArticleRecord = { ...current, wordpress: link, updatedAt: at };
+  const sent =
+    current.wordpress.remoteId === link.remoteId ? current.wordpress.sentModifiedGmt : undefined;
+  const next: ArticleRecord = {
+    ...current,
+    wordpress:
+      link.sentModifiedGmt === undefined && sent !== undefined
+        ? { ...link, sentModifiedGmt: sent }
+        : link,
+    updatedAt: at,
+  };
   if (link.status === "publie") {
     next.status = "publie";
     next.publishedAt = post?.dateGmt ?? current.publishedAt ?? at;
@@ -240,7 +265,9 @@ async function refuse(
     attempt.id,
     `${rec.title} — ${error.message}`,
   );
+  const details = typeof error.details === "object" && error.details ? error.details : {};
   return new HttpError(error.status, error.code, error.message, {
+    ...details,
     attempt: toPublication(attempt),
   });
 }
@@ -368,7 +395,7 @@ async function recoverInterrupted(
     );
   }
   if (!adopted) return null;
-  await settleArticle(ctx, rec.id, linkTo(client, adopted, ctx.now.toISOString()), adopted);
+  await settleArticle(ctx, rec.id, sentLink(client, adopted, ctx.now.toISOString()), adopted);
   notes.push(`Brouillon retrouvé après une interruption (n° ${adopted.id}).`);
   return adopted;
 }
@@ -384,6 +411,7 @@ async function existingDraft(
   rec: ArticleRecord,
   attempts: PublicationAttempt[],
   notes: string[],
+  options: PublishOptions,
 ): Promise<RemotePost | null> {
   const link = rec.wordpress;
   const id = link.remoteId;
@@ -433,6 +461,26 @@ async function existingDraft(
     );
     return null;
   }
+  // Lien antérieur à ce suivi (aucune date mémorisée) : pas de comparaison possible, pas de blocage.
+  const sent = Date.parse(link.sentModifiedGmt ?? "");
+  const remote = Date.parse(post.modifiedGmt ?? "");
+  if (!Number.isNaN(sent) && !Number.isNaN(remote) && remote !== sent) {
+    if (!options.overwriteRemoteChanges) {
+      throw await refuse(
+        ctx,
+        rec,
+        rec.currentVersion,
+        conflict("wordpress_remote_modified", REMOTE_MODIFIED, {
+          editUrl: client.editUrl(id),
+          remoteModifiedAt: post.modifiedGmt,
+        }),
+        attempts,
+      );
+    }
+    notes.push(
+      `Les retouches faites dans WordPress sur le brouillon n° ${id} ont été remplacées (écrasement confirmé).`,
+    );
+  }
   return post;
 }
 
@@ -480,6 +528,7 @@ async function sendUnderLock(
   client: WordPressClient,
   articleId: string,
   version: number,
+  options: PublishOptions,
 ): Promise<Response> {
   const started = Date.now();
   const [rec, attempts, stored] = await Promise.all([
@@ -516,7 +565,7 @@ async function sendUnderLock(
     const me = await contributorAccount(client);
     target =
       (await recoverInterrupted(ctx, client, rec, attempts, notes)) ??
-      (await existingDraft(ctx, client, me, rec, attempts, notes));
+      (await existingDraft(ctx, client, me, rec, attempts, notes, options));
     taxonomy = await resolveTaxonomy(client, content, wordpressSettingsOf(stored), target !== null);
     if (Date.now() - started > WRITE_DEADLINE_MS) {
       throw new WordPressError(
@@ -580,7 +629,7 @@ async function sendUnderLock(
     message,
   };
   await ctx.repo.publications.update(attempt);
-  await settleArticle(ctx, rec.id, linkTo(client, post, at), post);
+  await settleArticle(ctx, rec.id, sentLink(client, post, at), post);
   await settleSignal(ctx, rec.signalId, at);
   await audit(ctx, "publication.success", "publication", attempt.id, `${rec.title} — ${message}`);
   await notify(ctx.repo, ctx.now, {
@@ -594,14 +643,21 @@ async function sendUnderLock(
 
 /**
  * Envoi d'un brouillon WordPress pour la version courante (approbation déjà contrôlée par
- * l'appelant). Statut toujours `draft` : la mise en ligne reste humaine, dans WordPress.
+ * l'appelant). Statut toujours `draft` (ou `pending` conservé) : la mise en ligne reste humaine,
+ * dans WordPress.
  */
-export async function publishWordPress(ctx: Ctx, rec: ArticleRecord): Promise<Response> {
+export async function publishWordPress(
+  ctx: Ctx,
+  rec: ArticleRecord,
+  options: PublishOptions = { overwriteRemoteChanges: false },
+): Promise<Response> {
   const client = adapters().wordpress;
   const version = rec.currentVersion;
   if (client.mode === "non_configure") {
     const attempts = await ctx.repo.publications.list();
     throw await refuse(ctx, rec, version, await configurationError(client), attempts);
   }
-  return withArticleLock(ctx, rec.id, () => sendUnderLock(ctx, client, rec.id, version));
+  return withArticleLock(ctx, rec.id, () =>
+    sendUnderLock(ctx, client, rec.id, version, options),
+  );
 }

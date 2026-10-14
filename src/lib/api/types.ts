@@ -744,6 +744,11 @@ export interface ApproveInput {
 
 export interface PublishInput {
   channel: Channel;
+  /**
+   * WordPress seulement : remplacer un brouillon modifié dans WordPress depuis le dernier envoi
+   * (après un refus 409 `wordpress_remote_modified`). Sans effet pour les autres canaux.
+   */
+  overwriteRemoteChanges?: boolean;
 }
 
 /** Corps optionnel de POST /linkedin/:id/publish : verdict humain sur une publication non confirmée. */

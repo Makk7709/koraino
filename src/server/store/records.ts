@@ -71,6 +71,12 @@ export interface WordPressLink {
    * simulé ou antérieur à l'intégration réelle.
    */
   site?: string | null;
+  /**
+   * `modified_gmt` renvoyé par WordPress après le dernier ENVOI de KORA (interne, jamais exposé) ;
+   * absent pour un lien antérieur à ce suivi. Une actualisation ne le change pas : sinon une
+   * retouche faite dans WordPress serait « blanchie » et le renvoi suivant l'écraserait sans alerte.
+   */
+  sentModifiedGmt?: string | null;
 }
 
 export type ArticleRecord = Omit<Article, "wordpress"> & {

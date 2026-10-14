@@ -400,6 +400,76 @@ describe("envoi d'un brouillon WordPress réel", () => {
   });
 });
 
+describe("retouches faites dans WordPress depuis le dernier envoi", () => {
+  const REMOTE_MODIFIED =
+    "Le brouillon a été modifié dans WordPress depuis le dernier envoi de KORA. Reprenez ces retouches dans KORA, ou confirmez l'écrasement.";
+  const later = (minutes: number) =>
+    new Date(NOW.getTime() + minutes * 60_000).toISOString().slice(0, 19);
+  const retouch = (minutes = 5) =>
+    Object.assign(wp.server.posts.get(100)!, {
+      content: "<p>Texte retravaillé par la rédaction dans WordPress</p>",
+      modified_gmt: later(minutes),
+    });
+  const overwrite = (id: string, value: unknown = true) =>
+    call<Reply>("POST", `/articles/${id}/publish`, {
+      body: { channel: "wordpress", overwriteRemoteChanges: value },
+      user: VALIDATOR,
+    });
+
+  it("409 wordpress_remote_modified, rien n'est écrit ; l'écrasement confirmé passe", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    retouch();
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({
+      code: "wordpress_remote_modified",
+      message: REMOTE_MODIFIED,
+      details: { editUrl: editUrl(100), remoteModifiedAt: `${later(5)}.000Z` },
+    });
+    expect(errorAttempt(res)).toMatchObject({ status: "echec", code: "wordpress_remote_modified" });
+    expect(wp.server.writes()).toHaveLength(1);
+    expect(wp.server.posts.get(100)!.content).toContain("retravaillé");
+
+    expect((await overwrite(art.id, "oui")).status).toBe(400);
+    const confirmed = await overwrite(art.id);
+    expect(confirmed.status).toBe(201);
+    expect(confirmed.body.message).toContain("ont été remplacées (écrasement confirmé)");
+    expect(wp.server.posts.get(100)!.content).toContain("Chapô relu.");
+
+    // La date de référence suit l'écriture de KORA : la version suivante passe sans refus.
+    await approveNewVersion(art.id, "Verkor et Renault : troisième version");
+    expect((await publish(art.id)).status).toBe(201);
+  });
+
+  it("une actualisation ne blanchit pas une retouche : le renvoi reste refusé", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    retouch();
+    const refreshed = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.text).not.toContain("sentModifiedGmt");
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("wordpress_remote_modified");
+  });
+
+  it("lien antérieur à ce suivi (aucune date mémorisée) : pas de blocage", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const rec = (await repo.articles.get(art.id))!;
+    const { sentModifiedGmt: _sent, ...legacy } = rec.wordpress;
+    await repo.articles.update({ ...rec, wordpress: legacy });
+    retouch();
+    await approveNewVersion(art.id);
+    expect((await publish(art.id)).status).toBe(201);
+  });
+});
+
 describe("rôle du compte WordPress imposé par le serveur", () => {
   const ROLE_MESSAGE =
     "Le compte WordPress utilisé par KORA peut publier : par sécurité, KORA exige un compte de rôle Contributeur. Un administrateur doit changer le rôle du compte dans WordPress.";

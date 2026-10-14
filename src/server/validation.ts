@@ -148,7 +148,10 @@ export const schemas = {
   reject: z.object({
     reason: z.string().trim().min(3, "Le motif de rejet est obligatoire").max(1000),
   }),
-  publish: z.object({ channel: z.enum(CHANNELS) }),
+  publish: z.object({
+    channel: z.enum(CHANNELS),
+    overwriteRemoteChanges: z.boolean().optional(),
+  }),
   factCheck: z.object({
     status: z.enum(["etaye", "non_corrobore"]),
     note: z.string().trim().max(1000).nullable().optional(),
