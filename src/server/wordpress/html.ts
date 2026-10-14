@@ -146,10 +146,11 @@ export function toWordPressHtml(chapo: string, body: string): string {
     for (const raw of block.split("\n")) {
       const line = raw.trim();
       if (!line) continue;
-      const item = LIST_ITEM.exec(raw);
+      const item = LIST_ITEM.exec(raw)?.[1]?.trim();
+      if (item === "") continue;
       if (item) {
         flushParagraph();
-        if (item[1]!.trim()) items.push(item[1]!.trim());
+        items.push(item);
       } else {
         flushList();
         paragraph.push(line);

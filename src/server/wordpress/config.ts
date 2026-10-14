@@ -1,4 +1,3 @@
-import type { WordPressMode } from "@/lib/api/types";
 import { usesDatabase } from "../database";
 
 export const WORDPRESS_VARIABLES = [
@@ -67,13 +66,4 @@ export function readWordPressConfig(): WordPressConfig {
     missing: [],
     invalidUrl: false,
   };
-}
-
-export function wordpressMode(): WordPressMode {
-  return readWordPressConfig().mode;
-}
-
-/** Site configuré en mode réel, sinon null. */
-export function wordpressSite(): string | null {
-  return readWordPressConfig().credentials?.site ?? null;
 }
