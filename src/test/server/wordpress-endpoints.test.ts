@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ApiErrorBody,
+  Article,
   ArticleDetail,
   AuditEvent,
   Dashboard,
@@ -412,6 +413,44 @@ describe("POST /articles/:id/wordpress/refresh", () => {
     }
     expect(wp.server.requests).toHaveLength(0);
     expect((await refresh("art_inconnu")).status).toBe(404);
+  });
+
+  it("mode réel : lien d'édition nul exactement quand l'actualisation est refusée", async () => {
+    const own = await publishedDraft();
+    await publish(own.id);
+    const unlinked = (await repo.articles.list()).filter((a) => a.wordpress.remoteId === null);
+    expect(unlinked.length).toBeGreaterThanOrEqual(2);
+    for (const [rec, site] of [
+      [unlinked[0]!, "https://preprod.example.test"],
+      [unlinked[1]!, undefined],
+    ] as const) {
+      await repo.articles.update({
+        ...rec,
+        wordpress: {
+          remoteId: "100",
+          ...(site ? { site } : {}),
+          status: "brouillon",
+          lastSyncAt: rec.updatedAt,
+        },
+      });
+    }
+
+    const list = await call<Article[]>("GET", "/articles", { user: VALIDATOR });
+    const linked = list.body.filter((a) => a.wordpress.remoteId !== null);
+    expect(linked.some((a) => a.wordpress.remoteId!.startsWith("wp-"))).toBe(true);
+    for (const article of linked) {
+      const calls = wp.server.requests.length;
+      const res = await refresh(article.id);
+      if (article.id === own.id) {
+        expect(article.wordpress.editUrl).toBe(`${WP_SITE}/wp-admin/post.php?post=100&action=edit`);
+        expect(res.status).toBe(200);
+      } else {
+        expect(article.wordpress.editUrl).toBeNull();
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe("wordpress_no_draft");
+        expect(wp.server.requests).toHaveLength(calls);
+      }
+    }
   });
 
   it("erreur du site : 502, article inchangé", async () => {
