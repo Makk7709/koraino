@@ -2,6 +2,7 @@ import { now } from "../clock";
 import { usesDatabase } from "../database";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
+import { normalizeSettings } from "./settings";
 import { DbRepository } from "./db";
 import { buildSeed, type SeedData } from "./seed";
 
@@ -86,7 +87,7 @@ export class MemoryRepository implements Repository {
   }
 
   async getSettings() {
-    return structuredClone(this.settings);
+    return normalizeSettings(structuredClone(this.settings));
   }
 
   async saveSettings(settings: Settings) {

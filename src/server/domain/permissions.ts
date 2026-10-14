@@ -16,7 +16,8 @@ export type Action =
   | "newsletter.decide"
   | "grid.write"
   | "rule.write"
-  | "users.manage";
+  | "users.manage"
+  | "wordpress.manage";
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: "Administrateur",
@@ -89,6 +90,10 @@ const MATRIX: Record<Action, { roles: Role[]; message: string }> = {
   "users.manage": {
     roles: ADMINS,
     message: "La gestion des utilisateurs et de leurs rôles est réservée aux administrateurs.",
+  },
+  "wordpress.manage": {
+    roles: ADMINS,
+    message: "La configuration WordPress est réservée aux administrateurs.",
   },
 };
 

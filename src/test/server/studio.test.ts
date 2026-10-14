@@ -217,7 +217,9 @@ describe("approbation et publication", () => {
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ remoteId: "wp-4821", version: 2, mode: "brouillon_distant" });
     expect(res.body.message).toContain("mis à jour");
-    expect(res.body.message).toContain("Aucune publication publique");
+    expect(res.body.message).toContain(
+      "Aucune publication : la mise en ligne se fait dans WordPress.",
+    );
   });
 
   it("rejette avec motif et la restauration crée une nouvelle version", async () => {

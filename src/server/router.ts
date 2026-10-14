@@ -11,9 +11,10 @@ import * as registry from "./handlers/registry";
 import * as session from "./handlers/session";
 import * as signals from "./handlers/signals";
 import * as users from "./handlers/users";
+import * as wordpress from "./handlers/wordpress";
 import { getRepository } from "./store/memory";
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 interface RouteBase {
   method: Method;
@@ -115,6 +116,11 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/articles/:id/reject", handler: articles.rejectArticle },
   { method: "POST", pattern: "/articles/:id/publish", handler: articles.publishArticle },
   {
+    method: "POST",
+    pattern: "/articles/:id/wordpress/refresh",
+    handler: wordpress.refreshArticleWordPress,
+  },
+  {
     method: "PATCH",
     pattern: "/articles/:id/fact-checks/:fid",
     handler: articles.resolveFactCheck,
@@ -125,6 +131,12 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/imports", handler: imports.createImport, multipart: true },
   { method: "PATCH", pattern: "/imports/:id/proposals/:pid", handler: imports.decideProposal },
   { method: "POST", pattern: "/imports/:id/convert", handler: imports.convertImport },
+
+  /* WordPress : configuration du site et correspondance des catégories. */
+  { method: "GET", pattern: "/wordpress", handler: wordpress.getWordPressStatus },
+  { method: "GET", pattern: "/wordpress/check", handler: wordpress.checkWordPress },
+  { method: "GET", pattern: "/wordpress/categories", handler: wordpress.listWordPressCategories },
+  { method: "PUT", pattern: "/wordpress/settings", handler: wordpress.saveWordPressSettings },
 
   { method: "GET", pattern: "/linkedin", handler: dist.listLinkedIn },
   { method: "POST", pattern: "/linkedin", handler: dist.createLinkedIn },
@@ -269,7 +281,8 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const repo = await getRepository();
     const { route, params } = found;
     const at = now();
-    const hasBody = method === "POST" || method === "PATCH" || method === "DELETE";
+    const hasBody =
+      method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
     const base: Omit<PublicCtx, "body" | "form"> = {
       request,
       url,

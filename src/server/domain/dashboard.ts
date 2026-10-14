@@ -193,9 +193,12 @@ export function computeDashboard(input: DashboardInput): Dashboard {
     high.filter((s) => between(s.createdAt, prev7, last7 - 1)).length,
   );
 
-  const drafts = articles.filter((a) => a.wordpress.status === "brouillon");
+  // Brouillons présents sur WordPress, en attente de relecture compris ; `supprime` n'en est plus un.
+  const drafts = articles.filter(
+    (a) => a.wordpress.status === "brouillon" || a.wordpress.status === "en_attente",
+  );
   const synced = articles.filter(
-    (a) => a.wordpress.status === "brouillon" || a.wordpress.status === "publie",
+    (a) => a.wordpress.status !== "aucun" && a.wordpress.status !== "supprime",
   );
   const draftsTrend = deltaTrend(
     drafts.filter((a) => between(a.wordpress.lastSyncAt, last7, R)).length,

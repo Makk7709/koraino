@@ -19,6 +19,8 @@ import type {
   Signal,
   Source,
   User as UserDto,
+  WordPressRemoteStatus,
+  WordPressSettings,
 } from "@/lib/api/types";
 
 /**
@@ -59,7 +61,20 @@ export type SignalRecord = Omit<Signal, "evidence" | "inNewsletter">;
 
 export type GridRecord = ScoringGrid & { id: string };
 
-export type ArticleRecord = Article & {
+/** Lien vers le contenu WordPress ; `editUrl` est calculé à la lecture, jamais stocké. */
+export interface WordPressLink {
+  remoteId: string | null;
+  status: WordPressRemoteStatus;
+  lastSyncAt: string | null;
+  /**
+   * Site qui a produit `remoteId` (interne, jamais exposé) : null ou absent pour un identifiant
+   * simulé ou antérieur à l'intégration réelle.
+   */
+  site?: string | null;
+}
+
+export type ArticleRecord = Omit<Article, "wordpress"> & {
+  wordpress: WordPressLink;
   versions: ArticleVersion[];
   publishedAt: string | null;
   createdBy: string;
@@ -123,6 +138,8 @@ export interface Settings {
   notifiedAlerts: string[];
   /** Volume de fichiers client hors imports (Go). */
   storageBaseGb: number;
+  /** Correspondance des catégories WordPress ; absente des réglages enregistrés avant elle. */
+  wordpress?: WordPressSettings;
 }
 
 export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt };

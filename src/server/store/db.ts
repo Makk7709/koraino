@@ -3,6 +3,7 @@ import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
 import { buildSeed } from "./seed";
+import { normalizeSettings } from "./settings";
 
 /**
  * Dépôt persistant (base PostgreSQL du projet) : une ligne par enregistrement dans
@@ -168,7 +169,7 @@ export class DbRepository implements Repository {
       .eq("workspace_id", WORKSPACE)
       .single();
     if (error) throw new Error(error.message);
-    return data.data as unknown as Settings;
+    return normalizeSettings(data.data as unknown as Settings);
   }
 
   async saveSettings(settings: Settings) {
