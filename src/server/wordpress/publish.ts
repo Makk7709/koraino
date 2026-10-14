@@ -273,6 +273,51 @@ async function refuse(
 }
 
 /**
+ * Création restée « à vérifier » avec un identifiant (réponse 2xx inexploitable) : réglée dès
+ * qu'une lecture du contenu aboutit. Statut connu = créé ; absent ou à la corbeille = échec.
+ */
+export async function settleUnconfirmedCreation(
+  ctx: Ctx,
+  rec: ArticleRecord,
+  attempts: PublicationRecord[],
+  remoteId: string,
+  post: RemotePost | null,
+): Promise<void> {
+  const open = attempts.filter(
+    (p) =>
+      p.articleId === rec.id &&
+      p.channel === "wordpress" &&
+      p.status === "verification_requise" &&
+      p.remoteId === remoteId &&
+      p.code !== CONFIRMATION_PENDING,
+  );
+  for (const marker of open) {
+    const next: PublicationRecord =
+      post && post.status !== "trash"
+        ? {
+            ...marker,
+            status: "succes",
+            code: null,
+            message: `Brouillon WordPress n° ${remoteId} confirmé : statut « ${STATUS_TEXT[remoteToLocal(post)]} » relu sur WordPress.`,
+          }
+        : {
+            ...marker,
+            status: "echec",
+            code: "wordpress_absence_confirmed",
+            message: `Le contenu n° ${remoteId}, enregistré malgré la réponse inattendue de WordPress, n'existe plus (supprimé ou à la corbeille).`,
+          };
+    await ctx.repo.publications.update(next);
+    await audit(
+      ctx,
+      next.status === "succes" ? "publication.recovered" : "publication.absence_confirmed",
+      "publication",
+      next.id,
+      `${rec.title} — ${next.message}`,
+    );
+  }
+}
+
+/**
  * Identifiants déjà attribués à un AUTRE article (lien ou tentative) sur ce site ; un identifiant
  * numérique sans site connu (antérieur à ce suivi) est écarté aussi, par prudence.
  */
@@ -315,7 +360,8 @@ async function recoverInterrupted(
     (p) =>
       p.articleId === rec.id && p.channel === "wordpress" && p.status === "verification_requise",
   );
-  for (const update of pending.filter((p) => p.remoteId)) {
+  // Avec un autre code : création enregistrée mais inexploitable, réglée à la relecture du contenu.
+  for (const update of pending.filter((p) => p.remoteId && p.code === CONFIRMATION_PENDING)) {
     await ctx.repo.publications.update({
       ...update,
       status: "echec",
@@ -434,6 +480,7 @@ async function existingDraft(
     );
     return null;
   }
+  await settleUnconfirmedCreation(ctx, rec, attempts, id, post);
   if (!post || post.status === "trash") {
     notes.push(
       post
@@ -491,6 +538,7 @@ async function existingDraft(
  */
 async function failSend(
   ctx: Ctx,
+  client: WordPressClient,
   rec: ArticleRecord,
   marker: PublicationRecord,
   update: boolean,
@@ -498,19 +546,32 @@ async function failSend(
 ): Promise<unknown> {
   const known = error instanceof WordPressError ? error : null;
   const unknown = !update && (known?.verifyBeforeRetry ?? true);
+  // Création enregistrée malgré une réponse inexploitable : liée, puis relue avant toute écriture.
+  const created = !update ? (known?.remoteId ?? null) : null;
   const reason = known?.message ?? "Erreur interne pendant l'envoi à WordPress.";
-  const message = unknown
-    ? `${reason} Le brouillon a peut-être été créé : au prochain envoi, KORA le recherchera sur WordPress avant d'en créer un autre.`
-    : update
-      ? `${reason} Mise à jour non confirmée : vous pouvez renvoyer sans risque de doublon.`
-      : `${reason} Aucun brouillon n'a été créé.`;
+  const message = created
+    ? `${reason} Le brouillon n° ${created} est lié à l'article : KORA le relira avant tout nouvel envoi (aucun doublon).`
+    : unknown
+      ? `${reason} Le brouillon a peut-être été créé : au prochain envoi, KORA le recherchera sur WordPress avant d'en créer un autre.`
+      : update
+        ? `${reason} Mise à jour non confirmée : vous pouvez renvoyer sans risque de doublon.`
+        : `${reason} Aucun brouillon n'a été créé.`;
   const attempt: PublicationRecord = {
     ...marker,
     status: unknown ? "verification_requise" : "echec",
     code: known?.code ?? "wordpress_internal_error",
+    remoteId: created ?? marker.remoteId,
     message,
   };
   await ctx.repo.publications.update(attempt);
+  if (created) {
+    await settleArticle(
+      ctx,
+      rec.id,
+      { remoteId: created, site: client.site, status: "brouillon", lastSyncAt: ctx.now.toISOString() },
+      null,
+    );
+  }
   await audit(
     ctx,
     unknown ? "publication.unconfirmed" : "publication.failed",
@@ -611,7 +672,7 @@ async function sendUnderLock(
       ? await client.updateDraft(target.id, payload, target.status === "pending" ? "pending" : "draft")
       : await client.createDraft(payload);
   } catch (e) {
-    throw await failSend(ctx, rec, marker, target !== null, e);
+    throw await failSend(ctx, client, rec, marker, target !== null, e);
   }
 
   const message = [

@@ -140,14 +140,23 @@ function wordpressSlug(name: string): string {
 }
 
 /** Réponse 2xx inexploitable : après un envoi, WordPress a peut-être enregistré le contenu. */
-function unreadable(status: number, method: "GET" | "POST"): WordPressError {
+function unreadable(status: number, method: "GET" | "POST", remoteId: string | null = null): WordPressError {
   return new WordPressError(
     "wordpress_invalid",
     method === "POST"
-      ? `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu a peut-être été enregistré.`
+      ? remoteId
+        ? `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu n° ${remoteId} a pourtant été enregistré.`
+        : `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu a peut-être été enregistré.`
       : `Réponse de WordPress illisible (HTTP ${status}) : WORDPRESS_URL désigne-t-elle bien un site WordPress ?`,
     true,
+    remoteId,
   );
+}
+
+/** Identifiant entier positif d'une réponse, même incomplète par ailleurs. */
+function idOf(data: unknown): string | null {
+  const id = (data as { id?: unknown } | null)?.id;
+  return typeof id === "number" && Number.isInteger(id) && id > 0 ? String(id) : null;
 }
 
 function copyAccount(account: WordPressAccount): WordPressAccount {
@@ -395,16 +404,30 @@ export class RestWordPress implements WordPressClient {
     };
   }
 
+  /** Après un 2xx d'écriture, jamais « rien n'a été créé » : l'identifiant reçu est rendu à l'appelant. */
   #post(reply: Pick<Reply, "status" | "data">, method: "GET" | "POST"): RemotePost {
+    const write = method === "POST";
     const parsed = postSchema.safeParse(reply.data);
-    if (!parsed.success) throw this.#unreadable(`${method} /posts`, reply.status, method);
+    if (!parsed.success) {
+      const id = write ? idOf(reply.data) : null;
+      this.#log(`[wordpress] ${method} /posts → HTTP ${reply.status} : forme de réponse inattendue`);
+      throw unreadable(reply.status, method, id);
+    }
     const p = parsed.data;
     const status = POST_STATUSES.find((s) => s === p.status);
     if (!status) {
-      throw new WordPressError(
-        "wordpress_invalid",
-        `WordPress indique un statut inattendu (« ${this.#excerpt(p.status, 40)} ») pour le contenu n° ${p.id} : KORA n'y touche pas.`,
-      );
+      const found = `statut inattendu (« ${this.#excerpt(p.status, 40)} »)`;
+      throw write
+        ? new WordPressError(
+            "wordpress_invalid",
+            `WordPress a enregistré le contenu n° ${p.id} avec un ${found} : KORA ne le modifie plus tant qu'il n'a pas un statut connu (brouillon, en attente de relecture). Vérifiez-le dans WordPress.`,
+            true,
+            String(p.id),
+          )
+        : new WordPressError(
+            "wordpress_invalid",
+            `WordPress indique un ${found} pour le contenu n° ${p.id} : KORA n'y touche pas.`,
+          );
     }
     const title =
       typeof p.title === "string"

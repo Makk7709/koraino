@@ -769,6 +769,47 @@ describe("reprise après un envoi interrompu", () => {
     expect(wp.server.posts.get(100)!.content).toContain("Retouche de la rédaction");
   });
 
+  it("création enregistrée au statut inattendu : liée, relue avant tout renvoi, jamais de doublon", async () => {
+    const art = await approvedArticle();
+    wp.server.createStatus = "pitch";
+    const first = await publish(art.id);
+    wp.server.createStatus = null;
+    expect(first.status).toBe(502);
+    expect(first.body.error.message).not.toContain("Aucun brouillon n'a été créé");
+    expect(first.body.error.message).toContain("Le brouillon n° 100 est lié à l'article");
+    expect(errorAttempt(first)).toMatchObject({ status: "verification_requise", remoteId: "100" });
+    expect((await detail(art.id)).wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+
+    // Statut toujours inconnu : relu, refusé, rien n'est écrit.
+    const blocked = await publish(art.id);
+    expect(blocked.status).toBe(502);
+    expect(blocked.body.error.message).toContain("statut inattendu");
+    expect(wp.server.writes()).toHaveLength(1);
+
+    // Remis en brouillon dans WordPress : la création est confirmée, puis mise à jour.
+    wp.server.posts.get(100)!.status = "draft";
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    const created = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(first).id);
+    expect(created).toMatchObject({ status: "succes", remoteId: "100" });
+    expect(created!.message).toContain("Brouillon WordPress n° 100 confirmé");
+  });
+
+  it("création au statut inattendu puis supprimée dans WordPress : échec constaté, nouveau brouillon", async () => {
+    const art = await approvedArticle();
+    wp.server.createStatus = "pitch";
+    const first = await publish(art.id);
+    wp.server.createStatus = null;
+    wp.server.posts.delete(100);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("101");
+    const created = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(first).id);
+    expect(created).toMatchObject({ status: "echec", code: "wordpress_absence_confirmed" });
+  });
+
   it("une interruption sur la v1 n'entraîne pas de doublon lors de l'envoi de la v2", async () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });

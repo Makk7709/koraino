@@ -20,7 +20,8 @@ const CONFIGURATION_CODES: readonly WordPressErrorCode[] = [
  * Échec d'un échange avec le site WordPress, déjà traduit pour l'utilisateur : message en
  * français, jamais d'identifiant ni de mot de passe. `verifyBeforeRetry` : WordPress a peut-être
  * traité la requête malgré l'erreur (délai dépassé, coupure, 5xx, réponse illisible) ; seul un
- * envoi de création en tient compte.
+ * envoi de création en tient compte. `remoteId` : contenu que WordPress a bien enregistré (réponse
+ * 2xx d'écriture inexploitable par ailleurs).
  */
 export class WordPressError extends HttpError {
   declare code: WordPressErrorCode;
@@ -29,6 +30,7 @@ export class WordPressError extends HttpError {
     code: WordPressErrorCode,
     message: string,
     readonly verifyBeforeRetry = false,
+    readonly remoteId: string | null = null,
   ) {
     super(CONFIGURATION_CODES.includes(code) ? 503 : 502, code, message);
     this.name = "WordPressError";

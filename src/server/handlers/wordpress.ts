@@ -14,6 +14,7 @@ import {
   ownedRemoteId,
   remoteToLocal,
   settleArticle,
+  settleUnconfirmedCreation,
   STATUS_TEXT,
   withArticleLock,
 } from "../wordpress/publish";
@@ -100,6 +101,7 @@ export const refreshArticleWordPress: Handler = async (ctx) => {
     const remoteId = ownedRemoteId(client, rec.wordpress);
     if (!remoteId) throw noDraft();
     const post = await client.getPost(remoteId);
+    await settleUnconfirmedCreation(ctx, rec, await ctx.repo.publications.list(), remoteId, post);
     const status = remoteToLocal(post);
     const before = rec.wordpress.status;
     const next = await settleArticle(

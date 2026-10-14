@@ -220,6 +220,22 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(await client.getPost(id)).toMatchObject({ id, status: "draft" });
   });
 
+  it("écriture 2xx au statut inconnu ou incomplète : l'identifiant enregistré est rendu", async () => {
+    const { client, server } = fakeWordPress();
+    server.createStatus = "pitch";
+    const custom = await failure(client.createDraft(draft));
+    expect(custom).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: true, remoteId: "100" });
+    expect(custom.message).toContain("a enregistré le contenu n° 100 avec un statut inattendu");
+    // En lecture, rien n'a été écrit : ni identifiant ni vérification.
+    const read = await failure(client.getPost("100"));
+    expect(read).toMatchObject({ verifyBeforeRetry: false, remoteId: null });
+
+    server.fail(isWrite, jsonResponse({ id: 205, status: 7 }, 201));
+    const partial = await failure(client.createDraft(draft));
+    expect(partial).toMatchObject({ verifyBeforeRetry: true, remoteId: "205" });
+    expect(partial.message).toContain("le contenu n° 205 a pourtant été enregistré");
+  });
+
   it("mise à jour d'un contenu en attente de relecture : le statut pending est conservé", async () => {
     const { client, server } = fakeWordPress();
     const post = server.addPost({ status: "pending" });
