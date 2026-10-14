@@ -12,6 +12,8 @@ import type {
   SourceAccess,
   SourceType,
   Theme,
+  WordPressMode,
+  WordPressRemoteStatus,
 } from "@/lib/api/types";
 
 /** Tons de couleur de la maquette (pastilles, badges, icônes). */
@@ -83,6 +85,49 @@ export const THEME: Record<Theme, { label: string; tone: Tone }> = {
   sante_biotech: { label: "Santé & biotech", tone: "teal" },
   mobilite: { label: "Mobilité", tone: "orange" },
   numerique: { label: "Numérique", tone: "blue" },
+};
+
+/** État du contenu côté WordPress (panneau de diffusion, dashboard, calendrier). */
+export const WORDPRESS_STATUS: Record<
+  WordPressRemoteStatus,
+  { label: string; tone: Tone; hint: string }
+> = {
+  aucun: {
+    label: "Aucun brouillon WordPress",
+    tone: "gray",
+    hint: "Rien n'a encore été envoyé à WordPress.",
+  },
+  brouillon: {
+    label: "Brouillon WordPress",
+    tone: "blue",
+    hint: "Brouillon invisible du public : la mise en ligne se fait dans WordPress.",
+  },
+  en_attente: {
+    label: "En attente de relecture",
+    tone: "amber",
+    hint: "Soumis à relecture dans WordPress, pas encore en ligne.",
+  },
+  programme: {
+    label: "Programmé sur WordPress",
+    tone: "teal",
+    hint: "Programmé dans WordPress : KORA ne modifie plus ce contenu.",
+  },
+  publie: {
+    label: "Publié sur WordPress",
+    tone: "green",
+    hint: "En ligne sur le site : toute modification se fait dans WordPress.",
+  },
+  supprime: {
+    label: "Supprimé sur WordPress",
+    tone: "rose",
+    hint: "Mis à la corbeille ou supprimé sur le site : un nouvel envoi recréera un brouillon.",
+  },
+};
+
+export const WORDPRESS_MODE: Record<WordPressMode, { label: string; tone: Tone }> = {
+  reel: { label: "Site configuré", tone: "green" },
+  simule: { label: "Mode démonstration", tone: "amber" },
+  non_configure: { label: "Non configuré", tone: "rose" },
 };
 
 export const CHANNEL: Record<Channel, { label: string }> = {

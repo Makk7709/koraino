@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 import { BrandMark } from "@/components/kora/BrandMark";
 import { GhostButton, IconTile, Pill, PrimaryButton } from "@/components/kora/primitives";
-import { ARTICLE_STATUS, formatDate, formatRelative } from "@/components/kora/labels";
+import {
+  ARTICLE_STATUS,
+  WORDPRESS_STATUS,
+  formatDate,
+  formatRelative,
+} from "@/components/kora/labels";
 import type { ArticleDetail, Company } from "@/lib/api/types";
 import { LinkedInMark } from "./channel";
 import {
@@ -56,6 +61,8 @@ export function ArticleHeader({
 }) {
   const navigate = useNavigate();
   const status = ARTICLE_STATUS[article.status];
+  const wpStatus =
+    article.wordpress.status !== "aucun" ? WORDPRESS_STATUS[article.wordpress.status] : null;
   const version = currentVersionOf(article);
   const edition = useComposingEdition();
   const inEdition = !!edition?.items.some((i) => i.articleId === article.id);
@@ -114,6 +121,7 @@ export function ArticleHeader({
           </p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <Pill tone={status.tone}>{status.label}</Pill>
+            {wpStatus && <Pill tone={wpStatus.tone}>{wpStatus.label}</Pill>}
             <Pill tone={isImport ? "purple" : "teal"}>{isImport ? "Import humain" : "KORA"}</Pill>
             {(version?.categories ?? []).slice(0, 3).map((c) => (
               <Pill key={c} tone="blue">

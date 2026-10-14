@@ -1,15 +1,29 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Ban, Check, ClipboardList, History, Send, ShieldCheck, Waypoints } from "lucide-react";
 import { Fragment } from "react";
 import { GhostButton, Pill, PrimaryButton } from "@/components/kora/primitives";
 import { formatDateTime } from "@/components/kora/labels";
 import { api } from "@/lib/api/client";
-import { useAudit, useKoraMutation } from "@/lib/api/hooks";
-import type { ArticleDetail, ArticleStatus, Channel, PublicationAttempt } from "@/lib/api/types";
+import { qk, useAudit, useKoraMutation, useWordPressStatus } from "@/lib/api/hooks";
+import type {
+  ArticleDetail,
+  ArticleStatus,
+  Channel,
+  PublicationAttempt,
+  WordPressStatus,
+} from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { ChannelMark } from "./channel";
 import { CHANNEL_INFO, CHANNELS, PUBLICATION_STATUS } from "./format";
 import { ApprovalItem, AttemptHistory, AttemptResult, RefusalResult } from "./publication";
 import { Banner, SectionTitle } from "./ui";
+import { wordpressActionLabel, wordpressSendState } from "./wordpress";
+import {
+  WordPressModeNote,
+  WordPressPendingNote,
+  WordPressRefusal,
+  WordPressRemoteState,
+} from "./WordPressChannel";
 import { validApprovalFor, type ArticleWorkflow } from "./workflow";
 
 const STEPS = ["Brouillon", "En revue", "Approuvé", "Brouillon distant / export"] as const;
@@ -77,30 +91,39 @@ function ChannelRow({
   article,
   channel,
   workflow,
+  wordpress,
 }: {
   article: ArticleDetail;
   channel: Channel;
   workflow: ArticleWorkflow;
+  wordpress?: WordPressStatus | undefined;
 }) {
+  const qc = useQueryClient();
   const info = CHANNEL_INFO[channel];
+  const isWordPress = channel === "wordpress";
   const approval = validApprovalFor(article, channel);
   const publish = useKoraMutation(() => api.publishArticle(article.id, { channel }), {
     success: (r) =>
       r.status === "succes"
         ? r.mode === "brouillon_distant"
-          ? `Brouillon ${info.label} créé`
+          ? `Brouillon ${info.label} envoyé`
           : `Export ${info.label} prêt`
         : "",
   });
   const last = publish.data ?? latestAttempt(article.publications, channel);
-  const disabledReason = !approval
+  const channelReason = !approval
     ? `Approbation valide requise pour la version ${article.currentVersion} sur ce canal.`
     : !workflow.canPublish
       ? !workflow.perms.canValidate
         ? "La diffusion vers un canal est réservée aux validateurs."
         : workflow.dirtyHint
       : null;
-  const wp = article.wordpress;
+  const send = isWordPress
+    ? wordpressSendState(wordpress, channelReason)
+    : { disabledReason: channelReason, notConfigured: false, demo: false };
+  const disabledReason = send.disabledReason;
+  // Un refus peut avoir enregistré une tentative ou réglé l'état distant (409 publié).
+  const onPublishError = () => void qc.invalidateQueries({ queryKey: qk.article(article.id) });
 
   return (
     <div className="rounded-xl border border-border bg-white p-3.5">
@@ -122,42 +145,42 @@ function ChannelRow({
         <PrimaryButton
           disabled={!!disabledReason || publish.isPending}
           title={disabledReason ?? undefined}
-          onClick={() => publish.mutate(undefined)}
+          onClick={() => publish.mutate(undefined, { onError: onPublishError })}
         >
           <Send className="size-4" />
-          {publish.isPending ? "Envoi…" : info.action}
+          {publish.isPending
+            ? "Envoi…"
+            : isWordPress
+              ? wordpressActionLabel(article.wordpress)
+              : info.action}
         </PrimaryButton>
       </div>
-      {channel === "wordpress" && (
-        <p className="mt-2 text-[11.5px] text-kora-ink-soft">
-          État WordPress :{" "}
-          <span className="font-semibold text-kora-ink">
-            {wp.status === "aucun"
-              ? "aucun brouillon distant"
-              : wp.status === "brouillon"
-                ? "brouillon distant"
-                : wp.status === "programme"
-                  ? "programmé"
-                  : "publié"}
-          </span>
-          {wp.remoteId && (
-            <>
-              {" "}
-              · ID distant <span className="font-mono text-kora-ink">{wp.remoteId}</span>
-            </>
-          )}
-          {wp.lastSyncAt && <> · synchronisé le {formatDateTime(wp.lastSyncAt)}</>}
-        </p>
+      {isWordPress && (
+        <>
+          <WordPressRemoteState
+            article={article}
+            canRefresh={workflow.perms.canValidate}
+            refreshBlockedReason={send.notConfigured ? send.disabledReason : null}
+          />
+          <WordPressModeNote notConfigured={send.notConfigured} demo={send.demo} />
+        </>
       )}
-      {disabledReason && !approval && (
-        <p className="mt-2 text-[11.5px] text-muted-foreground">{disabledReason}</p>
+      {channelReason && !approval && (
+        <p className="mt-2 text-[11.5px] text-muted-foreground">{channelReason}</p>
       )}
       {(publish.isError || last) && (
         <div className="mt-2.5">
           {publish.isError ? (
-            <RefusalResult error={publish.error} />
+            isWordPress ? (
+              <WordPressRefusal error={publish.error} editUrl={article.wordpress.editUrl ?? null} />
+            ) : (
+              <RefusalResult error={publish.error} />
+            )
           ) : last ? (
-            <AttemptResult attempt={last} />
+            <>
+              <AttemptResult attempt={last} />
+              {isWordPress && last.status === "verification_requise" && <WordPressPendingNote />}
+            </>
           ) : null}
         </div>
       )}
@@ -209,6 +232,7 @@ export function ApprovalPanel({
   onReject: () => void;
   onShowDossier: () => void;
 }) {
+  const wordpress = useWordPressStatus();
   const approvals = [...article.approvals].sort((a, b) => b.approvedAt.localeCompare(a.approvedAt));
   const blocked = article.factChecks.filter((f) => f.status === "contradictoire").length;
   const s = article.status;
@@ -310,7 +334,13 @@ export function ApprovalPanel({
         <SectionTitle icon={Waypoints}>Diffusion par canal</SectionTitle>
         <div className="flex flex-col gap-2">
           {CHANNELS.map((c) => (
-            <ChannelRow key={c} article={article} channel={c} workflow={workflow} />
+            <ChannelRow
+              key={c}
+              article={article}
+              channel={c}
+              workflow={workflow}
+              wordpress={wordpress.data}
+            />
           ))}
         </div>
       </section>

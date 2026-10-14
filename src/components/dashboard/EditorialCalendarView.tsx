@@ -13,7 +13,7 @@ import {
 import { fr } from "date-fns/locale";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import { TONE_CLASSES, formatDate, type Tone } from "@/components/kora/labels";
+import { TONE_CLASSES, WORDPRESS_STATUS, formatDate, type Tone } from "@/components/kora/labels";
 import { KoraCard } from "@/components/kora/primitives";
 import { HrefLink } from "@/components/signals/links";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,12 +21,16 @@ import { useArticles, useLinkedInPosts, useNewsletters } from "@/lib/api/hooks";
 import type { Article, LinkedInPost, NewsletterEdition } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
-type Kind = "programme" | "publie" | "wp" | "newsletter" | "linkedin";
+type Kind = "programme" | "publie" | "wp" | "wp_relecture" | "newsletter" | "linkedin";
 
 const KIND: Record<Kind, { label: string; tone: Tone }> = {
   programme: { label: "Article programmé", tone: "teal" },
   publie: { label: "Article publié", tone: "green" },
-  wp: { label: "Brouillon WordPress", tone: "blue" },
+  wp: { label: WORDPRESS_STATUS.brouillon.label, tone: "blue" },
+  wp_relecture: {
+    label: `WordPress : ${WORDPRESS_STATUS.en_attente.label.toLowerCase()}`,
+    tone: "orange",
+  },
   linkedin: { label: "Post LinkedIn", tone: "purple" },
   newsletter: { label: "Édition newsletter", tone: "amber" },
 };
@@ -57,11 +61,14 @@ function articleEvents(a: Article): CalEvent[] {
   if (a.status === "publie") {
     const d = a.wordpress.lastSyncAt ?? a.updatedAt;
     out.push({ key: `${a.id}-pub`, date: new Date(d), kind: "publie", title: a.title, href });
-  } else if (a.wordpress.status === "brouillon" && a.wordpress.lastSyncAt) {
+  } else if (
+    (a.wordpress.status === "brouillon" || a.wordpress.status === "en_attente") &&
+    a.wordpress.lastSyncAt
+  ) {
     out.push({
       key: `${a.id}-wp`,
       date: new Date(a.wordpress.lastSyncAt),
-      kind: "wp",
+      kind: a.wordpress.status === "brouillon" ? "wp" : "wp_relecture",
       title: a.title,
       href,
     });

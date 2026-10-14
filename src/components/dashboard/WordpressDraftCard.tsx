@@ -4,6 +4,7 @@ import { Pill } from "@/components/kora/primitives";
 import { HrefLink } from "@/components/signals/links";
 import type { Dashboard } from "@/lib/api/types";
 import { BottomCardShell, BottomCardSkeletonBody, WordPressIcon } from "./BottomCardShell";
+import { wordpressDraftBadge } from "./dashboard-style";
 import { ArchitectureThumb } from "./Thumbs";
 
 export function WordpressDraftCard({
@@ -14,14 +15,15 @@ export function WordpressDraftCard({
   loading: boolean;
 }) {
   const href = draft ? `/articles?id=${encodeURIComponent(draft.articleId)}` : "/articles";
+  const badge = draft ? wordpressDraftBadge(draft) : null;
   return (
     <BottomCardShell
       icon={<WordPressIcon className="size-[22px] shrink-0" />}
       title="Brouillon WordPress"
       right={
-        draft ? (
-          <Pill tone={draft.ready ? "green" : "amber"} className="py-0.5 text-[11px]">
-            {draft.ready ? "Prêt à publier" : "En préparation"}
+        badge ? (
+          <Pill tone={badge.tone} className="py-0.5 text-[11px]">
+            {badge.label}
           </Pill>
         ) : null
       }
@@ -35,6 +37,7 @@ export function WordpressDraftCard({
             </span>
             <span className="mt-0.5 block text-[11px] text-muted-foreground">
               Modifié {formatRelative(draft.updatedAt)}
+              {badge?.hint && <> · {badge.hint}</>}
             </span>
           </span>
         </HrefLink>

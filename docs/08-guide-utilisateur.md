@@ -178,7 +178,7 @@ Le Dashboard donne en un coup d'œil l'état de la veille et de la production. I
 
 **Les quatre cartes du bas.**
 
-- « Brouillon WordPress » montre le dernier article en préparation avec la pastille « Prêt à publier » ou « En préparation » ; « Voir le brouillon » ouvre l'article.
+- « Brouillon WordPress » montre le dernier brouillon envoyé à WordPress. La pastille « Brouillon envoyé » (suivie de « mise en ligne dans WordPress ») indique que la version approuvée est sur le site, en brouillon ; « En préparation » indique que l'article a changé depuis ou n'est plus approuvé. « Voir le brouillon » ouvre l'article.
 - « Post LinkedIn à valider » montre le post en attente ; « Relire le post » l'ouvre.
 - « Newsletter hebdomadaire » indique le nombre de sujets de l'édition en cours et la date d'envoi prévue. L'interrupteur « Inclure dans la prochaine édition » ajoute ou retire le signal sélectionné de l'édition. « Composer l'édition » ouvre l'écran Newsletter.
 - « Moteur d'analyse IA » affiche « Actif », ou « En pause » lorsque le budget API du mois est épuisé.
@@ -193,7 +193,7 @@ La liste des 50 signaux les plus récents. Un clic sur une ligne ouvre le signal
 
 ### Calendrier éditorial
 
-Le calendrier mensuel place les « Article programmé », « Article publié », « Brouillon WordPress », « Post LinkedIn » et « Édition newsletter ». Naviguez avec « Mois précédent », « Aujourd'hui » et « Mois suivant ». Le panneau « À venir » liste les prochaines échéances et le panneau « Légende » explique les couleurs. Une date de programmation est une indication : aucune diffusion ne part automatiquement à cette date (voir [Ce que l'application ne fait pas au pilote](#ce-que-lapplication-ne-fait-pas-au-pilote)).
+Le calendrier mensuel place les « Article programmé », « Article publié », « Brouillon WordPress », « WordPress : en attente de relecture », « Post LinkedIn » et « Édition newsletter ». Un brouillon WordPress apparaît à la date de sa dernière synchronisation. Naviguez avec « Mois précédent », « Aujourd'hui » et « Mois suivant ». Le panneau « À venir » liste les prochaines échéances et le panneau « Légende » explique les couleurs. Une date de programmation est une indication : aucune diffusion ne part automatiquement à cette date (voir [Ce que l'application ne fait pas au pilote](#ce-que-lapplication-ne-fait-pas-au-pilote)).
 
 ### Mon espace
 
@@ -434,12 +434,14 @@ L'onglet « Approbation & diffusion » commence par le bandeau « Pilote : WordP
 - « Diffusion par canal » : une ligne par canal avec l'état « Approuvé · vN » ou « Non approuvé » et le bouton d'envoi ;
 - « Historique des tentatives (N) » et « Journal de l'article ».
 
-Pour diffuser (validateur), cliquez sur « Créer le brouillon WordPress » ou sur « Exporter » dans la ligne du canal. Le bouton reste grisé tant que la version courante n'est pas approuvée pour ce canal (« Approbation valide requise pour la version N sur ce canal. »).
+Pour diffuser (validateur), cliquez sur le bouton WordPress ou sur « Exporter » dans la ligne du canal. Le bouton reste grisé tant que la version courante n'est pas approuvée pour ce canal (« Approbation valide requise pour la version N sur ce canal. »).
 
-- **WordPress** : le brouillon distant reçoit le titre, le corps, l'extrait, les catégories et les tags. Le résultat « Brouillon WordPress créé (version N) » indique son identifiant distant. La mise en ligne reste manuelle dans WordPress. Un second envoi de la même version ne crée pas de doublon ; l'envoi d'une nouvelle version approuvée met à jour le même brouillon.
+- **WordPress** : le brouillon distant reçoit le titre, le corps, l'extrait, les catégories et les tags. Le bouton s'intitule « Créer le brouillon WordPress » au premier envoi, « Mettre à jour le brouillon WordPress » lorsqu'un brouillon existe, « Recréer le brouillon WordPress » s'il a été supprimé sur le site, et « Envoyer à WordPress » lorsque le contenu est déjà en ligne ou programmé. Le résultat « Brouillon WordPress envoyé (version N) » indique son identifiant distant. La mise en ligne reste manuelle dans WordPress. Un second envoi de la même version ne crée pas de doublon ; l'envoi d'une nouvelle version approuvée met à jour le même brouillon.
+- **État WordPress** : sous le bouton, l'encadré « État WordPress » donne le statut du contenu sur le site, son numéro et la « Dernière synchronisation ». Les statuts sont « Aucun brouillon WordPress », « Brouillon WordPress », « En attente de relecture », « Programmé sur WordPress », « Publié sur WordPress » et « Supprimé sur WordPress » ; dès le premier envoi, le même libellé apparaît dans l'en-tête de l'article, à côté de son statut. « Ouvrir dans WordPress » ouvre le contenu dans l'administration du site, dans un nouvel onglet. « Actualiser le statut » (validateur ou administrateur, lorsqu'un brouillon existe) relit le statut sur WordPress, par exemple après une mise en ligne faite dans WordPress. Une fois le contenu programmé ou publié, KORA ne le modifie plus : toute correction se fait dans WordPress.
+- **WordPress non configuré** : tant qu'un administrateur n'a pas renseigné la connexion au site, le bouton est grisé et l'encadré « WordPress n'est pas configuré : voir Paramètres > WordPress. » renvoie vers l'onglet [WordPress](#wordpress) des Paramètres. Sur une installation de démonstration, la mention « Mode démonstration : brouillon simulé » rappelle qu'aucun site réel ne reçoit le brouillon.
 - **LinkedIn et Newsletter** : le résultat « Export … prêt (version N) : diffusion manuelle. » est consigné. Pour obtenir un texte à publier, utilisez l'écran [LinkedIn](#linkedin) ou [Newsletter](#newsletter).
 
-Un envoi refusé s'affiche dans l'encadré « Envoi bloqué par l'API » avec la règle en cause (voir [Envoi bloqué](#envoi-bloqué)). Le refus est lui aussi consigné dans l'historique, au statut « Bloqué ». La diffusion réussie fait passer le signal source à « Traité » ; l'article garde son statut « Prêt à publier ».
+Un envoi refusé s'affiche dans un encadré qui nomme le problème (« Envoi bloqué par l'API » pour une règle d'approbation, « Site WordPress injoignable », « Identifiants WordPress refusés »…) avec le message du serveur (voir [Envoi bloqué](#envoi-bloqué)). Le refus est lui aussi consigné dans l'historique, au statut « Bloqué ». La diffusion réussie fait passer le signal source à « Traité » ; l'article garde son statut « Prêt à publier ».
 
 ### Importer un article rédigé par l'équipe
 
@@ -574,7 +576,7 @@ La suppression est réservée aux administrateurs. Elle retire la fiche et ses s
 
 ![Paramètres](images/parametres.webp)
 
-L'écran Paramètres (« Pilotage & conformité ») réunit six onglets : « Grille de score », « Editorial DNA », « Utilisateurs & rôles », « Quotas & budget », « Exports & réversibilité » et « Journal d'audit ». Sous le profil lecteur, la grille et le référentiel sont consultables mais non modifiables.
+L'écran Paramètres (« Pilotage & conformité ») réunit sept onglets : « Grille de score », « Editorial DNA », « Utilisateurs & rôles », « WordPress », « Quotas & budget », « Exports & réversibilité » et « Journal d'audit ». Sous le profil lecteur, la grille et le référentiel sont consultables mais non modifiables.
 
 ### Grille de score
 
@@ -597,6 +599,19 @@ La modification du référentiel est réservée aux administrateurs.
 ### Utilisateurs & rôles
 
 « Comptes nominatifs » liste les comptes, leur équipe et leurs rôles ; votre compte porte « Vous ». « Droits par rôle » présente la matrice des droits et ses définitions. Les comptes et les rôles ne se modifient pas depuis cet écran ; pour tester un autre profil, utilisez « Changer de profil » dans le menu utilisateur.
+
+### WordPress
+
+La carte « Connexion au site » indique le mode : « Site configuré » (avec l'adresse du site), « Mode démonstration » (brouillons simulés, rien n'est envoyé à un site réel) ou « Non configuré ». Dans ce dernier cas, l'envoi vers WordPress est désactivé et la carte détaille la procédure, à suivre par un administrateur :
+
+1. Créer dans WordPress un compte dédié à KORA, avec le rôle **Contributeur** : il peut créer des brouillons, mais ni publier, ni programmer, ni téléverser de médias.
+2. Connecté avec ce compte, générer un mot de passe d'application dans **Profil › Mots de passe d'application**. Il n'est affiché qu'une fois : copiez-le directement dans le secret de l'étape suivante, sans le transmettre par e-mail ni messagerie.
+3. Renseigner les secrets `WORDPRESS_URL`, `WORDPRESS_USERNAME` et `WORDPRESS_APP_PASSWORD` dans la console de l'hébergement. Chaque variable porte la pastille « Renseignée » ou « Manquante ou invalide ».
+4. Recharger la page une fois les secrets enregistrés (et l'application redéployée si l'hébergement l'exige) : le mode doit indiquer « Site configuré ».
+
+« Tester la connexion » (administrateur) vérifie l'identifiant, le mot de passe d'application et le rôle du compte, sans rien écrire sur le site. Le résultat affiche le compte et ses rôles. « Connexion réussie, mais le rôle du compte est trop élevé » signale un compte capable de publier lui-même : donnez-lui le rôle Contributeur. En cas d'échec, « Connexion impossible » reprend le message du serveur. Le mot de passe d'application n'est jamais affiché.
+
+La carte « Correspondance des catégories » associe chaque catégorie KORA à une catégorie WordPress. Sans correspondance, KORA cherche une catégorie WordPress de même nom ou de même slug, puis applique la « Catégorie par défaut ». Un administrateur clique sur « Modifier la correspondance » : les catégories du site sont lues, avec leur hiérarchie (les sous-catégories sont en retrait), et chaque ligne propose une liste dont « — aucune — ». « Enregistrer » applique la correspondance aux envois suivants ; « Annuler » rétablit la correspondance enregistrée. Une catégorie enregistrée qui n'existe plus sur le site porte la mention « (introuvable sur le site) ». Les autres profils consultent la correspondance sans pouvoir la modifier.
 
 ### Quotas & budget
 
@@ -837,6 +852,15 @@ Le serveur revérifie tout juste avant l'envoi et explique le blocage :
 | « Envoi bloqué : aucune approbation valide pour … sur la version X. » | Aucune approbation pour ce canal. |
 
 Chaque blocage est consigné dans l'« Historique des tentatives » au statut « Bloqué ».
+
+Pour WordPress, l'encadré nomme aussi les refus propres au site :
+
+- « Contenu déjà en ligne ou programmé : la modification se fait dans WordPress » : KORA ne modifie jamais un contenu publié ou programmé. « Ouvrir dans WordPress » permet de faire la correction sur le site.
+- « Plusieurs brouillons identiques sur WordPress » : un envoi précédent a été interrompu et plusieurs brouillons correspondent. L'encadré liste les « Brouillons candidats » (titre, numéro, date, lien d'édition) : supprimez les doublons dans WordPress, puis renvoyez.
+- « WordPress n'est pas configuré », « Identifiants WordPress refusés », « Droit manquant pour le compte WordPress » : un administrateur vérifie la connexion dans Paramètres, onglet [WordPress](#wordpress).
+- « Site WordPress injoignable », « Trop de requêtes vers WordPress », « Accès bloqué par la protection du site » : réessayez plus tard ; si le problème persiste, signalez-le à l'administrateur du site.
+
+Après un envoi interrompu, aucune vérification manuelle n'est nécessaire : au prochain envoi, KORA recherche lui-même le brouillon sur WordPress avant d'en créer un autre.
 
 ### Budget atteint
 
