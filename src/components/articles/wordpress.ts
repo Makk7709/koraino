@@ -53,6 +53,7 @@ const ERROR_VIEW: Partial<Record<string, { tone: BannerTone; title: string }>> =
   },
   wordpress_not_configured: { tone: "warning", title: "WordPress n'est pas configuré" },
   publication_in_progress: { tone: "info", title: "Un envoi vers WordPress est déjà en cours" },
+  article_changed: { tone: "info", title: "L'article a changé pendant la préparation de l'envoi" },
   wordpress_auth_failed: { tone: "danger", title: "Identifiants WordPress refusés" },
   wordpress_forbidden: { tone: "danger", title: "Droit manquant pour le compte WordPress" },
   wordpress_blocked: { tone: "danger", title: "Accès bloqué par la protection du site" },

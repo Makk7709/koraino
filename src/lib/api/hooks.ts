@@ -30,8 +30,9 @@ export const qk = {
   linkedin: ["kora", "linkedin"] as const,
   linkedinConnection: ["kora", "linkedinConnection"] as const,
   wordpress: ["kora", "wordpress"] as const,
-  wordpressCheck: ["kora", "wordpress", "check"] as const,
-  wordpressCategories: ["kora", "wordpress", "categories"] as const,
+  /** Hors de la racine `["kora"]` : ces requêtes appellent le site et ne partent qu'au clic. */
+  wordpressCheck: ["wordpress-site", "check"] as const,
+  wordpressCategories: ["wordpress-site", "categories"] as const,
   newsletters: ["kora", "newsletters"] as const,
   newsletter: (id: string) => ["kora", "newsletter", id] as const,
   dna: ["kora", "dna"] as const,
@@ -141,7 +142,9 @@ export const useWordPressCheck = (enabled: boolean) =>
     queryFn: api.wordpressCheck,
     enabled,
     retry: false,
-    staleTime: 0,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 export const useWordPressCategories = (enabled: boolean) =>
   useQuery({
@@ -149,6 +152,9 @@ export const useWordPressCategories = (enabled: boolean) =>
     queryFn: api.wordpressCategories,
     enabled,
     retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 export const useSaveWordPressSettings = () =>
   useKoraMutation((input: WordPressSettings) => api.saveWordPressSettings(input), {
