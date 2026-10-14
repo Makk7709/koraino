@@ -20,7 +20,6 @@ import type {
   Source,
   User as UserDto,
   WordPressRemoteStatus,
-  WordPressSettings,
 } from "@/lib/api/types";
 
 /**
@@ -144,8 +143,11 @@ export interface Settings {
   notifiedAlerts: string[];
   /** Volume de fichiers client hors imports (Go). */
   storageBaseGb: number;
-  /** Correspondance des catégories WordPress ; absente des réglages enregistrés avant elle. */
-  wordpress?: WordPressSettings;
+  /**
+   * Ancien emplacement de la correspondance des catégories WordPress, désormais rangée à part
+   * (`Repository.getWordPressSettings`) : lu en secours tant qu'elle n'y figure pas, jamais réécrit.
+   */
+  wordpress?: unknown;
 }
 
 /**

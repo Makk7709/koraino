@@ -256,7 +256,7 @@ describe("PUT /wordpress/settings", () => {
     });
     expect(noCsrf.status).toBe(403);
     expect(noCsrf.body.error.code).toBe("csrf_header_missing");
-    expect((await repo.getSettings()).wordpress).toEqual({
+    expect(await repo.getWordPressSettings()).toEqual({
       categoryMap: {},
       defaultCategory: null,
     });

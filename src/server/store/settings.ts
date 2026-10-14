@@ -1,12 +1,16 @@
 import type { WordPressSettings } from "@/lib/api/types";
-import type { Settings } from "./records";
 
 /**
- * Réglages WordPress lus avec tolérance : absents (réglages enregistrés avant l'intégration) ou
- * mal formés, ils valent `{ categoryMap: {}, defaultCategory: null }`.
+ * Enregistrement dédié à la correspondance des catégories WordPress (ligne de `kora_records` en
+ * base), hors des réglages partagés que réécrivent le budget et les alertes.
  */
-export function wordpressSettingsOf(settings: Pick<Settings, "wordpress"> | null | undefined) {
-  const raw: unknown = settings?.wordpress;
+export const WORDPRESS_SETTINGS = { collection: "config", id: "wordpress" } as const;
+
+/**
+ * Correspondance des catégories WordPress lue avec tolérance : absente (jamais enregistrée) ou mal
+ * formée, elle vaut `{ categoryMap: {}, defaultCategory: null }`.
+ */
+export function wordpressSettingsOf(raw: unknown): WordPressSettings {
   const out: WordPressSettings = { categoryMap: {}, defaultCategory: null };
   if (!raw || typeof raw !== "object") return out;
   const { categoryMap, defaultCategory } = raw as Record<string, unknown>;
@@ -17,9 +21,4 @@ export function wordpressSettingsOf(settings: Pick<Settings, "wordpress"> | null
   }
   if (typeof defaultCategory === "string" && defaultCategory) out.defaultCategory = defaultCategory;
   return out;
-}
-
-/** Réglages tels que lus en base ou en mémoire, complétés des champs ajoutés depuis. */
-export function normalizeSettings(settings: Settings): Settings {
-  return { ...settings, wordpress: wordpressSettingsOf(settings) };
 }

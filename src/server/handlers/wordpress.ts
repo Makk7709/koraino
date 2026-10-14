@@ -6,7 +6,6 @@ import { truncate } from "../domain/text";
 import { conflict, json, notFound } from "../http";
 import { audit } from "../services/journal";
 import { articleDetail } from "../services/view";
-import { wordpressSettingsOf } from "../store/settings";
 import { parse, schemas } from "../validation";
 import { WordPressError } from "../wordpress/errors";
 import {
@@ -28,7 +27,7 @@ async function wordpressStatus(ctx: Ctx): Promise<WordPressStatus> {
     mode: client.mode,
     site: client.mode === "reel" ? client.site : null,
     missing: client.mode === "non_configure" ? [...client.missing] : [],
-    settings: wordpressSettingsOf(await ctx.repo.getSettings()),
+    settings: await ctx.repo.getWordPressSettings(),
     koraCategories: [...KORA_CATEGORIES],
   };
 }
@@ -64,22 +63,36 @@ export const listWordPressCategories: Handler = async (ctx) => {
   return json(await adapters().wordpress.listCategories());
 };
 
+const SETTINGS_LOCK = "wordpress-settings";
+/** Couvre l'écriture de la correspondance et son entrée de journal. */
+const SETTINGS_LOCK_MS = 30_000;
+
 export const saveWordPressSettings: Handler = async (ctx) => {
   assertCan(ctx.user, "wordpress.manage");
   const input = parse(schemas.wordpressSettings, ctx.body);
-  const settings = await ctx.repo.getSettings();
-  await ctx.repo.saveSettings({ ...settings, wordpress: input });
-  const pairs = Object.entries(input.categoryMap).map(([label, slug]) => `${label} → ${slug}`);
-  await audit(
-    ctx,
-    "wordpress.settings",
-    "publication",
-    "wordpress",
-    truncate(
-      `Correspondance des catégories WordPress : ${pairs.length ? pairs.join(", ") : "aucune"} ; catégorie par défaut : ${input.defaultCategory ?? "aucune"}`,
-      1000,
-    ),
-  );
+  const token = await ctx.repo.acquireLock(SETTINGS_LOCK, SETTINGS_LOCK_MS);
+  if (!token) {
+    throw conflict(
+      "wordpress_settings_in_progress",
+      "Un autre enregistrement de la correspondance des catégories WordPress est en cours : rechargez la page, vérifiez la correspondance puis réessayez.",
+    );
+  }
+  try {
+    await ctx.repo.saveWordPressSettings(input);
+    const pairs = Object.entries(input.categoryMap).map(([label, slug]) => `${label} → ${slug}`);
+    await audit(
+      ctx,
+      "wordpress.settings",
+      "publication",
+      "wordpress",
+      truncate(
+        `Correspondance des catégories WordPress : ${pairs.length ? pairs.join(", ") : "aucune"} ; catégorie par défaut : ${input.defaultCategory ?? "aucune"}`,
+        1000,
+      ),
+    );
+  } finally {
+    await ctx.repo.releaseLock(SETTINGS_LOCK, token);
+  }
   return json(await wordpressStatus(ctx));
 };
 

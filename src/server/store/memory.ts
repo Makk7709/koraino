@@ -1,8 +1,9 @@
+import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
 import { usesDatabase } from "../database";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
-import { normalizeSettings } from "./settings";
+import { wordpressSettingsOf } from "./settings";
 import { DbRepository } from "./db";
 import { buildSeed, type SeedData } from "./seed";
 
@@ -60,6 +61,7 @@ export class MemoryRepository implements Repository {
   audit;
   notifications;
   private settings: Settings;
+  private wordpress: WordPressSettings | null = null;
   private counter = 1000;
   private locks = new Map<string, { token: string; expiresAt: number }>();
 
@@ -87,11 +89,21 @@ export class MemoryRepository implements Repository {
   }
 
   async getSettings() {
-    return normalizeSettings(structuredClone(this.settings));
+    return structuredClone(this.settings);
   }
 
   async saveSettings(settings: Settings) {
-    this.settings = structuredClone(settings);
+    const { wordpress: legacy, ...rest } = structuredClone(settings);
+    if (legacy !== undefined) this.wordpress ??= wordpressSettingsOf(legacy);
+    this.settings = rest;
+  }
+
+  async getWordPressSettings() {
+    return structuredClone(this.wordpress ?? wordpressSettingsOf(this.settings.wordpress));
+  }
+
+  async saveWordPressSettings(settings: WordPressSettings) {
+    this.wordpress = structuredClone(settings);
   }
 
   nextId(prefix: string) {
@@ -120,7 +132,7 @@ export class MemoryRepository implements Repository {
 }
 
 /** Incrémenter quand la forme des enregistrements change : le store est alors réinitialisé. */
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const GLOBAL_KEY = "__koraNewsroomStore__";
 
 interface Holder {

@@ -12,7 +12,6 @@ import { conflict, HttpError, json, notFound } from "../http";
 import { audit, notify } from "../services/journal";
 import { toPublication } from "../services/view";
 import type { ArticleRecord, PublicationRecord, WordPressLink } from "../store/records";
-import { wordpressSettingsOf } from "../store/settings";
 import { notConfigured, roleTooHigh, WordPressError } from "./errors";
 import { articleMarker, articleToken, neutralizeShortcodes, toWordPressHtml } from "./html";
 import { resolveTaxonomy, type Taxonomy } from "./taxonomy";
@@ -621,10 +620,10 @@ async function sendUnderLock(
   options: PublishOptions,
 ): Promise<Response> {
   const started = Date.now();
-  const [rec, attempts, stored] = await Promise.all([
+  const [rec, attempts, mapping] = await Promise.all([
     ctx.repo.articles.get(articleId),
     ctx.repo.publications.list(),
-    ctx.repo.getSettings(),
+    ctx.repo.getWordPressSettings(),
   ]);
   if (!rec) throw notFound("Article introuvable.");
   const key = idempotencyKey(rec.id, version, "wordpress");
@@ -656,7 +655,7 @@ async function sendUnderLock(
     target =
       (await recoverInterrupted(ctx, client, rec, attempts, notes)) ??
       (await existingDraft(ctx, client, me, rec, attempts, notes, options));
-    taxonomy = await resolveTaxonomy(client, content, wordpressSettingsOf(stored), target !== null);
+    taxonomy = await resolveTaxonomy(client, content, mapping, target !== null);
     if (Date.now() - started > WRITE_DEADLINE_MS) {
       throw new WordPressError(
         "wordpress_unavailable",
