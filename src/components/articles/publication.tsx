@@ -23,7 +23,7 @@ function attemptTitle(a: PublicationAttempt): string {
   const ch = CHANNEL_INFO[a.channel].label;
   if (a.status === "succes")
     return a.mode === "brouillon_distant"
-      ? `Brouillon ${ch} créé (version ${a.version})`
+      ? `Brouillon ${ch} envoyé (version ${a.version})`
       : `${PUBLICATION_MODE[a.mode]} ${ch} réussi (version ${a.version})`;
   if (a.status === "bloque") return `Envoi ${ch} bloqué`;
   if (a.status === "verification_requise") return `Vérification requise avant reprise (${ch})`;
