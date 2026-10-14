@@ -7,7 +7,14 @@ export type WordPressErrorCode =
   | "wordpress_blocked"
   | "wordpress_rate_limited"
   | "wordpress_invalid"
-  | "wordpress_unavailable";
+  | "wordpress_unavailable"
+  | "wordpress_role_too_high";
+
+/** Configuration à corriger par un administrateur (et non panne du site) : 503. */
+const CONFIGURATION_CODES: readonly WordPressErrorCode[] = [
+  "wordpress_not_configured",
+  "wordpress_role_too_high",
+];
 
 /**
  * Échec d'un échange avec le site WordPress, déjà traduit pour l'utilisateur : message en
@@ -23,9 +30,17 @@ export class WordPressError extends HttpError {
     message: string,
     readonly verifyBeforeRetry = false,
   ) {
-    super(code === "wordpress_not_configured" ? 503 : 502, code, message);
+    super(CONFIGURATION_CODES.includes(code) ? 503 : 502, code, message);
     this.name = "WordPressError";
   }
+}
+
+/** Compte capable de publier : KORA n'écrit rien (un `draft` envoyé dépublierait un article). */
+export function roleTooHigh(): WordPressError {
+  return new WordPressError(
+    "wordpress_role_too_high",
+    "Le compte WordPress utilisé par KORA peut publier : par sécurité, KORA exige un compte de rôle Contributeur. Un administrateur doit changer le rôle du compte dans WordPress.",
+  );
 }
 
 const list = (names: string[]) =>

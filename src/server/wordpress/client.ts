@@ -9,6 +9,7 @@ import {
   type WordPressClient,
   type WordPressDraftPayload,
 } from "../adapters/channels";
+import { now } from "../clock";
 import { readWordPressConfig, type WordPressConfig, type WordPressCredentials } from "./config";
 import { notConfigured, WordPressError } from "./errors";
 import { decodeEntities, htmlToText, textKey } from "./html";
@@ -149,6 +150,10 @@ function unreadable(status: number, method: "GET" | "POST"): WordPressError {
   );
 }
 
+function copyAccount(account: WordPressAccount): WordPressAccount {
+  return { ...account, roles: account.roles && [...account.roles] };
+}
+
 function base64(text: string): string {
   let binary = "";
   for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
@@ -177,6 +182,8 @@ export class RestWordPress implements WordPressClient {
   readonly #timeoutMs: number;
   readonly #log: (line: string) => void;
   #accountId: Promise<number> | null = null;
+  /** Dernier compte lu (instance = un site, un identifiant) : relu à chaque `whoAmI` sans `maxAgeMs`. */
+  #account: { account: WordPressAccount; at: number } | null = null;
 
   constructor(credentials: WordPressCredentials, options: RestWordPressOptions = {}) {
     this.site = credentials.site;
@@ -201,7 +208,12 @@ export class RestWordPress implements WordPressClient {
       : null;
   }
 
-  async whoAmI(): Promise<WordPressAccount> {
+  async whoAmI(options: { maxAgeMs?: number } = {}): Promise<WordPressAccount> {
+    const cached = this.#account;
+    const age = cached ? now().getTime() - cached.at : Number.POSITIVE_INFINITY;
+    if (cached && options.maxAgeMs !== undefined && age >= 0 && age <= options.maxAgeMs) {
+      return copyAccount(cached.account);
+    }
     const { status, data } = await this.#send("GET", "/users/me", { context: "edit" });
     const user = userSchema.safeParse(data);
     if (!user.success) throw this.#unreadable("GET /users/me", status, "GET");
@@ -213,6 +225,7 @@ export class RestWordPress implements WordPressClient {
       canPublish: caps ? caps["publish_posts"] === true : null,
     };
     this.#accountId = Promise.resolve(account.id);
+    this.#account = { account: copyAccount(account), at: now().getTime() };
     return account;
   }
 
@@ -647,7 +660,7 @@ export class UnconfiguredWordPress implements WordPressClient {
     throw notConfigured(this.missing, this.invalidUrl);
   }
 
-  async whoAmI(): Promise<WordPressAccount> {
+  async whoAmI(_options?: { maxAgeMs?: number }): Promise<WordPressAccount> {
     return this.fail();
   }
   async getPost(_remoteId: string): Promise<RemotePost | null> {

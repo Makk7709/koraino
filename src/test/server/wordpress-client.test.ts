@@ -59,6 +59,19 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(req!.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("compte en mémoire : servi si assez récent, relu sinon (et toujours sans maxAgeMs)", async () => {
+    const { client, server } = fakeWordPress();
+    await client.whoAmI();
+    server.me.capabilities["publish_posts"] = true;
+    expect((await client.whoAmI({ maxAgeMs: 60_000 })).canPublish).toBe(false);
+    expect(server.requests).toHaveLength(1);
+    setClock(() => new Date(NOW.getTime() + 60_001));
+    expect((await client.whoAmI({ maxAgeMs: 60_000 })).canPublish).toBe(true);
+    server.me.capabilities["publish_posts"] = false;
+    expect((await client.whoAmI()).canPublish).toBe(false);
+    expect(server.requests).toHaveLength(3);
+  });
+
   it("crée et met à jour toujours en brouillon, sans liste vide", async () => {
     const { client, server } = fakeWordPress();
     const created = await client.createDraft(draft);

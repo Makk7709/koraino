@@ -5,6 +5,7 @@ import type {
   ArticleDetail,
   AuditEvent,
   PublicationAttempt,
+  WordPressCheck,
 } from "@/lib/api/types";
 import { resetAdapters } from "@/server/adapters";
 import { setClock } from "@/server/clock";
@@ -15,6 +16,7 @@ import { call, NOW, setup, teardown, USERS } from "./helpers";
 import {
   jsonResponse,
   KORA_ACCOUNT,
+  leaksSecret,
   OTHER_ACCOUNT,
   useFakeWordPress,
   WP_SITE,
@@ -395,6 +397,81 @@ describe("envoi d'un brouillon WordPress réel", () => {
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("publication_in_progress");
     expect(wp.server.requests).toHaveLength(0);
+  });
+});
+
+describe("rôle du compte WordPress imposé par le serveur", () => {
+  const ROLE_MESSAGE =
+    "Le compte WordPress utilisé par KORA peut publier : par sécurité, KORA exige un compte de rôle Contributeur. Un administrateur doit changer le rôle du compte dans WordPress.";
+  const meCalls = () => wp.server.requests.filter((r) => r.url.pathname.endsWith("/users/me"));
+
+  it("compte capable de publier : 503 wordpress_role_too_high, aucune écriture", async () => {
+    const art = await approvedArticle();
+    wp.server.me.roles = ["editor"];
+    wp.server.me.capabilities["publish_posts"] = true;
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatchObject({ code: "wordpress_role_too_high", message: ROLE_MESSAGE });
+    expect(errorAttempt(res)).toMatchObject({ status: "echec", code: "wordpress_role_too_high" });
+    expect(wp.server.writes()).toHaveLength(0);
+    expect(wp.server.requests.map((r) => r.url.pathname)).toEqual(["/wp-json/wp/v2/users/me"]);
+    expect((await detail(art.id)).wordpress.remoteId).toBeNull();
+  });
+
+  it("y compris pour reprendre un envoi interrompu : rien n'est recherché ni écrit", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    await publish(art.id);
+    wp.server.me.capabilities["publish_posts"] = true;
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000 + 1000));
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(wp.server.requests.some(isDraftSearch)).toBe(false);
+    expect(wp.server.writes()).toHaveLength(1);
+  });
+
+  it("droits gardés en mémoire 5 min au plus : un compte promu ensuite est refusé", async () => {
+    const art = await approvedArticle();
+    expect((await publish(art.id)).status).toBe(201);
+    await approveNewVersion(art.id);
+    expect((await publish(art.id)).status).toBe(201);
+    expect(meCalls()).toHaveLength(1);
+
+    wp.server.me.capabilities["publish_posts"] = true;
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000 + 1000));
+    await approveNewVersion(art.id, "Verkor et Renault : troisième version");
+    const late = await publish(art.id);
+    expect(late.status).toBe(503);
+    expect(late.body.error.code).toBe("wordpress_role_too_high");
+    expect(meCalls()).toHaveLength(2);
+    expect(wp.server.writes()).toHaveLength(2);
+  });
+
+  it("le test de connexion relit les droits : refus immédiat, sans attendre", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    wp.server.me.capabilities["publish_posts"] = true;
+    const check = await call<WordPressCheck>("GET", "/wordpress/check", { user: USERS.admin });
+    expect(check.body).toMatchObject({ ok: true, canPublish: true });
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(wp.server.writes()).toHaveLength(1);
+  });
+
+  it("droits illisibles : envoi poursuivi, avertissement sans secret", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const art = await approvedArticle();
+    wp.server.fail(
+      (r) => r.url.pathname.endsWith("/users/me"),
+      jsonResponse({ id: KORA_ACCOUNT, name: "KORA Rédaction", roles: ["contributor"] }),
+    );
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    const lines = warn.mock.calls.map((c) => c.join(" "));
+    expect(lines.some((l) => l.includes("rôle Contributeur non vérifié"))).toBe(true);
+    expect(lines.some(leaksSecret)).toBe(false);
+    warn.mockRestore();
   });
 });
 

@@ -1,6 +1,11 @@
 import type { PublicationAttempt, WordPressRemoteStatus } from "@/lib/api/types";
 import { adapters } from "../adapters";
-import type { RemotePost, WordPressClient, WordPressDraftPayload } from "../adapters/channels";
+import type {
+  RemotePost,
+  WordPressAccount,
+  WordPressClient,
+  WordPressDraftPayload,
+} from "../adapters/channels";
 import type { Ctx } from "../context";
 import { checkPublishable, idempotencyKey } from "../domain/workflow";
 import { conflict, HttpError, json, notFound } from "../http";
@@ -8,7 +13,7 @@ import { audit, notify } from "../services/journal";
 import { toPublication } from "../services/view";
 import type { ArticleRecord, PublicationRecord, WordPressLink } from "../store/records";
 import { wordpressSettingsOf } from "../store/settings";
-import { notConfigured, WordPressError } from "./errors";
+import { notConfigured, roleTooHigh, WordPressError } from "./errors";
 import { articleMarker, articleToken, neutralizeShortcodes, toWordPressHtml } from "./html";
 import { resolveTaxonomy, type Taxonomy } from "./taxonomy";
 
@@ -23,6 +28,8 @@ const RECOVERY_MARGIN_MS = 2 * 60_000;
  * le délai du client. Un brouillon modifié plus tard (retouché depuis) n'est pas repris.
  */
 const RECOVERY_WINDOW_MS = 10 * 60_000;
+/** Droits du compte gardés en mémoire : un compte promu Éditeur est refusé 3 min après au plus. */
+const ROLE_CACHE_MS = 3 * 60_000;
 /** Code de la tentative posée juste avant l'écriture ; s'il subsiste, l'envoi a été interrompu. */
 const CONFIRMATION_PENDING = "wordpress_confirmation_pending";
 
@@ -115,6 +122,21 @@ export async function settleSignal(ctx: Ctx, signalId: string | null, at: string
   if (signal && signal.status !== "traite" && signal.status !== "rejete") {
     await ctx.repo.signals.update({ ...signal, status: "traite", updatedAt: at });
   }
+}
+
+/**
+ * Avant toute écriture : le compte ne doit pas pouvoir publier (avec un tel compte, un `draft`
+ * envoyé sur un contenu publié entre-temps le dépublierait). Droits illisibles : envoi poursuivi.
+ */
+async function contributorAccount(client: WordPressClient): Promise<WordPressAccount> {
+  const me = await client.whoAmI({ maxAgeMs: ROLE_CACHE_MS });
+  if (me.canPublish === true) throw roleTooHigh();
+  if (me.canPublish === null) {
+    console.warn(
+      "[wordpress] droits du compte KORA illisibles (capabilities absentes de /users/me) : rôle Contributeur non vérifié, envoi poursuivi.",
+    );
+  }
+  return me;
 }
 
 /** Erreur du client non configuré (avec les variables manquantes). */
@@ -358,6 +380,7 @@ async function recoverInterrupted(
 async function existingDraft(
   ctx: Ctx,
   client: WordPressClient,
+  me: WordPressAccount,
   rec: ArticleRecord,
   attempts: PublicationAttempt[],
   notes: string[],
@@ -404,7 +427,6 @@ async function existingDraft(
       attempts,
     );
   }
-  const me = await client.whoAmI();
   if (post.authorId !== me.id) {
     notes.push(
       `Le brouillon n° ${id} appartient à un autre compte WordPress : KORA n'y touche pas et crée un nouveau brouillon.`,
@@ -491,9 +513,10 @@ async function sendUnderLock(
   let target: RemotePost | null;
   let taxonomy: Taxonomy;
   try {
+    const me = await contributorAccount(client);
     target =
       (await recoverInterrupted(ctx, client, rec, attempts, notes)) ??
-      (await existingDraft(ctx, client, rec, attempts, notes));
+      (await existingDraft(ctx, client, me, rec, attempts, notes));
     taxonomy = await resolveTaxonomy(client, content, wordpressSettingsOf(stored), target !== null);
     if (Date.now() - started > WRITE_DEADLINE_MS) {
       throw new WordPressError(

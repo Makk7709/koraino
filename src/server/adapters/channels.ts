@@ -61,7 +61,8 @@ export interface WordPressClient {
   ownsRemote(remoteId: string, site: string | null | undefined): boolean;
   /** Lien d'édition dans l'administration WordPress (null en simulation). */
   editUrl(remoteId: string): string | null;
-  whoAmI(): Promise<WordPressAccount>;
+  /** `maxAgeMs` : une réponse en mémoire plus récente est acceptée ; sinon le site est relu. */
+  whoAmI(options?: { maxAgeMs?: number }): Promise<WordPressAccount>;
   /** null si le contenu n'existe pas (ou plus). */
   getPost(remoteId: string): Promise<RemotePost | null>;
   /**
@@ -130,7 +131,7 @@ export class SimulatedWordPress implements WordPressClient {
     return null;
   }
 
-  async whoAmI() {
+  async whoAmI(_options?: { maxAgeMs?: number }) {
     return { ...SIMULATED_ACCOUNT, roles: [...(SIMULATED_ACCOUNT.roles ?? [])] };
   }
 
