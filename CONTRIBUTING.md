@@ -32,8 +32,9 @@ Le `SUPABASE_URL=` vide est volontaire : `.env` contient l'adresse de la base de
 
 - Aucun secret dans le code ni dans un fichier commité.
 - `.env` **est versionné** et ne contient que des valeurs publiques (adresse et clé publique Supabase). Les fichiers `*.local` sont ignorés par git.
-- Les secrets serveur (`SUPABASE_SERVICE_ROLE_KEY`, `AI_API_KEY`, `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, `APP_USER_CONNECTION_KEY_SECRET`, etc.) sont enregistrés dans la console Lovable Cloud. La liste complète est dans le [README](README.md#configuration).
+- Les secrets serveur (`SUPABASE_SERVICE_ROLE_KEY`, `AI_API_KEY`, `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, `APP_USER_CONNECTION_KEY_SECRET`, `WORDPRESS_APP_PASSWORD`, etc.) sont enregistrés dans la console Lovable Cloud. La liste complète est dans le [README](README.md#configuration).
 - `APP_USER_CONNECTION_KEY_SECRET` chiffre les connexions LinkedIn en base : la changer rend illisibles toutes les connexions existantes.
+- `WORDPRESS_APP_PASSWORD` ne doit apparaître dans aucun message, journal, réponse ni audit. Les tests n'utilisent que `https://wp.example.test` avec un `fetch` simulé, jamais un vrai site.
 
 ## Conventions du code
 
