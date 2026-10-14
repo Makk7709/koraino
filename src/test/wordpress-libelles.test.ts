@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/integrations/supabase/client", () => ({ supabase: { auth: {} } }));
 
 import {
+  WORDPRESS_LOCKED,
   WORDPRESS_NOT_CONFIGURED,
   hasRemoteDraft,
   isRemoteLocked,
+  ownsRemote,
   safeHttpUrl,
   verificationCandidates,
   wordpressActionLabel,
@@ -64,6 +66,7 @@ describe("bouton d'envoi WordPress", () => {
       disabledReason: WORDPRESS_NOT_CONFIGURED,
       notConfigured: true,
       demo: false,
+      locked: false,
     });
     expect(WORDPRESS_NOT_CONFIGURED).toBe(
       "WordPress n'est pas configuré : voir Paramètres > WordPress.",
@@ -80,12 +83,33 @@ describe("bouton d'envoi WordPress", () => {
       disabledReason: null,
       notConfigured: false,
       demo: false,
+      locked: false,
     });
     expect(wordpressSendState(status("simule"), "Réservé aux validateurs.")).toEqual({
       disabledReason: "Réservé aux validateurs.",
       notConfigured: false,
       demo: true,
+      locked: false,
     });
+  });
+
+  it("est désactivé pour un contenu publié ou programmé du site, pas pour un identifiant étranger", () => {
+    const own = { editUrl: "https://site.test/wp-admin/post.php?post=7&action=edit" };
+    const published = { remoteId: "7", status: "publie" as const, ...own };
+    expect(wordpressSendState(status("reel"), null, published)).toMatchObject({
+      disabledReason: WORDPRESS_LOCKED,
+      locked: true,
+    });
+    expect(
+      wordpressSendState(status("reel"), "Raison du canal", { ...published, status: "programme" })
+        .disabledReason,
+    ).toBe(WORDPRESS_LOCKED);
+    expect(
+      wordpressSendState(status("reel"), null, { remoteId: "wp-3012", status: "publie" }),
+    ).toMatchObject({ disabledReason: null, locked: false });
+    expect(wordpressSendState(status("non_configure"), null, published).disabledReason).toBe(
+      WORDPRESS_NOT_CONFIGURED,
+    );
   });
 
   it("ne bloque rien tant que le statut n'est pas connu (chargement, erreur, ancien serveur)", () => {
@@ -108,6 +132,25 @@ describe("bouton d'envoi WordPress", () => {
     );
     expect(wordpressActionLabel({ remoteId: "12", status: "publie" })).toBe("Envoyer à WordPress");
   });
+
+  it("propose une création pour un identifiant que le site configuré n'a pas produit", () => {
+    expect(wordpressActionLabel({ remoteId: "wp-4821", status: "brouillon" }, "reel")).toBe(
+      "Créer le brouillon WordPress",
+    );
+    expect(
+      wordpressActionLabel(
+        {
+          remoteId: "12",
+          status: "brouillon",
+          editUrl: "https://site.test/wp-admin/post.php?post=12",
+        },
+        "reel",
+      ),
+    ).toBe("Mettre à jour le brouillon WordPress");
+    expect(wordpressActionLabel({ remoteId: "wp-4821", status: "brouillon" }, "simule")).toBe(
+      "Mettre à jour le brouillon WordPress",
+    );
+  });
 });
 
 describe("état du brouillon distant", () => {
@@ -120,6 +163,17 @@ describe("état du brouillon distant", () => {
   it("considère publié et programmé comme verrouillés côté WordPress", () => {
     const locked = ALL_STATUSES.filter((status) => isRemoteLocked({ remoteId: "42", status }));
     expect(locked).toEqual(["programme", "publie"]);
+  });
+
+  it("en mode réel, ne reconnaît que les identifiants munis d'un lien d'édition", () => {
+    const foreign = { remoteId: "wp-4821", status: "publie" as const, editUrl: null };
+    expect(ownsRemote(foreign, "reel")).toBe(false);
+    expect(hasRemoteDraft(foreign, "reel")).toBe(false);
+    expect(isRemoteLocked(foreign, "reel")).toBe(false);
+    expect(ownsRemote(foreign, "simule")).toBe(true);
+    expect(ownsRemote(foreign, undefined)).toBe(true);
+    expect(ownsRemote({ ...foreign, editUrl: "https://site.test/x" }, "reel")).toBe(true);
+    expect(ownsRemote({ remoteId: null, status: "aucun" }, "simule")).toBe(false);
   });
 });
 
@@ -135,6 +189,11 @@ describe("refus de l'API pour WordPress", () => {
     expect(wordpressErrorView(err("publication_verification_required")).tone).toBe("warning");
     expect(wordpressErrorView(err("publication_in_progress")).tone).toBe("info");
     expect(wordpressErrorView(err("wordpress_unavailable")).tone).toBe("danger");
+    expect(wordpressErrorView(err("wordpress_remote_modified"))).toMatchObject({
+      tone: "warning",
+      title: expect.stringMatching(/retouché dans WordPress/),
+    });
+    expect(wordpressErrorView(err("wordpress_role_too_high")).tone).toBe("danger");
   });
 
   it("garde le titre générique pour les autres refus", () => {

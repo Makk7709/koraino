@@ -1,25 +1,40 @@
 import { ApiError } from "@/lib/api/client";
-import type { Article, WordPressStatus } from "@/lib/api/types";
+import type { Article, WordPressMode, WordPressStatus } from "@/lib/api/types";
 import type { BannerTone } from "./ui";
 
-type RemoteState = Pick<Article["wordpress"], "remoteId" | "status">;
+type RemoteState = Pick<Article["wordpress"], "remoteId" | "status"> & {
+  editUrl?: string | null;
+};
 
 export const WORDPRESS_NOT_CONFIGURED =
   "WordPress n'est pas configuré : voir Paramètres > WordPress.";
 
-/** Brouillon distant connu de KORA (le serveur revérifie qu'il appartient bien au site configuré). */
-export function hasRemoteDraft(wp: RemoteState): boolean {
-  return !!wp.remoteId && wp.status !== "aucun" && wp.status !== "supprime";
+export const WORDPRESS_LOCKED =
+  "Contenu publié ou programmé sur WordPress : la modification se fait dans WordPress.";
+
+/**
+ * Identifiant distant produit par le site configuré. En mode réel, le serveur ne fournit le lien
+ * d'édition que dans ce cas : un ancien identifiant simulé ou celui d'un autre site est ignoré
+ * et le prochain envoi crée un nouveau brouillon. Mode inconnu : le serveur tranche.
+ */
+export function ownsRemote(wp: RemoteState, mode?: WordPressMode): boolean {
+  if (!wp.remoteId) return false;
+  return mode === "reel" ? !!wp.editUrl : true;
+}
+
+/** Brouillon distant du site configuré, ni absent ni supprimé. */
+export function hasRemoteDraft(wp: RemoteState, mode?: WordPressMode): boolean {
+  return ownsRemote(wp, mode) && wp.status !== "aucun" && wp.status !== "supprime";
 }
 
 /** Contenu en ligne ou programmé : le serveur refuse de le modifier (409 `wordpress_remote_published`). */
-export function isRemoteLocked(wp: RemoteState): boolean {
-  return !!wp.remoteId && (wp.status === "publie" || wp.status === "programme");
+export function isRemoteLocked(wp: RemoteState, mode?: WordPressMode): boolean {
+  return ownsRemote(wp, mode) && (wp.status === "publie" || wp.status === "programme");
 }
 
 /** Libellé du bouton d'envoi : le serveur décide seul entre création et mise à jour. */
-export function wordpressActionLabel(wp: RemoteState): string {
-  if (!wp.remoteId || wp.status === "aucun") return "Créer le brouillon WordPress";
+export function wordpressActionLabel(wp: RemoteState, mode?: WordPressMode): string {
+  if (!ownsRemote(wp, mode) || wp.status === "aucun") return "Créer le brouillon WordPress";
   if (wp.status === "supprime") return "Recréer le brouillon WordPress";
   if (wp.status === "brouillon" || wp.status === "en_attente")
     return "Mettre à jour le brouillon WordPress";
@@ -33,12 +48,19 @@ export function wordpressActionLabel(wp: RemoteState): string {
 export function wordpressSendState(
   status: Pick<WordPressStatus, "mode"> | undefined,
   channelReason: string | null,
-): { disabledReason: string | null; notConfigured: boolean; demo: boolean } {
+  remote?: RemoteState,
+): { disabledReason: string | null; notConfigured: boolean; demo: boolean; locked: boolean } {
   const notConfigured = status?.mode === "non_configure";
+  const locked = !!remote && isRemoteLocked(remote, status?.mode);
   return {
-    disabledReason: notConfigured ? WORDPRESS_NOT_CONFIGURED : channelReason,
+    disabledReason: notConfigured
+      ? WORDPRESS_NOT_CONFIGURED
+      : locked
+        ? WORDPRESS_LOCKED
+        : channelReason,
     notConfigured,
     demo: status?.mode === "simule",
+    locked,
   };
 }
 
@@ -51,6 +73,12 @@ const ERROR_VIEW: Partial<Record<string, { tone: BannerTone; title: string }>> =
     tone: "warning",
     title: "Contenu déjà en ligne ou programmé : la modification se fait dans WordPress",
   },
+  wordpress_remote_modified: {
+    tone: "warning",
+    title: "Brouillon retouché dans WordPress depuis le dernier envoi",
+  },
+  wordpress_role_too_high: { tone: "danger", title: "Compte WordPress de KORA trop puissant" },
+  wordpress_no_draft: { tone: "info", title: "Aucun brouillon sur le site WordPress configuré" },
   wordpress_not_configured: { tone: "warning", title: "WordPress n'est pas configuré" },
   publication_in_progress: { tone: "info", title: "Un envoi vers WordPress est déjà en cours" },
   article_changed: { tone: "info", title: "L'article a changé pendant la préparation de l'envoi" },

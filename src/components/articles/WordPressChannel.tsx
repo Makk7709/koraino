@@ -4,12 +4,13 @@ import { Pill } from "@/components/kora/primitives";
 import { WORDPRESS_STATUS, formatDateTime } from "@/components/kora/labels";
 import { ApiError } from "@/lib/api/client";
 import { errorMessage, useRefreshArticleWordPress } from "@/lib/api/hooks";
-import type { ArticleDetail } from "@/lib/api/types";
+import type { ArticleDetail, WordPressMode } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { Banner } from "./ui";
 import {
   WORDPRESS_NOT_CONFIGURED,
   hasRemoteDraft,
+  ownsRemote,
   safeHttpUrl,
   verificationCandidates,
   wordpressErrorView,
@@ -50,10 +51,12 @@ function SettingsLink() {
  */
 export function WordPressRemoteState({
   article,
+  mode,
   canRefresh,
   refreshBlockedReason,
 }: {
   article: ArticleDetail;
+  mode: WordPressMode | undefined;
   canRefresh: boolean;
   refreshBlockedReason: string | null;
 }) {
@@ -61,9 +64,10 @@ export function WordPressRemoteState({
   const status = WORDPRESS_STATUS[wp.status];
   const refresh = useRefreshArticleWordPress();
   const setArticle = useSetArticle();
-  const draft = hasRemoteDraft(wp);
+  const draft = hasRemoteDraft(wp, mode);
+  const foreign = !!wp.remoteId && !ownsRemote(wp, mode);
   const editUrl = wp.status !== "supprime" ? (wp.editUrl ?? null) : null;
-  const showHint = wp.status !== "aucun" && wp.status !== "brouillon";
+  const showHint = !foreign && wp.status !== "aucun" && wp.status !== "brouillon";
 
   return (
     <div className="mt-2.5 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 text-[11.5px] text-kora-ink-soft">
@@ -110,6 +114,12 @@ export function WordPressRemoteState({
         )}
       </div>
       {showHint && <p className="mt-1.5 text-[11px] text-muted-foreground">{status.hint}</p>}
+      {foreign && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Identifiant d&apos;une démonstration ou d&apos;un autre site : le prochain envoi créera un
+          nouveau brouillon sur le site configuré.
+        </p>
+      )}
     </div>
   );
 }
@@ -148,13 +158,27 @@ export function WordPressPendingNote() {
   );
 }
 
-/** Refus de l'API pour un envoi WordPress : message du serveur, et aide selon le code. */
-export function WordPressRefusal({ error, editUrl }: { error: unknown; editUrl: string | null }) {
+/**
+ * Refus de l'API pour un envoi WordPress : message du serveur, et aide selon le code. Une retouche
+ * faite dans WordPress (409 `wordpress_remote_modified`) peut être écrasée sur confirmation.
+ */
+export function WordPressRefusal({
+  error,
+  editUrl,
+  onOverwrite,
+  overwriteDisabled = false,
+}: {
+  error: unknown;
+  editUrl: string | null;
+  onOverwrite?: () => void;
+  overwriteDisabled?: boolean;
+}) {
   const view = wordpressErrorView(error);
   const candidates =
     view.code === "publication_verification_required" && error instanceof ApiError
       ? verificationCandidates(error.details)
       : [];
+  const modified = view.code === "wordpress_remote_modified";
 
   return (
     <Banner tone={view.tone} title={view.title}>
@@ -162,6 +186,22 @@ export function WordPressRefusal({ error, editUrl }: { error: unknown; editUrl: 
       {view.code === "wordpress_remote_published" && editUrl && (
         <div className="mt-2">
           <OpenInWordPress href={editUrl} />
+        </div>
+      )}
+      {modified && (editUrl || onOverwrite) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {editUrl && <OpenInWordPress href={editUrl} />}
+          {onOverwrite && (
+            <button
+              type="button"
+              className={cn(smallButton, "hover:border-kora-rose/50 hover:bg-kora-rose-bg")}
+              disabled={overwriteDisabled}
+              title="Remplace les retouches faites dans WordPress par la version approuvée de KORA"
+              onClick={onOverwrite}
+            >
+              Écraser quand même
+            </button>
+          )}
         </div>
       )}
       {view.code === "wordpress_not_configured" && (

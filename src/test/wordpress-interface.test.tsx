@@ -298,6 +298,86 @@ describe("Panneau de diffusion : canal WordPress", () => {
     expect(await sendButton()).toBeEnabled();
     expect(screen.queryByText(/n'est pas configuré/)).toBeNull();
   });
+
+  it("désactive l'envoi d'un contenu publié sur le site, avec l'explication", async () => {
+    routes["GET /api/me"] = me(["validateur"]);
+    routes["GET /api/wordpress"] = () => Response.json(wpStatus());
+    const a = article({
+      remoteId: "77",
+      status: "publie",
+      editUrl: "https://site.test/wp-admin/post.php?post=77&action=edit",
+    });
+    renderWithProviders(<Panel a={a} />);
+    const button = await screen.findByRole("button", { name: /Envoyer à WordPress/ });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(button).toHaveAttribute("title", expect.stringMatching(/se fait dans WordPress/));
+  });
+
+  it("propose de créer un brouillon pour un ancien identifiant simulé en mode réel", async () => {
+    routes["GET /api/me"] = me(["validateur"]);
+    routes["GET /api/wordpress"] = () => Response.json(wpStatus());
+    renderWithProviders(<Panel a={article({ remoteId: "wp-4821", status: "publie" })} />);
+    const button = await screen.findByRole("button", { name: "Créer le brouillon WordPress" });
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("renvoie avec confirmation d'écrasement après une retouche faite dans WordPress", async () => {
+    routes["GET /api/me"] = me(["validateur"]);
+    routes["GET /api/wordpress"] = () => Response.json(wpStatus());
+    routes["POST /api/articles/a1/publish"] = (init) =>
+      JSON.parse(String(init?.body)).overwriteRemoteChanges
+        ? Response.json({
+            id: "pub1",
+            idempotencyKey: "0123456789abcdef",
+            articleId: "a1",
+            linkedinPostId: null,
+            channel: "wordpress",
+            version: 2,
+            status: "succes",
+            code: null,
+            message: "Brouillon WordPress n° 77 mis à jour (version 2).",
+            attempts: 1,
+            remoteId: "77",
+            mode: "brouillon_distant",
+            at: "2026-10-14T10:00:00Z",
+            by: "Camille Martin",
+          })
+        : Response.json(
+            {
+              error: {
+                code: "wordpress_remote_modified",
+                message:
+                  "Le brouillon a été modifié dans WordPress depuis le dernier envoi de KORA.",
+              },
+            },
+            { status: 409 },
+          );
+    const a = article({
+      remoteId: "77",
+      status: "brouillon",
+      editUrl: "https://site.test/wp-admin/post.php?post=77&action=edit",
+    });
+    renderWithProviders(<Panel a={a} />);
+
+    const send = await screen.findByRole("button", {
+      name: /Mettre à jour le brouillon WordPress/,
+    });
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
+    expect(
+      await screen.findByText("Brouillon retouché dans WordPress depuis le dernier envoi"),
+    ).toBeInTheDocument();
+    expect(JSON.parse(String(calls("POST /api/articles/a1/publish")[0]![1]!.body))).toEqual({
+      channel: "wordpress",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Écraser quand même" }));
+    await waitFor(() => expect(calls("POST /api/articles/a1/publish")).toHaveLength(2));
+    expect(JSON.parse(String(calls("POST /api/articles/a1/publish")[1]![1]!.body))).toEqual({
+      channel: "wordpress",
+      overwriteRemoteChanges: true,
+    });
+  });
 });
 
 describe("État du brouillon distant", () => {
@@ -311,7 +391,7 @@ describe("État du brouillon distant", () => {
       editUrl: "https://site.test/wp-admin/post.php?post=123&action=edit",
     });
     renderWithProviders(
-      <WordPressRemoteState article={a} canRefresh refreshBlockedReason={null} />,
+      <WordPressRemoteState article={a} mode="reel" canRefresh refreshBlockedReason={null} />,
     );
 
     expect(await screen.findByText("En attente de relecture")).toBeInTheDocument();
@@ -331,9 +411,15 @@ describe("État du brouillon distant", () => {
   it("masque l'actualisation sans brouillon ou sans droit de validation", async () => {
     renderWithProviders(
       <>
-        <WordPressRemoteState article={article()} canRefresh refreshBlockedReason={null} />
+        <WordPressRemoteState
+          article={article()}
+          mode="reel"
+          canRefresh
+          refreshBlockedReason={null}
+        />
         <WordPressRemoteState
           article={article({ remoteId: "9", status: "brouillon" })}
+          mode="simule"
           canRefresh={false}
           refreshBlockedReason={null}
         />
@@ -344,10 +430,25 @@ describe("État du brouillon distant", () => {
     expect(screen.queryByRole("link", { name: /Ouvrir dans WordPress/ })).toBeNull();
   });
 
+  it("signale un identifiant étranger au site en mode réel, sans actualisation", async () => {
+    renderWithProviders(
+      <WordPressRemoteState
+        article={article({ remoteId: "wp-3012", status: "publie", editUrl: null })}
+        mode="reel"
+        canRefresh
+        refreshBlockedReason={null}
+      />,
+    );
+    expect(await screen.findByText(/le prochain envoi créera un nouveau brouillon/)).toBeVisible();
+    expect(screen.queryByText(/toute modification se fait dans WordPress/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Actualiser le statut/ })).toBeNull();
+  });
+
   it("bloque l'actualisation quand WordPress n'est pas configuré", async () => {
     renderWithProviders(
       <WordPressRemoteState
         article={article({ remoteId: "9", status: "brouillon" })}
+        mode="non_configure"
         canRefresh
         refreshBlockedReason="WordPress n'est pas configuré : voir Paramètres > WordPress."
       />,

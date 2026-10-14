@@ -102,14 +102,21 @@ function ChannelRow({
   const info = CHANNEL_INFO[channel];
   const isWordPress = channel === "wordpress";
   const approval = validApprovalFor(article, channel);
-  const publish = useKoraMutation(() => api.publishArticle(article.id, { channel }), {
-    success: (r) =>
-      r.status === "succes"
-        ? r.mode === "brouillon_distant"
-          ? `Brouillon ${info.label} envoyé`
-          : `Export ${info.label} prêt`
-        : "",
-  });
+  const publish = useKoraMutation(
+    (overwriteRemoteChanges?: boolean) =>
+      api.publishArticle(
+        article.id,
+        overwriteRemoteChanges ? { channel, overwriteRemoteChanges } : { channel },
+      ),
+    {
+      success: (r) =>
+        r.status === "succes"
+          ? r.mode === "brouillon_distant"
+            ? `Brouillon ${info.label} envoyé`
+            : `Export ${info.label} prêt`
+          : "",
+    },
+  );
   const last = publish.data ?? latestAttempt(article.publications, channel);
   const channelReason = !approval
     ? `Approbation valide requise pour la version ${article.currentVersion} sur ce canal.`
@@ -119,11 +126,12 @@ function ChannelRow({
         : workflow.dirtyHint
       : null;
   const send = isWordPress
-    ? wordpressSendState(wordpress, channelReason)
-    : { disabledReason: channelReason, notConfigured: false, demo: false };
+    ? wordpressSendState(wordpress, channelReason, article.wordpress)
+    : { disabledReason: channelReason, notConfigured: false, demo: false, locked: false };
   const disabledReason = send.disabledReason;
   // Un refus peut avoir enregistré une tentative ou réglé l'état distant (409 publié).
   const onPublishError = () => void qc.invalidateQueries({ queryKey: qk.article(article.id) });
+  const sendNow = (overwrite?: boolean) => publish.mutate(overwrite, { onError: onPublishError });
 
   return (
     <div className="rounded-xl border border-border bg-white p-3.5">
@@ -145,13 +153,13 @@ function ChannelRow({
         <PrimaryButton
           disabled={!!disabledReason || publish.isPending}
           title={disabledReason ?? undefined}
-          onClick={() => publish.mutate(undefined, { onError: onPublishError })}
+          onClick={() => sendNow()}
         >
           <Send className="size-4" />
           {publish.isPending
             ? "Envoi…"
             : isWordPress
-              ? wordpressActionLabel(article.wordpress)
+              ? wordpressActionLabel(article.wordpress, wordpress?.mode)
               : info.action}
         </PrimaryButton>
       </div>
@@ -159,6 +167,7 @@ function ChannelRow({
         <>
           <WordPressRemoteState
             article={article}
+            mode={wordpress?.mode}
             canRefresh={workflow.perms.canValidate}
             refreshBlockedReason={send.notConfigured ? send.disabledReason : null}
           />
@@ -172,7 +181,12 @@ function ChannelRow({
         <div className="mt-2.5">
           {publish.isError ? (
             isWordPress ? (
-              <WordPressRefusal error={publish.error} editUrl={article.wordpress.editUrl ?? null} />
+              <WordPressRefusal
+                error={publish.error}
+                editUrl={article.wordpress.editUrl ?? null}
+                onOverwrite={() => sendNow(true)}
+                overwriteDisabled={!!disabledReason || publish.isPending}
+              />
             ) : (
               <RefusalResult error={publish.error} />
             )

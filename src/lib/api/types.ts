@@ -276,12 +276,7 @@ export interface Article {
  * corbeille ou supprimé sur le site (un nouvel envoi recrée alors un brouillon).
  */
 export type WordPressRemoteStatus =
-  | "aucun"
-  | "brouillon"
-  | "en_attente"
-  | "programme"
-  | "publie"
-  | "supprime";
+  "aucun" | "brouillon" | "en_attente" | "programme" | "publie" | "supprime";
 
 export interface ArticleDetail extends Article {
   versions: ArticleVersion[];
@@ -744,6 +739,8 @@ export interface ApproveInput {
 
 export interface PublishInput {
   channel: Channel;
+  /** WordPress : confirme l'écrasement d'un brouillon retouché dans WordPress depuis le dernier envoi. */
+  overwriteRemoteChanges?: boolean;
 }
 
 /** Corps optionnel de POST /linkedin/:id/publish : verdict humain sur une publication non confirmée. */
