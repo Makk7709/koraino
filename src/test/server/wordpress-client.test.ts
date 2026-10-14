@@ -10,6 +10,7 @@ import {
   KORA_ACCOUNT,
   leaksSecret,
   OTHER_ACCOUNT,
+  WP_PASSWORD,
   WP_PASSWORD_COMPACT,
   WP_SITE,
   WP_TOKEN,
@@ -288,5 +289,38 @@ describe("RestWordPress : secret", () => {
     expect(messages.join(" ")).toContain("[masqué]");
     expect(JSON.stringify(client)).not.toContain(WP_TOKEN);
     expect(String(Object.values(client))).not.toContain(WP_TOKEN);
+  });
+
+  it("secret recopié à cheval sur les limites de 200 (message) et 300 (journal) caractères", async () => {
+    const { client, server, logs } = fakeWordPress();
+    // Le secret commence quelques caractères avant la limite : tronquer d'abord en laisserait un morceau.
+    const straddle = (secret: string, limit: number, prefix = "") =>
+      `${prefix}${"x".repeat(limit - 12 - prefix.length)}${secret} fin`;
+    // Partie du jeton Basic qui encode le mot de passe (« kora-redaction: » = 20 caractères base64).
+    const tokenSecret = WP_TOKEN.slice(20);
+    const fragments = (s: string) => Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
+    const forbidden = [...fragments(WP_PASSWORD_COMPACT), ...fragments(tokenSecret)];
+    const faults = [
+      jsonResponse({ code: "x", message: straddle(WP_PASSWORD_COMPACT, 200) }, 400),
+      jsonResponse({ code: "x", message: straddle(WP_PASSWORD, 200) }, 403),
+      htmlResponse(500, straddle(WP_PASSWORD_COMPACT, 300, "<html><pre>PHP_AUTH_PW=")),
+      new Response(straddle(WP_PASSWORD, 300, "PHP_AUTH_PW="), { status: 502 }),
+      // Jeton sans préfixe « Basic » : c'est sa partie « mot de passe » qui chevauche la limite.
+      new Response(straddle(WP_TOKEN, 300 - 20, "HTTP_AUTHORIZATION="), { status: 500 }),
+    ];
+    const messages: string[] = [];
+    for (const fault of faults) {
+      server.fail(() => true, fault);
+      messages.push((await failure(client.createDraft(draft))).message);
+    }
+    for (const text of [...messages, ...logs]) {
+      expect(leaksSecret(text), text).toBe(false);
+      expect(
+        forbidden.find((f) => text.includes(f)),
+        text,
+      ).toBeUndefined();
+    }
+    expect(messages.slice(0, 2).every((m) => m.includes("[masqué]"))).toBe(true);
+    expect(logs.filter((l) => l.includes("[masqué]")).length).toBeGreaterThanOrEqual(faults.length);
   });
 });

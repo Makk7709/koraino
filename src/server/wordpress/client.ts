@@ -75,10 +75,16 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** Extrait d'une réponse sur une ligne, borné (journaux et messages). */
+/** Extrait sur une ligne, borné. Ne pas appeler directement sur un texte du site : `#excerpt` masque d'abord. */
 function excerpt(text: string, max = 300): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** Le secret, même découpé par des espaces ou des retours à la ligne (« abcd efgh … »). */
+function secretPattern(secret: string): RegExp {
+  const chars = [...secret].map((c) => c.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+  return new RegExp(chars.join("\\s*"), "g");
 }
 
 function describe(error: unknown): string {
@@ -158,7 +164,7 @@ export class RestWordPress implements WordPressClient {
   readonly site: string;
   // Champs privés natifs : absents de toute sérialisation (JSON, console, instantané).
   readonly #authorization: string;
-  readonly #secrets: string[];
+  readonly #secrets: RegExp[];
   readonly #fetch: WordPressFetch;
   readonly #timeoutMs: number;
   readonly #log: (line: string) => void;
@@ -168,7 +174,9 @@ export class RestWordPress implements WordPressClient {
     this.site = credentials.site;
     const token = base64(`${credentials.username}:${credentials.appPassword}`);
     this.#authorization = `Basic ${token}`;
-    this.#secrets = [credentials.appPassword, token].filter((s) => s.length >= 4);
+    this.#secrets = [credentials.appPassword, token]
+      .filter((s) => s.length >= 4)
+      .map(secretPattern);
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#timeoutMs = options.timeoutMs ?? WORDPRESS_TIMEOUT_MS;
     const log = options.log ?? ((line: string) => console.error(line));
@@ -192,7 +200,7 @@ export class RestWordPress implements WordPressClient {
     const caps = user.data.capabilities;
     const account: WordPressAccount = {
       id: user.data.id,
-      name: htmlToText(user.data.name),
+      name: this.#redact(htmlToText(user.data.name)),
       roles: user.data.roles ?? null,
       canPublish: caps ? caps["publish_posts"] === true : null,
     };
@@ -325,7 +333,7 @@ export class RestWordPress implements WordPressClient {
     if (!status) {
       throw new WordPressError(
         "wordpress_invalid",
-        `WordPress indique un statut inattendu (« ${excerpt(p.status, 40)} ») pour le contenu n° ${p.id} : KORA n'y touche pas.`,
+        `WordPress indique un statut inattendu (« ${this.#excerpt(p.status, 40)} ») pour le contenu n° ${p.id} : KORA n'y touche pas.`,
       );
     }
     const title =
@@ -337,7 +345,7 @@ export class RestWordPress implements WordPressClient {
     return {
       id: String(p.id),
       status,
-      title,
+      title: this.#redact(title),
       authorId: p.author ?? null,
       dateGmt: gmt(p.date_gmt),
       modifiedGmt: gmt(p.modified_gmt),
@@ -351,7 +359,7 @@ export class RestWordPress implements WordPressClient {
     return {
       id: term.data.id,
       slug: term.data.slug,
-      name: htmlToText(term.data.name),
+      name: this.#redact(htmlToText(term.data.name)),
       parent: term.data.parent ?? 0,
     };
   }
@@ -430,12 +438,14 @@ export class RestWordPress implements WordPressClient {
       if (!html && allow.includes(res.status)) {
         return { status: res.status, headers: res.headers, data: parseJson(text) };
       }
-      this.#log(`${where} → HTTP ${res.status} : ${excerpt(text) || "(corps vide)"}`);
+      this.#log(`${where} → HTTP ${res.status} : ${this.#excerpt(text) || "(corps vide)"}`);
       throw this.#failure(res.status, text, html, res.headers);
     }
     const data = html ? undefined : parseJson(text);
     if (data === undefined) {
-      this.#log(`${where} → HTTP ${res.status} illisible : ${excerpt(text) || "(corps vide)"}`);
+      this.#log(
+        `${where} → HTTP ${res.status} illisible : ${this.#excerpt(text) || "(corps vide)"}`,
+      );
       throw unreadable(res.status, method);
     }
     return { status: res.status, headers: res.headers, data };
@@ -448,8 +458,9 @@ export class RestWordPress implements WordPressClient {
 
   #failure(status: number, text: string, html: boolean, headers: Headers): WordPressError {
     const body = errorSchema.safeParse(html ? null : parseJson(text));
-    const message = body.success && body.data.message ? htmlToText(body.data.message) : "";
-    const detail = message ? ` : « ${this.#redact(excerpt(message, 200))} »` : "";
+    const message =
+      body.success && body.data.message ? htmlToText(this.#redact(body.data.message)) : "";
+    const detail = message ? ` : « ${this.#excerpt(message, 200)} »` : "";
     const blocked = `Le site a bloqué la requête de KORA (HTTP ${status}, page HTML) : un pare-feu ou une protection anti-robots (Cloudflare) filtre l'accès à l'API. Demandez d'autoriser KORA (User-Agent ${WORDPRESS_USER_AGENT}) sur /wp-json/.`;
     if (status === 401) {
       return new WordPressError(
@@ -507,10 +518,16 @@ export class RestWordPress implements WordPressClient {
     );
   }
 
+  /** Mot de passe et jeton Basic (avec ou sans espaces), et tout en-tête Basic. */
   #redact(text: string): string {
     let out = text;
-    for (const secret of this.#secrets) out = out.split(secret).join("[masqué]");
+    for (const secret of this.#secrets) out = out.replace(secret, "[masqué]");
     return out.replace(/Basic\s+[A-Za-z0-9+/=]{8,}/gi, "Basic [masqué]");
+  }
+
+  /** Masque AVANT de tronquer : un secret coupé par la limite ne serait plus reconnu. */
+  #excerpt(text: string, max = 300): string {
+    return excerpt(this.#redact(text), max);
   }
 }
 
