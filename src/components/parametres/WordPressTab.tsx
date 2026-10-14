@@ -300,10 +300,11 @@ function CategorySelect({
           <SelectItem
             key={o.slug}
             value={o.slug}
-            aria-label={o.path}
+            textValue={o.name}
             className={cn("text-[12px]", o.depth === 0 && "font-medium")}
             style={{ paddingLeft: `${0.5 + o.depth * 1}rem` }}
           >
+            {o.depth > 0 && <span className="sr-only">{o.path.slice(0, -o.name.length)}</span>}
             {o.name}
           </SelectItem>
         ))}
