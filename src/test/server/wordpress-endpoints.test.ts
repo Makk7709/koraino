@@ -363,6 +363,24 @@ describe("POST /articles/:id/wordpress/refresh", () => {
     });
   });
 
+  it("lien « supprimé » relu : un brouillon restauré redevient « brouillon » ; 404 passager sans effet", async () => {
+    const art = await publishedDraft();
+    await publish(art.id);
+    const saved = { ...wp.server.posts.get(100)! };
+    wp.server.posts.delete(100);
+    expect((await refresh(art.id)).body.wordpress.status).toBe("supprime");
+    wp.server.posts.set(100, saved);
+    const restored = await refresh(art.id);
+    expect(restored.status).toBe(200);
+    expect(restored.body.wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+
+    wp.server.fail(() => true, jsonResponse({ code: "rest_no_route" }, 404));
+    const transient = await refresh(art.id);
+    expect(transient.status).toBe(502);
+    expect(transient.body.error.code).toBe("wordpress_invalid");
+    expect((await repo.articles.get(art.id))!.wordpress.status).toBe("brouillon");
+  });
+
   it("le tableau de bord compte les brouillons en attente de relecture", async () => {
     const kpi = async () =>
       (await call<Dashboard>("GET", "/dashboard")).body.kpis.find(

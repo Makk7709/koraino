@@ -11,7 +11,7 @@ import { parse, schemas } from "../validation";
 import { WordPressError } from "../wordpress/errors";
 import {
   configurationError,
-  currentDraftId,
+  ownedRemoteId,
   remoteToLocal,
   settleArticle,
   STATUS_TEXT,
@@ -96,7 +96,8 @@ export const refreshArticleWordPress: Handler = async (ctx) => {
   return withArticleLock(ctx, id, async () => {
     const rec = await ctx.repo.articles.get(id);
     if (!rec) throw notFound("Article introuvable.");
-    const remoteId = currentDraftId(client, rec.wordpress);
+    // Un lien « supprimé » se relit aussi : le contenu a pu être restauré depuis la corbeille.
+    const remoteId = ownedRemoteId(client, rec.wordpress);
     if (!remoteId) throw noDraft();
     const post = await client.getPost(remoteId);
     const status = remoteToLocal(post);

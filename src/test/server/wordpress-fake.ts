@@ -97,6 +97,8 @@ export class FakeWordPressServer {
     capabilities: { edit_posts: true, publish_posts: false } as Record<string, boolean>,
   };
   requests: Recorded[] = [];
+  /** Statut posé à la création par une extension de circuit éditorial (PublishPress…). */
+  createStatus: string | null = null;
   private nextId = 100;
   private faults: PendingFault[] = [];
 
@@ -171,9 +173,16 @@ export class FakeWordPressServer {
     if (req.method === "GET" && path === "/users/me") return jsonResponse(this.me);
     if (req.method === "GET" && path === "/categories") return this.page(this.categories, q);
     if (req.method === "GET" && path === "/tags") {
+      // Comme WordPress : slugs exacts, ou « contient » sur le nom et le slug, trié par nom.
+      const slugs = q.get("slug")?.split(",");
       const search = (q.get("search") ?? "").toLowerCase();
+      const found = slugs
+        ? this.tags.filter((t) => slugs.includes(t.slug))
+        : this.tags.filter(
+            (t) => t.name.toLowerCase().includes(search) || t.slug.includes(search),
+          );
       return this.page(
-        this.tags.filter((t) => t.name.toLowerCase().includes(search)),
+        [...found].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })),
         q,
       );
     }
@@ -231,7 +240,9 @@ export class FakeWordPressServer {
 
   private write(req: Recorded, existing: FakePost | null): Response {
     const body = req.body ?? {};
-    if (body["status"] !== "draft") {
+    // Un Contributeur peut enregistrer un brouillon ou le soumettre à relecture, jamais publier.
+    const status = body["status"];
+    if (status !== "draft" && status !== "pending") {
       return wpError(
         403,
         "rest_cannot_publish",
@@ -241,7 +252,7 @@ export class FakeWordPressServer {
     const at = stamp(now());
     const post = existing ?? this.addPost({ author: this.me.id, date_gmt: at });
     Object.assign(post, {
-      status: "draft",
+      status: existing ? status : (this.createStatus ?? status),
       title: kses(String(body["title"] ?? "")),
       content: String(body["content"] ?? ""),
       excerpt: String(body["excerpt"] ?? ""),

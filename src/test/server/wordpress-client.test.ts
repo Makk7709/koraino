@@ -125,6 +125,37 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(tags).toEqual({ ids: [21, 22, 23], missing: ["Batterie"] });
   });
 
+  it("étiquettes au-delà de la première page : slug exact, puis recherche paginée bornée", async () => {
+    const { client, server } = fakeWordPress();
+    // La recherche WordPress est un « contient » trié par nom : 150 étiquettes passent avant.
+    for (let i = 0; i < 150; i++) {
+      server.tags.push({ id: 3000 + i, name: `Aia ${i}`, slug: `aia-${i}` });
+      server.tags.push({ id: 4000 + i, name: `Blyon ${i}`, slug: `blyon-${i}` });
+    }
+    server.tags.push({ id: 31, name: "IA", slug: "ia" });
+    // Slug différent du calcul (« lyon-2 ») : retrouvée par la recherche, en page 2.
+    server.tags.push({ id: 32, name: "Lyon", slug: "lyon-2" });
+    const tags = await client.findTags(["IA", "Lyon", "Inconnue"]);
+    expect(tags).toEqual({ ids: [31, 32], missing: ["Inconnue"] });
+
+    const lookups = server.requests.map((r) => r.url.searchParams);
+    expect(lookups[0]!.get("slug")).toBe("ia,lyon,inconnue");
+    const lyon = lookups.filter((q) => q.get("search") === "Lyon").map((q) => q.get("page"));
+    expect(lyon).toEqual(["1", "2"]);
+    expect(lookups.filter((q) => q.get("search") === "IA")).toHaveLength(0);
+  });
+
+  it("recherche d'étiquette limitée à 3 pages", async () => {
+    const { client, server } = fakeWordPress();
+    for (let i = 0; i < 400; i++) {
+      server.tags.push({ id: 5000 + i, name: `Alpha nova ${i}`, slug: `alpha-nova-${i}` });
+    }
+    server.tags.push({ id: 33, name: "Nova", slug: "nova-x" });
+    expect(await client.findTags(["Nova"])).toEqual({ ids: [], missing: ["Nova"] });
+    const pages = server.requests.filter((r) => r.url.searchParams.get("search") === "Nova");
+    expect(pages.map((r) => r.url.searchParams.get("page"))).toEqual(["1", "2", "3"]);
+  });
+
   it("retrouve ses brouillons par titre exact et date, en excluant ceux des autres", async () => {
     const { client, server } = fakeWordPress();
     const title = "Verkor & Renault : -2 % sur les coûts";
@@ -154,6 +185,57 @@ describe("RestWordPress : requêtes envoyées", () => {
     const contexts = server.requests.map((r) => r.url.searchParams.get("context"));
     expect(contexts).toEqual(["edit", null]);
     expect(await client.getPost("999")).toBeNull();
+  });
+
+  it("absent seulement sur 410 ou 404 rest_post_invalid_id ; tout autre 404 est une erreur", async () => {
+    const { client, server } = fakeWordPress();
+    const post = server.addPost();
+    const id = String(post.id);
+    server.fail(() => true, jsonResponse({ code: "rest_no_route", message: "Aucune route." }, 404));
+    const filtered = await failure(client.getPost(id));
+    expect(filtered.code).toBe("wordpress_invalid");
+    expect(filtered.message).toContain("sans indiquer qu'il a été supprimé (HTTP 404 rest_no_route)");
+    server.fail(() => true, new Response("", { status: 404 }));
+    expect((await failure(client.getPost(id))).code).toBe("wordpress_invalid");
+    server.fail(() => true, jsonResponse({ code: "rest_gone" }, 410));
+    expect(await client.getPost(id)).toBeNull();
+    expect(await client.getPost("999")).toBeNull();
+    expect(await client.getPost(id)).toMatchObject({ id, status: "draft" });
+  });
+
+  it("mise à jour d'un contenu en attente de relecture : le statut pending est conservé", async () => {
+    const { client, server } = fakeWordPress();
+    const post = server.addPost({ status: "pending" });
+    const updated = await client.updateDraft(String(post.id), draft, "pending");
+    expect(updated.status).toBe("pending");
+    expect(server.writes()[0]!.body).toMatchObject({ status: "pending" });
+    // Garde-fou : un statut public passé malgré le typage n'est jamais envoyé.
+    await client.updateDraft(String(post.id), draft, "publish" as "pending");
+    expect(server.writes()[1]!.body).toMatchObject({ status: "draft" });
+  });
+
+  it("réponse de plus de 2 Mo : refusée sans être lue en entier", async () => {
+    const { client, server, logs } = fakeWordPress();
+    // Flux sans fin ni Content-Length : seule une lecture plafonnée s'arrête.
+    const endless = new ReadableStream<Uint8Array>({
+      pull: (controller) => controller.enqueue(new Uint8Array(64 * 1024).fill(32)),
+    });
+    server.fail(
+      () => true,
+      new Response(endless, { headers: { "content-type": "application/json" } }),
+    );
+    const read = await failure(client.listCategories());
+    expect(read).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: false });
+    expect(read.message).toContain("trop volumineuse (plus de 2 Mo)");
+
+    server.fail(
+      isWrite,
+      new Response("{}", { status: 201, headers: { "content-length": String(50 * 1024 * 1024) } }),
+    );
+    const write = await failure(client.createDraft(draft));
+    // Après un envoi, WordPress a peut-être enregistré le contenu : vérification avant renvoi.
+    expect(write).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: true });
+    expect(logs.filter((l) => l.includes("plus de 2 Mo"))).toHaveLength(2);
   });
 
   it("brouillon d'un autre compte devenu illisible : wordpress_forbidden", async () => {

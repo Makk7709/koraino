@@ -56,13 +56,16 @@ const linkTo = (client: WordPressClient, post: RemotePost, at: string): WordPres
 });
 
 /**
- * Brouillon distant réutilisable : identifiant produit par CE site (jamais un identifiant simulé
- * ni celui d'un autre site, préproduction comprise) et non supprimé.
+ * Identifiant produit par CE site (jamais un identifiant simulé ni celui d'un autre site,
+ * préproduction comprise), même marqué supprimé : il est relu avant tout nouveau brouillon.
  */
+export function ownedRemoteId(client: WordPressClient, link: WordPressLink): string | null {
+  return link.remoteId && client.ownsRemote(link.remoteId, link.site) ? link.remoteId : null;
+}
+
+/** Brouillon courant (rejeu) : identifiant de ce site, non supprimé. */
 export function currentDraftId(client: WordPressClient, link: WordPressLink): string | null {
-  return link.remoteId && link.status !== "supprime" && client.ownsRemote(link.remoteId, link.site)
-    ? link.remoteId
-    : null;
+  return link.status !== "supprime" ? ownedRemoteId(client, link) : null;
 }
 
 /** Succès rejouable : même clé, et son brouillon est toujours le brouillon courant de l'article. */
@@ -319,12 +322,6 @@ async function existingDraft(
     );
     return null;
   }
-  if (link.status === "supprime") {
-    notes.push(
-      `Le brouillon n° ${id} a été supprimé sur WordPress : un nouveau brouillon est créé.`,
-    );
-    return null;
-  }
   let post: RemotePost | null;
   try {
     post = await client.getPost(id);
@@ -483,7 +480,7 @@ async function sendUnderLock(
   let post: RemotePost;
   try {
     post = target
-      ? await client.updateDraft(target.id, payload)
+      ? await client.updateDraft(target.id, payload, target.status === "pending" ? "pending" : "draft")
       : await client.createDraft(payload);
   } catch (e) {
     throw await failSend(ctx, rec, marker, target !== null, e);

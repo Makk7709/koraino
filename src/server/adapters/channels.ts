@@ -28,8 +28,11 @@ export interface WordPressAccount {
   canPublish: boolean | null;
 }
 
+/** Statuts non publics qu'un Contributeur peut poser : une création est toujours `draft`. */
+export type DraftStatus = "draft" | "pending";
+
 /**
- * Contenu d'un brouillon. Le statut n'en fait pas partie : le client envoie toujours `draft`.
+ * Contenu d'un brouillon. Le statut n'en fait pas partie (voir `DraftStatus`).
  * Une liste de catégories ou d'étiquettes vide n'est pas envoyée (WordPress garde sa valeur).
  */
 export interface WordPressDraftPayload {
@@ -62,7 +65,12 @@ export interface WordPressClient {
   /** Brouillons et contenus en attente du compte KORA au titre exactement égal, modifiés depuis `since`. */
   findOwnDrafts(title: string, since: string): Promise<RemotePost[]>;
   createDraft(input: WordPressDraftPayload): Promise<RemotePost>;
-  updateDraft(remoteId: string, input: WordPressDraftPayload): Promise<RemotePost>;
+  /** `status` : celui lu juste avant (un contenu en attente de relecture y reste). */
+  updateDraft(
+    remoteId: string,
+    input: WordPressDraftPayload,
+    status?: DraftStatus,
+  ): Promise<RemotePost>;
   /** Toutes les catégories du site (toutes les pages), noms décodés. */
   listCategories(): Promise<WordPressCategory[]>;
   /** Étiquettes existantes de même nom ; les autres sont rendues dans `missing`. */
@@ -158,7 +166,7 @@ export class SimulatedWordPress implements WordPressClient {
     return this.view(post);
   }
 
-  async updateDraft(remoteId: string, input: WordPressDraftPayload) {
+  async updateDraft(remoteId: string, input: WordPressDraftPayload, status: DraftStatus = "draft") {
     const post = this.lookup(remoteId);
     if (!post) {
       throw new WordPressError(
@@ -167,7 +175,7 @@ export class SimulatedWordPress implements WordPressClient {
       );
     }
     Object.assign(post, {
-      status: "draft",
+      status: status === "pending" ? "pending" : "draft",
       title: input.title,
       modifiedGmt: now().toISOString(),
       input,

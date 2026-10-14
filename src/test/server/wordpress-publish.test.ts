@@ -230,6 +230,57 @@ describe("envoi d'un brouillon WordPress réel", () => {
     ]);
   });
 
+  it("404 passager (API filtrée) : envoi refusé, ni « supprimé » ni doublon", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    await approveNewVersion(art.id);
+    wp.server.fail(
+      (r) => r.method === "GET" && r.url.pathname.endsWith("/posts/100"),
+      jsonResponse({ code: "rest_no_route", message: "Aucune route correspondante." }, 404),
+    );
+    const res = await publish(art.id);
+    expect(res.status).toBe(502);
+    expect(res.body.error.code).toBe("wordpress_invalid");
+    expect(errorAttempt(res).status).toBe("echec");
+    expect(wp.server.writes()).toHaveLength(1);
+    expect((await detail(art.id)).wordpress.status).toBe("brouillon");
+    const retry = await publish(art.id);
+    expect(retry.body).toMatchObject({ status: "succes", remoteId: "100" });
+    expect(wp.server.posts.size).toBe(1);
+  });
+
+  it("lien « supprimé » : l'ancien brouillon est relu, restauré il est mis à jour sans doublon", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const saved = { ...wp.server.posts.get(100)! };
+    wp.server.posts.delete(100);
+    const gone = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(gone.body.wordpress.status).toBe("supprime");
+    // Restauré depuis la corbeille (ou 404 passager à l'actualisation) : il existe toujours.
+    wp.server.posts.set(100, saved);
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ remoteId: "100", version: 2 });
+    expect(res.body.message).toContain("mis à jour (version 2)");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress.status).toBe("brouillon");
+  });
+
+  it("contenu en attente de relecture : la mise à jour le laisse en attente", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    wp.server.posts.get(100)!.status = "pending";
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(wp.server.writes()[1]!.body).toMatchObject({ status: "pending" });
+    expect(wp.server.posts.get(100)!.status).toBe("pending");
+    expect((await detail(art.id)).wordpress.status).toBe("en_attente");
+  });
+
   it("brouillon devenu inaccessible (autre auteur) : jamais modifié, nouveau brouillon", async () => {
     const art = await approvedArticle();
     await publish(art.id);
