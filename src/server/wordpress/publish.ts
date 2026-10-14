@@ -95,14 +95,43 @@ export function currentDraftId(client: WordPressClient, link: WordPressLink): st
   return link.status !== "supprime" ? ownedRemoteId(client, link) : null;
 }
 
+/**
+ * Lien de l'article, ou, s'il est vide ou plus ancien, celui de la dernière tentative réussie sur
+ * ce site : le règlement de l'article a pu être interrompu, ou une écriture concurrente de
+ * l'article (nouvelle version, approbation) a pu effacer le lien posé par l'envoi.
+ */
+export function effectiveLink(
+  client: WordPressClient,
+  rec: ArticleRecord,
+  attempts: PublicationRecord[],
+): WordPressLink {
+  const link = rec.wordpress;
+  let last: PublicationRecord | undefined;
+  for (const p of attempts) {
+    if (
+      p.articleId === rec.id &&
+      p.channel === "wordpress" &&
+      p.status === "succes" &&
+      p.remoteId &&
+      client.ownsRemote(p.remoteId, p.site) &&
+      (!last || Date.parse(p.at) > Date.parse(last.at))
+    ) {
+      last = p;
+    }
+  }
+  if (!last?.remoteId || last.remoteId === link.remoteId) return link;
+  if (link.remoteId && Date.parse(link.lastSyncAt ?? "") >= Date.parse(last.at)) return link;
+  return { remoteId: last.remoteId, site: last.site ?? null, status: "brouillon", lastSyncAt: last.at };
+}
+
 /** Succès rejouable : même clé, et son brouillon est toujours le brouillon courant de l'article. */
 export function replayableSuccess(
   client: WordPressClient,
-  attempts: PublicationAttempt[],
+  attempts: PublicationRecord[],
   key: string,
   rec: ArticleRecord,
 ): PublicationAttempt | undefined {
-  const current = currentDraftId(client, rec.wordpress);
+  const current = currentDraftId(client, effectiveLink(client, rec, attempts));
   if (!current) return undefined;
   return [...attempts]
     .reverse()
@@ -455,11 +484,11 @@ async function existingDraft(
   client: WordPressClient,
   me: WordPressAccount,
   rec: ArticleRecord,
-  attempts: PublicationAttempt[],
+  attempts: PublicationRecord[],
   notes: string[],
   options: PublishOptions,
 ): Promise<RemotePost | null> {
-  const link = rec.wordpress;
+  const link = effectiveLink(client, rec, attempts);
   const id = link.remoteId;
   if (!id) return null;
   if (!client.ownsRemote(id, link.site)) {
@@ -689,8 +718,10 @@ async function sendUnderLock(
     remoteId: post.id,
     message,
   };
-  await ctx.repo.publications.update(attempt);
+  // Article réglé AVANT la tentative : si ce règlement échoue, le marqueur subsiste et le prochain
+  // envoi retrouve le brouillon au lieu d'en créer un second.
   await settleArticle(ctx, rec.id, sentLink(client, post, at), post);
+  await ctx.repo.publications.update(attempt);
   await settleSignal(ctx, rec.signalId, at);
   await audit(ctx, "publication.success", "publication", attempt.id, `${rec.title} — ${message}`);
   await notify(ctx.repo, ctx.now, {

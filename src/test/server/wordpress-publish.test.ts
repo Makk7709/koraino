@@ -810,6 +810,58 @@ describe("reprise après un envoi interrompu", () => {
     expect(created).toMatchObject({ status: "echec", code: "wordpress_absence_confirmed" });
   });
 
+  it("règlement de l'article en échec : le marqueur subsiste, le renvoi reprend le brouillon", async () => {
+    const art = await approvedArticle();
+    const failing = vi
+      .spyOn(repo.articles, "update")
+      .mockRejectedValueOnce(new Error("base momentanément indisponible"));
+    const silent = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await publish(art.id);
+    failing.mockRestore();
+    silent.mockRestore();
+    expect(res.status).toBe(500);
+    expect(wp.server.posts.size).toBe(1);
+    const attempts = await attemptsOf(art.id);
+    expect(attempts.map((p) => p.status)).toEqual(["verification_requise"]);
+
+    const retry = await publish(art.id);
+    expect(retry.status).toBe(201);
+    expect(retry.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress.remoteId).toBe("100");
+  });
+
+  it("lien effacé par une écriture concurrente : la dernière tentative réussie sert de lien", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const wipe = async () => {
+      const rec = (await repo.articles.get(art.id))!;
+      await repo.articles.update({
+        ...rec,
+        wordpress: { remoteId: null, status: "aucun", lastSyncAt: null },
+      });
+    };
+    await wipe();
+    const replay = await publish(art.id);
+    expect(replay.status).toBe(200);
+    expect(replay.body.remoteId).toBe("100");
+    expect(wp.server.writes()).toHaveLength(1);
+
+    const refreshed = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+
+    await wipe();
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+  });
+
   it("une interruption sur la v1 n'entraîne pas de doublon lors de l'envoi de la v2", async () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });
