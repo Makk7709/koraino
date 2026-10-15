@@ -29,8 +29,14 @@ import {
   notFound,
   unprocessable,
 } from "../http";
-import type { LinkedInPostRecord, NewsletterRecord } from "../store/records";
+import type {
+  ArticleRecord,
+  LinkedInPostRecord,
+  NewsletterRecord,
+  SignalRecord,
+} from "../store/records";
 import { audit, notify } from "../services/journal";
+import { GENERATION_LOCK_TTL_MS, WRITE_LOCK_TTL_MS, withLock } from "../services/locks";
 import {
   addItem,
   createEdition,
@@ -81,6 +87,26 @@ export const createLinkedIn: Handler = async (ctx) => {
   const signalId = input.signalId ?? article?.signalId ?? null;
   const signal = signalId ? await ctx.repo.signals.get(signalId) : undefined;
   if (input.signalId && !signal) throw notFound("Signal introuvable.");
+  return withLock(
+    ctx.repo,
+    `linkedin-create:${article ? article.id : signal!.id}`,
+    {
+      ttlMs: GENERATION_LOCK_TTL_MS,
+      busy: () =>
+        conflict(
+          "generation_in_progress",
+          "Un post LinkedIn est déjà en cours de génération pour ce contenu : patientez quelques secondes.",
+        ),
+    },
+    () => generateLinkedIn(ctx, article, signal),
+  );
+};
+
+async function generateLinkedIn(
+  ctx: Ctx,
+  article: ArticleRecord | undefined,
+  signal: SignalRecord | undefined,
+): Promise<Response> {
   const existing = (await ctx.repo.linkedin.list()).find(
     (p) =>
       p.status !== "exporte" &&
@@ -143,7 +169,7 @@ export const createLinkedIn: Handler = async (ctx) => {
     `${variants.length} variante(s) générée(s) — ${title}`,
   );
   return json(toLinkedIn(rec), { status: 201 });
-};
+}
 
 export const updateLinkedIn: Handler = async (ctx) => {
   assertCan(ctx.user, "linkedin.write");
@@ -888,11 +914,23 @@ export const updateRule: Handler = async (ctx) => {
 };
 
 /** Décision humaine sur une proposition WF6 : rien n'est appliqué sans acceptation explicite. */
-export const decideRuleProposal: Handler = async (ctx) => {
+export const decideRuleProposal: Handler = (ctx) => {
   assertCan(ctx.user, "rule.write");
+  const { decision } = parse(schemas.ruleDecision, ctx.body);
+  return withLock(
+    ctx.repo,
+    `rule-proposal:${ctx.params["id"]}`,
+    {
+      ttlMs: WRITE_LOCK_TTL_MS,
+      busy: () => conflict("already_decided", "Cette proposition est déjà en cours de traitement."),
+    },
+    () => decideProposal(ctx, decision),
+  );
+};
+
+async function decideProposal(ctx: Ctx, decision: "acceptee" | "refusee"): Promise<Response> {
   const rec = await ctx.repo.ruleProposals.get(ctx.params["id"]!);
   if (!rec) throw notFound("Proposition introuvable.");
-  const { decision } = parse(schemas.ruleDecision, ctx.body);
   if (rec.status !== "proposee")
     throw conflict("already_decided", "Cette proposition a déjà été traitée.");
   const at = ctx.now.toISOString();
@@ -950,4 +988,4 @@ export const decideRuleProposal: Handler = async (ctx) => {
   );
   const { signature: _s, ...dto } = next;
   return json(dto);
-};
+}

@@ -10,8 +10,10 @@ import {
 } from "../domain/budget";
 import { monthKey } from "../domain/dates";
 import type { QuotaKey, UsageKind } from "../store/records";
+import { conflict } from "../http";
 import type { Repository } from "../store/repository";
 import { audit, notify } from "./journal";
+import { withLock } from "./locks";
 
 export async function usageSnapshot(repo: Repository, now: Date): Promise<UsageSnapshot> {
   const [entries, settings, companies, sources, newsletters, imports] = await Promise.all([
@@ -58,17 +60,50 @@ const ALERT_METERS: QuotaKey[] = [
   "storage_gb",
 ];
 
+const BUDGET_LOCK = "budget";
+const BUDGET_LOCK_TTL_MS = 10_000;
+
+/**
+ * Les réglages (réservations, suspension, alertes) sont relus puis réécrits en entier : sans
+ * verrou, deux appels payants simultanés dépasseraient le plafond ou laisseraient une
+ * réservation fantôme qui ne serait jamais libérée.
+ */
+function withBudgetLock<T>(repo: Repository, fn: () => Promise<T>): Promise<T> {
+  return withLock(
+    repo,
+    BUDGET_LOCK,
+    {
+      ttlMs: BUDGET_LOCK_TTL_MS,
+      waitMs: 5_000,
+      busy: () =>
+        conflict(
+          "budget_busy",
+          "Le budget API est en cours de mise à jour : réessayez dans quelques secondes.",
+        ),
+    },
+    fn,
+  );
+}
+
 /** Alertes à 80 % puis 100 % (une notification par seuil et par mois). */
 export async function checkAlerts(repo: Repository, now: Date): Promise<void> {
   const snapshot = await usageSnapshot(repo, now);
-  const settings = await repo.getSettings();
-  let changed = false;
-  for (const m of snapshot.meters) {
-    if (!ALERT_METERS.includes(m.key) || m.alert === "ok") continue;
-    const key = `${snapshot.month}:${m.key}:${m.alert}`;
-    if (settings.notifiedAlerts.includes(key)) continue;
-    settings.notifiedAlerts.push(key);
-    changed = true;
+  const alertKey = (m: (typeof snapshot.meters)[number]) => `${snapshot.month}:${m.key}:${m.alert}`;
+  const pending = (notified: string[]) =>
+    snapshot.meters.filter(
+      (m) => ALERT_METERS.includes(m.key) && m.alert !== "ok" && !notified.includes(alertKey(m)),
+    );
+  if (!pending((await repo.getSettings()).notifiedAlerts).length) return;
+  const raised = await withBudgetLock(repo, async () => {
+    const settings = await repo.getSettings();
+    const fresh = pending(settings.notifiedAlerts);
+    if (fresh.length) {
+      settings.notifiedAlerts.push(...fresh.map(alertKey));
+      await repo.saveSettings(settings);
+    }
+    return fresh;
+  });
+  for (const m of raised) {
     await notify(repo, now, {
       kind: "quota",
       title: m.alert === "atteint" ? `${m.label} : quota atteint` : `${m.label} : 80 % consommés`,
@@ -79,7 +114,6 @@ export async function checkAlerts(repo: Repository, now: Date): Promise<void> {
       link: "/parametres",
     });
   }
-  if (changed) await repo.saveSettings(settings);
 }
 
 export interface PaidCall {
@@ -109,20 +143,31 @@ export async function paidCall<T>(
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
-  const settings = await repo.getSettings();
-  const spent = monthTotals(await repo.usage.list(), month).costEur;
-  const decision = decideReservation({
-    settings,
-    spentEur: spent,
-    estimateEur: call.estimate,
-    month,
+  const reservation = await withBudgetLock(repo, async () => {
+    const settings = await repo.getSettings();
+    const spent = monthTotals(await repo.usage.list(), month).costEur;
+    const decision = decideReservation({
+      settings,
+      spentEur: spent,
+      estimateEur: call.estimate,
+      month,
+    });
+    if (!decision.ok) {
+      const suspending = !settings.paidCallsSuspended || settings.suspendedMonth !== month;
+      if (suspending) {
+        settings.paidCallsSuspended = true;
+        settings.suspendedMonth = month;
+        await repo.saveSettings(settings);
+      }
+      return { ...decision, suspending };
+    }
+    settings.reservedEur += call.estimate;
+    await repo.saveSettings(settings);
+    return decision;
   });
-  if (!decision.ok) {
-    if (!settings.paidCallsSuspended || settings.suspendedMonth !== month) {
-      settings.paidCallsSuspended = true;
-      settings.suspendedMonth = month;
-      await repo.saveSettings(settings);
-      await audit(ctx, "quota.suspension", "quota", "api_budget_eur", decision.reason, "KORA");
+  if (!reservation.ok) {
+    if (reservation.suspending) {
+      await audit(ctx, "quota.suspension", "quota", "api_budget_eur", reservation.reason, "KORA");
       await notify(repo, now, {
         kind: "quota",
         title: "Budget API : appels payants suspendus",
@@ -130,38 +175,47 @@ export async function paidCall<T>(
         link: "/parametres",
       });
     }
-    throw budgetExhausted(decision.reason);
+    throw budgetExhausted(reservation.reason);
   }
 
-  settings.reservedEur += call.estimate;
-  await repo.saveSettings(settings);
   let result: T;
   try {
     result = await fn();
+    const lines = actual
+      ? actual(result)
+      : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
+    let remaining = call.estimate;
+    for (const line of lines) {
+      if (line.costEur <= 0 && line.units <= 0) continue;
+      const cost = Math.max(0, Math.min(line.costEur, remaining));
+      remaining -= cost;
+      await repo.usage.insert({
+        id: repo.nextId("use"),
+        at: now.toISOString(),
+        kind: line.kind,
+        units: line.units,
+        costEur: Math.round(cost * 10000) / 10000,
+        label: line.label,
+      });
+    }
   } finally {
-    const s = await repo.getSettings();
-    s.reservedEur = Math.max(0, s.reservedEur - call.estimate);
-    await repo.saveSettings(s);
-  }
-  const lines = actual
-    ? actual(result)
-    : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
-  let remaining = call.estimate;
-  for (const line of lines) {
-    if (line.costEur <= 0 && line.units <= 0) continue;
-    const cost = Math.max(0, Math.min(line.costEur, remaining));
-    remaining -= cost;
-    await repo.usage.insert({
-      id: repo.nextId("use"),
-      at: now.toISOString(),
-      kind: line.kind,
-      units: line.units,
-      costEur: Math.round(cost * 10000) / 10000,
-      label: line.label,
-    });
+    await releaseReservation(repo, call.estimate);
   }
   await checkAlerts(repo, now);
   return result;
+}
+
+/** Libérée après l'enregistrement du coût réel : à aucun moment l'appel n'échappe au plafond. */
+async function releaseReservation(repo: Repository, amount: number): Promise<void> {
+  const release = async () => {
+    const s = await repo.getSettings();
+    s.reservedEur = Math.max(0, s.reservedEur - amount);
+    await repo.saveSettings(s);
+  };
+  await withBudgetLock(repo, release).catch(async (e: unknown) => {
+    console.error("[budget] réservation libérée hors verrou", e);
+    await release();
+  });
 }
 
 /** Les appels payants sont-ils suspendus ce mois-ci ? */

@@ -17,6 +17,7 @@ import { conflict, forbidden, json, notFound, unprocessable } from "../http";
 import type { ArticleRecord } from "../store/records";
 import { refreshProposals } from "../services/dna";
 import { audit, notify } from "../services/journal";
+import { GENERATION_LOCK_TTL_MS, withLock } from "../services/locks";
 import { assertQuota, paidCall } from "../services/usage";
 import { articleDetail, toArticle, toPublication } from "../services/view";
 import { parse, schemas } from "../validation";
@@ -74,6 +75,25 @@ export const listPublications: Handler = async (ctx) => {
 export const createArticle: Handler = async (ctx) => {
   assertCan(ctx.user, "article.write");
   const input = parse(schemas.createArticle, ctx.body);
+  return withLock(
+    ctx.repo,
+    `article-create:${input.signalId}`,
+    {
+      ttlMs: GENERATION_LOCK_TTL_MS,
+      busy: () =>
+        conflict(
+          "generation_in_progress",
+          "Le dossier et le brouillon de ce signal sont déjà en cours de génération : patientez quelques secondes.",
+        ),
+    },
+    () => generateArticle(ctx, input),
+  );
+};
+
+async function generateArticle(
+  ctx: Ctx,
+  input: { signalId: string; angle?: string | null | undefined },
+): Promise<Response> {
   const signal = await ctx.repo.signals.get(input.signalId);
   if (!signal) throw notFound("Signal introuvable.");
   if (signal.articleId && (await ctx.repo.articles.get(signal.articleId))) {
@@ -160,7 +180,7 @@ export const createArticle: Handler = async (ctx) => {
     `Dossier factuel et brouillon v1 générés depuis le signal ${signal.id}${contradictions ? ` — ${contradictions} contradiction(s) à arbitrer` : ""}`,
   );
   return detail(ctx, rec, 201);
-};
+}
 
 /* ------------------------------------------------------------------ */
 /* Versions                                                            */

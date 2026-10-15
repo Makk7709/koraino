@@ -23,6 +23,7 @@ import type {
   SourceRecord,
 } from "../store/records";
 import { notify } from "./journal";
+import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
 import { paidCall } from "./usage";
 
@@ -394,19 +395,20 @@ const COLLECT_LOCK_TTL_MS = 15 * 60_000;
  * Une seule collecte à la fois : deux collectes simultanées (deux onglets, deux personnes)
  * partiraient du même état et enregistreraient deux fois les mêmes publications.
  */
-async function exclusive<T>(ctx: Pick<Ctx, "repo">, fn: () => Promise<T>): Promise<T> {
-  const token = await ctx.repo.acquireLock(COLLECT_LOCK, COLLECT_LOCK_TTL_MS);
-  if (!token) {
-    throw conflict(
-      "collection_in_progress",
-      "Une collecte est déjà en cours : réessayez dans quelques minutes.",
-    );
-  }
-  try {
-    return await fn();
-  } finally {
-    await ctx.repo.releaseLock(COLLECT_LOCK, token);
-  }
+function exclusive<T>(ctx: Pick<Ctx, "repo">, fn: () => Promise<T>): Promise<T> {
+  return withLock(
+    ctx.repo,
+    COLLECT_LOCK,
+    {
+      ttlMs: COLLECT_LOCK_TTL_MS,
+      busy: () =>
+        conflict(
+          "collection_in_progress",
+          "Une collecte est déjà en cours : réessayez dans quelques minutes.",
+        ),
+    },
+    fn,
+  );
 }
 
 /** Collecte d'une source ; 402 `budget_exhausted` si le plafond est atteint (exécution consignée). */
