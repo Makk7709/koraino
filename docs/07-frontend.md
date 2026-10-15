@@ -45,7 +45,8 @@ Documents liés : [Architecture](02-architecture.md) pour la vue d'ensemble et l
 ```text
 src/
 ├── routes/                    Pages (routage par fichiers)
-│   ├── __root.tsx             Shell HTML, <head>, QueryClientProvider, AppLayout, 404, erreur
+│   ├── __root.tsx             Shell HTML, <head>, QueryClientProvider, AuthGate, AppLayout, 404, erreur
+│   ├── connexion/             /connexion et /connexion/nouveau-mot-de-passe (hors AppLayout)
 │   ├── index.tsx              /             Dashboard éditorial
 │   ├── veille.tsx             /veille
 │   ├── signaux.tsx            /signaux
@@ -54,15 +55,17 @@ src/
 │   ├── newsletter.tsx         /newsletter   (enveloppe de NewsletterPage)
 │   ├── entreprises.tsx        /entreprises
 │   ├── parametres.tsx         /parametres
-│   └── api/$.ts               /api/*        Route serveur sans interface : appelle handleApiRequest
+│   ├── api/$.ts               /api/*        Route serveur sans interface : appelle handleApiRequest
+│   └── api/oauth/linkedin/return.ts         Page publique de retour du consentement LinkedIn (HTML minimal)
 ├── routeTree.gen.ts           Arbre des routes généré (ne pas éditer)
 ├── router.tsx                 getRouter() : QueryClient par requête + createRouter
 ├── start.ts, server.ts        Entrées TanStack Start (middlewares, rendu SSR)
 ├── styles.css                 Tokens du design system et classes .kora-*
 ├── components/
 │   ├── kora/                  Design system maison : primitives, BrandMark, libellés et formatage
+│   ├── auth/                  AuthGate, formulaires de connexion et de mot de passe, UserFormDialog
 │   ├── layout/                AppLayout, AppSidebar, AppHeader, Artwork (illustrations SVG)
-│   ├── ui/                    46 composants shadcn/ui générés, 14 importés par l'application
+│   ├── ui/                    46 composants shadcn/ui générés, 15 importés par l'application
 │   ├── dashboard/             Page /
 │   ├── signals/               Page /signaux (table et fiche réutilisées par le dashboard)
 │   ├── veille/                Page /veille ; veille/kit : boîte à outils partagée
@@ -75,6 +78,7 @@ src/
 │   ├── api/client.ts          apiFetch, ApiError, objet api, downloadUrl
 │   ├── api/hooks.ts           Clés qk, hooks useXxx, useKoraMutation
 │   ├── api/types.ts           DTO partagés entre le front et le serveur
+│   ├── auth/                  Session Supabase (useAuth), mode, jeton, redirections, messages
 │   ├── utils.ts               cn() = clsx + tailwind-merge
 │   └── error-*.ts, lovable-error-reporting.ts   Capture et remontée des erreurs (Lovable)
 ├── hooks/use-mobile.tsx       Hook shadcn, utilisé seulement par ui/sidebar (non monté)
@@ -82,7 +86,7 @@ src/
 └── test/                      Vitest : setup.ts, app-routing.test.tsx, server/*
 ```
 
-Les quatorze composants shadcn importés par l'application sont `calendar`, `command`, `dialog`, `dropdown-menu`, `input`, `popover`, `radio-group`, `select`, `skeleton`, `slider`, `sonner`, `switch`, `textarea` et `tooltip` (plus `button`, utilisé par `calendar`). Les autres fichiers de `src/components/ui` sont le socle générique de shadcn et ne sont montés nulle part.
+Les quinze composants shadcn importés par l'application sont `calendar`, `checkbox` (formulaire des comptes), `command`, `dialog`, `dropdown-menu`, `input`, `popover`, `radio-group`, `select`, `skeleton`, `slider`, `sonner`, `switch`, `textarea` et `tooltip` (plus `button`, utilisé par `calendar`). Les autres fichiers de `src/components/ui` sont le socle générique de shadcn et ne sont montés nulle part.
 
 ### Rôle des dossiers et dépendances
 
@@ -123,7 +127,7 @@ flowchart LR
 
 ### Frontière entre le front et le serveur
 
-Le code de `src/server/**` n'est jamais importé par un composant, un hook ou une route d'interface. Seules la route serveur [`api/$.ts`](../src/routes/api/$.ts) et les tests de `src/test/server/` l'importent. Le contrat passe exclusivement par [`types.ts`](../src/lib/api/types.ts), que le serveur importe en type seulement, et par HTTP via [`client.ts`](../src/lib/api/client.ts). Importer un module serveur dans un composant embarquerait le dépôt de données et le seed dans le bundle navigateur et contournerait l'autorité de l'API. Lovable a généré un client Supabase navigateur ([`integrations/supabase/client.ts`](../src/integrations/supabase/client.ts), clé publique) : il n'est utilisé par aucun écran, et les tables `kora_records` et `kora_settings` lui sont fermées (sécurité par ligne sans règle d'accès). Toutes les données doivent continuer de passer par `/api`.
+Le code de `src/server/**` n'est jamais importé par un composant, un hook ou une route d'interface. Seules la route serveur [`api/$.ts`](../src/routes/api/$.ts) et les tests de `src/test/server/` l'importent. Le contrat passe exclusivement par [`types.ts`](../src/lib/api/types.ts), que le serveur importe en type seulement, et par HTTP via [`client.ts`](../src/lib/api/client.ts). Importer un module serveur dans un composant embarquerait le dépôt de données et le seed dans le bundle navigateur et contournerait l'autorité de l'API. Le client Supabase navigateur ([`integrations/supabase/client.ts`](../src/integrations/supabase/client.ts), clé publique) ne sert qu'à l'authentification, dans `lib/auth/` (connexion, session, mot de passe) ; les tables `kora_records` et `kora_settings` lui sont fermées (sécurité par ligne sans règle d'accès). Toutes les données doivent continuer de passer par `/api`.
 
 Cette règle est une convention : aucune règle ESLint ne l'impose (la seule règle `no-restricted-imports` de [`eslint.config.js`](../eslint.config.js) interdit le paquet `server-only`).
 
@@ -134,7 +138,7 @@ Cette règle est une convention : aucune règle ESLint ne l'impose (la seule rè
 | TypeScript | [`tsconfig.json`](../tsconfig.json) | `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `noUncheckedSideEffectImports` ; `noUnusedLocals` désactivé |
 | ESLint | [`eslint.config.js`](../eslint.config.js) | `typescript-eslint` recommandé, `react-hooks`, `react-refresh` (avertissement), Prettier ; `@typescript-eslint/no-unused-vars` désactivé |
 | Prettier | [`.prettierrc`](../.prettierrc) | `printWidth` 100, points-virgules, guillemets doubles, virgules finales ; pas de tri automatique des classes Tailwind |
-| Vitest | [`vitest.config.ts`](../vitest.config.ts) | Environnement jsdom, [`setup.ts`](../src/test/setup.ts) (jest-dom, simulations de `scrollTo` et `matchMedia`) ; un seul test front, [`app-routing.test.tsx`](../src/test/app-routing.test.tsx) |
+| Vitest | [`vitest.config.ts`](../vitest.config.ts) | Environnement jsdom, [`setup.ts`](../src/test/setup.ts) (jest-dom, simulations de `scrollTo` et `matchMedia`) ; tests front à la racine de `src/test/` : routage ([`app-routing.test.tsx`](../src/test/app-routing.test.tsx)), authentification (`auth-*.test.ts(x)`, `securite-nouveau-mot-de-passe.test.ts`) et WordPress (`wordpress-*.test.ts(x)`) |
 | shadcn CLI | [`components.json`](../components.json) | Style `new-york`, couleur de base `slate`, variables CSS, icônes lucide |
 | Vite | [`vite.config.ts`](../vite.config.ts) | `@lovable.dev/vite-tanstack-config` fournit déjà TanStack Start, React, Tailwind, alias et Nitro : ne pas les ajouter à la main |
 
@@ -156,6 +160,8 @@ Chaque fichier de `src/routes/` déclare sa route par `createFileRoute`, son tit
 | `/newsletter` | [`newsletter.tsx`](../src/routes/newsletter.tsx) | « Newsletter — Inovallée Newsroom IA » | `id` |
 | `/entreprises` | [`entreprises.tsx`](../src/routes/entreprises.tsx) | « Entreprises — Inovallée Newsroom IA » | `id` |
 | `/parametres` | [`parametres.tsx`](../src/routes/parametres.tsx) | « Paramètres — Inovallée Newsroom IA » | `tab` |
+| `/connexion` | [`connexion/index.tsx`](../src/routes/connexion/index.tsx) | « Connexion — Inovallée Newsroom IA » | `redirect` (chemin interne filtré par `safeRedirect`) |
+| `/connexion/nouveau-mot-de-passe` | [`connexion/nouveau-mot-de-passe.tsx`](../src/routes/connexion/nouveau-mot-de-passe.tsx) | « Choisir un mot de passe — Inovallée Newsroom IA » | aucun (le lien e-mail porte ses paramètres dans l'URL) |
 | `/api/*` | [`api/$.ts`](../src/routes/api/$.ts) | sans objet | route serveur (`server.handlers.ANY`) |
 
 La route racine définit le titre par défaut « Inovallée Newsroom IA — KORA », la description, les balises Open Graph et Twitter, la feuille `styles.css`, les polices Google Fonts et le favicon.
@@ -200,15 +206,19 @@ Plusieurs états restent locaux et sont perdus au rechargement : onglet et péri
 RootShell                <html lang="fr"> <head><HeadContent/></head> <body>… <Scripts/></body>
 └── RootComponent
     └── QueryClientProvider        client issu du contexte du routeur
-        ├── AppLayout              TooltipProvider (delayDuration 150), div.kora-page-bg
-        │   ├── AppSidebar         232 px, 76 px replié, sticky, .kora-sidebar-bg
-        │   └── colonne principale
-        │       ├── AppHeader
-        │       └── <main class="flex-1 px-6 pb-6"> contenant <Outlet/> (page courante)
+        ├── <Outlet/>              pages /connexion/* seules (isAuthPage), sans AuthGate ni AppLayout
+        ├── AuthGate               toutes les autres pages
+        │   └── AppLayout          TooltipProvider (delayDuration 150), div.kora-page-bg
+        │       ├── AppSidebar     232 px, 76 px replié, sticky, .kora-sidebar-bg
+        │       └── colonne principale
+        │           ├── AppHeader
+        │           └── <main class="flex-1 px-6 pb-6"> contenant <Outlet/> (page courante)
         └── Toaster                sonner, richColors, position top-right
 ```
 
-Une page ne rend donc que son contenu : barre latérale, en-tête, fond et toasts sont fournis par la racine.
+Une page ne rend donc que son contenu : barre latérale, en-tête, fond et toasts sont fournis par la racine. Les pages de connexion font exception : elles s'affichent dans leur propre cadre ([`AuthPageShell`](../src/components/auth/AuthPageShell.tsx)), sans barre latérale ni en-tête.
+
+[`AuthGate`](../src/components/auth/AuthGate.tsx) garde l'application. Il lit l'état d'authentification (`useAuth` de [`lib/auth/session.ts`](../src/lib/auth/session.ts), un magasin externe lu par `useSyncExternalStore`, toujours `loading` pendant le rendu serveur). Le mode vient de `GET /api/auth/config` ([`lib/auth/mode.ts`](../src/lib/auth/mode.ts)) : `supabase` quand le serveur utilise une base, `demo` sinon, et `demo` par repli si la lecture échoue (le serveur reste seul garant de la sécurité). En mode `demo`, la page s'affiche sans connexion. En mode `supabase`, rien n'est rendu (`AuthLoading`) tant que la session Supabase n'a pas été validée par le serveur (`POST /api/auth/session`, qui pose aussi le cookie `__Host-kora_session` des téléchargements). Sans session, `AuthGate` vide le cache `["kora"]` et redirige vers `/connexion?redirect=<page demandée>`. Un lien d'invitation ou de réinitialisation arrivé sur une autre page (adresse de retour refusée par Supabase) est renvoyé vers `/connexion/nouveau-mot-de-passe`.
 
 [`AppSidebar`](../src/components/layout/AppSidebar.tsx) lit la constante `NAV` :
 
@@ -230,7 +240,7 @@ Le badge provient de `useSignals({ status: "nouveau", limit: 1 }).data.total`. L
 - le titre « Inovallée Newsroom IA » (`h1`, 24 px) et le sous-titre « De la veille au rayonnement éditorial » ;
 - `GlobalSearch` : bouton puis `CommandDialog` (cmdk), ouvert aussi par ⌘K ou Ctrl+K, requête `api.search` sous la clé `qk.search(q)` après 180 ms de stabilité et à partir de 2 caractères, résultats groupés « Entreprises », « Sujets », « Articles », « Sources » ; la sélection navigue vers `r.link`, URL construite par le serveur (`/entreprises?id=`, `/signaux?id=`, `/articles?id=`, `/veille?source=`) ;
 - `Notifications` : popover avec pastille rose si des notifications sont non lues, marquées lues à la fermeture (`api.markNotificationsRead`, invalidation limitée à `qk.notifications`) ;
-- `UserMenu` : profil courant (`useMe`), liste des comptes (`useUsers`) et changement de profil (`api.switchUser`, toast « Connecté en tant que … ») ;
+- `UserMenu`, qui dépend du mode : en mode `supabase`, `AccountMenu` affiche le nom, l'adresse e-mail et les rôles du compte (`useMe`, à défaut l'utilisateur renvoyé par la vérification de session) et l'entrée « Se déconnecter » (`signOut` : déconnexion Supabase, effacement du cookie serveur par `POST /api/auth/logout`, puis rechargement sur `/connexion`) ; en mode `demo` seulement, `DemoUserMenu` affiche le profil courant, la liste des comptes (`useUsers`) sous « Changer de profil » (`api.switchUser`, toast « Connecté en tant que … ») ;
 - l'illustration `HeaderLandscape` et la citation « Des territoires plus innovants, des humains plus engagés. », affichée quand l'en-tête dépasse 1 120 px (requête de conteneur `@min-[1120px]/header`).
 
 ### Page introuvable et erreurs
@@ -242,7 +252,7 @@ Le badge provient de `useSignals({ status: "nouveau", limit: 1 }).data.total`. L
 
 ### Arbre des routes généré
 
-[`routeTree.gen.ts`](../src/routeTree.gen.ts) est régénéré par le plugin TanStack Router de Vite à chaque ajout, renommage ou suppression de fichier dans `src/routes/`. Il ne doit jamais être modifié à la main. Il enregistre aussi le type du routeur (`declare module '@tanstack/react-router'`) et active le SSR (`ssr: true`), ce qui donne le typage de `to`, `search` et `Route.useSearch()`. Le seul test front, [`app-routing.test.tsx`](../src/test/app-routing.test.tsx), vérifie que `/` correspond à une page et non au « not found ».
+[`routeTree.gen.ts`](../src/routeTree.gen.ts) est régénéré par le plugin TanStack Router de Vite à chaque ajout, renommage ou suppression de fichier dans `src/routes/`. Il ne doit jamais être modifié à la main. Il enregistre aussi le type du routeur (`declare module '@tanstack/react-router'`) et active le SSR (`ssr: true`), ce qui donne le typage de `to`, `search` et `Route.useSearch()`. Le test de routage, [`app-routing.test.tsx`](../src/test/app-routing.test.tsx), vérifie que `/` correspond à une page et non au « not found ».
 
 ### Rendu serveur et chargement des données
 
@@ -250,7 +260,8 @@ Le badge provient de `useSignals({ status: "nouveau", limit: 1 }).data.total`. L
 
 Aucune route ne déclare de `loader`, aucune requête n'est préchargée (`ensureQueryData`, `prefetchQuery`, `useSuspenseQuery` sont absents) et l'intégration SSR de TanStack Query n'est pas branchée. Le rendu serveur produit donc la structure de la page et ses squelettes ; toutes les données sont chargées dans le navigateur par `useQuery` après l'hydratation. Conséquences pratiques :
 
-- `apiFetch` appelle des URL relatives (`/api/...`) et ne peut pas être exécuté tel quel dans un `loader` côté serveur (pas d'origine, pas de transfert du cookie `kora_uid`) ;
+- `apiFetch` appelle des URL relatives (`/api/...`) et ne peut pas être exécuté tel quel dans un `loader` côté serveur (pas d'origine, pas de jeton : `getAccessToken` renvoie `null` hors navigateur) ;
+- l'état d'authentification vaut `loading` pendant le rendu serveur : le HTML initial d'une page de l'application ne contient que l'écran d'attente d'`AuthGate` ;
 - les composants qui ont besoin du DOM (graphiques recharts `ResponsiveContainer`) attendent le montage grâce à un hook `useMounted` local ([`ActivityCard.tsx`](../src/components/dashboard/ActivityCard.tsx), [`AnalyticsView.tsx`](../src/components/dashboard/AnalyticsView.tsx)) ;
 - les options par défaut de TanStack Query s'appliquent : `staleTime` nul, rafraîchissement au retour sur l'onglet, et trois nouvelles tentatives en cas d'échec, y compris sur une réponse 403, 404 ou 422 ; un état d'erreur n'apparaît donc qu'après ces tentatives.
 
@@ -277,7 +288,7 @@ sequenceDiagram
   C->>H: useSignals(q)
   H->>Q: lecture de qk.signals(q)
   Q->>F: api.signals(q) si absent ou périmé
-  F->>S: GET /api/signals avec en-tête x-kora-request et cookie kora_uid
+  F->>S: GET /api/signals avec x-kora-request et Authorization Bearer (cookie kora_uid en démonstration)
   S-->>F: JSON ou corps d'erreur
   F-->>Q: données ou ApiError
   C->>H: mutate(vars)
@@ -292,8 +303,10 @@ sequenceDiagram
 
 `apiFetch<T>(path, init)` :
 
-- préfixe le chemin par `/api` et envoie la requête avec `credentials: "same-origin"`, donc avec le cookie de session `kora_uid` ;
+- préfixe le chemin par `/api` et envoie la requête avec `credentials: "same-origin"` ;
+- en mode `supabase`, ajoute l'en-tête `authorization: Bearer <jeton d'accès>` de la session Supabase courante (`getAccessToken` de [`lib/auth/token.ts`](../src/lib/auth/token.ts)), sauf si l'appelant en fournit déjà un ; le serveur vérifie ce jeton à chaque requête. En mode `demo`, aucun jeton n'est envoyé et le profil est désigné par le cookie `kora_uid` ;
 - ajoute l'en-tête `x-kora-request: 1` à toutes les requêtes, lectures comprises ; le serveur l'exige pour toute écriture et répond sinon 403 `csrf_header_missing` (voir [Sécurité et flux tiers](06-securite-et-flux-tiers.md)) ;
+- hors des routes `/auth/*`, une réponse 401, ou 403 `account_not_authorized` (compte retiré de KORA), appelle `handleUnauthenticated` : la session locale est retirée, le motif est mémorisé pour la page de connexion, puis le navigateur recharge `/connexion?redirect=<page courante>` ; l'`ApiError` est levée comme pour toute autre erreur ;
 - ajoute `content-type: application/json` quand un corps non `FormData` est présent ;
 - renvoie `undefined` sur une réponse 204, le JSON décodé sinon ;
 - sur une réponse non 2xx, lit le corps `{ "error": { "code", "message", "details" } }` (`ApiErrorBody`) et lève `ApiError(status, code, message, details)` ; si le corps n'est pas du JSON, le code vaut `http_error` et le message `res.statusText`.
@@ -304,15 +317,17 @@ Exemple de corps d'erreur réel, obtenu par `GET /api/signals?status=inconnu` :
 { "error": { "code": "invalid_filter", "message": "Statut inconnu : inconnu" } }
 ```
 
-L'objet `api` regroupe une fonction par endpoint, typée par les DTO de `types.ts`, par domaine : session et utilisateurs, dashboard et recherche, registre (entreprises, sources, collectes), Signal Engine (signaux, fusion, défusion, recalcul, grilles), Studio (articles, versions, approbations, publication, faits), imports humains, LinkedIn, newsletter, Editorial DNA et exploitation (usage, audit). L'assistant interne `json(method, body)` sérialise le corps ; `toQuery` omet les paramètres `undefined`, `null` ou vides.
+L'objet `api` regroupe une fonction par endpoint, typée par les DTO de `types.ts`, par domaine : authentification (`openServerSession`, `closeServerSession`), session et gestion des utilisateurs (`createUser`, `updateUser`, `deleteUser`, `resendInvitation`), connexion LinkedIn de l'utilisateur, WordPress, dashboard et recherche, registre (entreprises, sources, collectes), Signal Engine (signaux, fusion, défusion, recalcul, grilles), Studio (articles, versions, approbations, publication, faits), imports humains, LinkedIn, newsletter, Editorial DNA et exploitation (usage, audit). L'assistant interne `json(method, body)` sérialise le corps ; `toQuery` omet les paramètres `undefined`, `null` ou vides.
 
 ### Clés de cache et hooks de lecture
 
-Toutes les clés commencent par `"kora"`, ce qui permet d'invalider tout le cache d'un coup :
+Toutes les clés commencent par `"kora"`, ce qui permet d'invalider tout le cache d'un coup, sauf `wordpressCheck` et `wordpressCategories` (`["wordpress-site", …]`), dont les requêtes appellent le site WordPress et ne partent qu'au clic :
 
 | Clé `qk` | Valeur | Hook |
 |---|---|---|
-| `me`, `users` | `["kora", "me"]`, `["kora", "users"]` | `useMe`, `useUsers` |
+| `me`, `users` | `["kora", "me"]`, `["kora", "users"]` | `useMe`, `useUsers` ; mutations `useCreateUser`, `useUpdateUser`, `useDeleteUser`, `useResendInvitation` |
+| `linkedinConnection` | `["kora", "linkedinConnection"]` | `useLinkedInConnection` ; mutations `useLinkedInLink`, `useLinkedInComplete`, `useLinkedInUnlink` |
+| `wordpress` | `["kora", "wordpress"]` | `useWordPressStatus` |
 | `dashboard(q)` | `["kora", "dashboard", q]` | `useDashboard({ from, to })` |
 | `search(q)` | `["kora", "search", q]` | aucun (requête locale à `GlobalSearch`) |
 | `notifications` | `["kora", "notifications"]` | `useNotifications` |
@@ -342,6 +357,8 @@ Les hooks à identifiant (`useSignal`, `useArticle`, `useCompanyDetail`) accepte
 
 En cas d'échec, un toast d'erreur affiche `errorMessage(e)`, c'est-à-dire le message français rédigé par le serveur pour une `ApiError`, le message brut de toute autre `Error` (par exemple « Failed to fetch » en cas de coupure réseau), ou « Erreur inattendue ». L'invalidation globale par défaut garde cohérents les compteurs de la barre latérale, du dashboard et des listes, au prix d'un rechargement de toutes les requêtes actives après chaque écriture.
 
+Les mutations de comptes (`useCreateUser`, `useUpdateUser`, `useDeleteUser`, `useResendInvitation`) n'utilisent pas `useKoraMutation` : elles invalident seulement `qk.users`, `qk.me` et le journal d'audit, sans toast automatique, car le message affiché dépend du résultat de l'invitation.
+
 Quand la réponse contient l'objet mis à jour, plusieurs écrans l'injectent aussitôt dans le cache pour éviter un aller-retour visible : `useSetArticle` ([`workflow.ts`](../src/components/articles/workflow.ts)) pour `qk.article(id)`, `useUpsertImport` ([`imports/cache.ts`](../src/components/articles/imports/cache.ts)) pour `qk.imports`, `setPost` dans [`PostDetail.tsx`](../src/components/linkedin/PostDetail.tsx) pour `qk.linkedin`, `setEdition` dans [`EditionWorkspace.tsx`](../src/components/newsletter/EditionWorkspace.tsx) pour `qk.newsletters`.
 
 ### Gestion des erreurs
@@ -361,7 +378,7 @@ Les fichiers générés ne passent pas par `apiFetch` : `downloadUrl` construit 
 | `downloadUrl.newsletter(id, "html" \| "txt")` | `/api/newsletters/<id>/export?format=html` |
 | `downloadUrl.linkedin(id)` | `/api/linkedin/<id>/export` |
 
-Ces requêtes GET n'emportent pas l'en-tête `x-kora-request`. L'export d'une newsletter approuvée par un validateur consigne une diffusion et fige l'édition côté serveur ; [`EditionWorkspace.tsx`](../src/components/newsletter/EditionWorkspace.tsx) invalide donc tout le cache 1,2 seconde après le clic (`onExported`).
+Ces requêtes GET n'emportent ni l'en-tête `x-kora-request` ni le jeton `Authorization`. En mode `supabase`, le serveur les authentifie par le cookie `__Host-kora_session` (HttpOnly, `SameSite=Strict`, une heure au plus), posé lors de la validation de la session et effacé à la déconnexion ; il ne l'accepte que sur les routes de téléchargement, en GET ou HEAD, pour une navigation de même origine. En mode `demo`, c'est le cookie `kora_uid`. Un téléchargement n'a aucun effet côté serveur, y compris celui d'une newsletter approuvée. La consignation de l'export est une requête distincte : [`EditionWorkspace.tsx`](../src/components/newsletter/EditionWorkspace.tsx) appelle `api.recordNewsletterExport` (`POST /api/newsletters/:id/export`) au clic sur un lien d'export, quand la version est approuvée, l'édition pas encore exportée et l'utilisateur validateur (`onExported`) ; la réponse, l'édition passée `exportee`, est injectée dans le cache (`setEdition`) et tout le cache est invalidé.
 
 ### Droits d'interface
 
@@ -372,7 +389,7 @@ Le serveur reste l'autorité ([`permissions.ts`](../src/server/domain/permission
 | [`articles/hooks.ts`](../src/components/articles/hooks.ts) | articles, LinkedIn, newsletter | `canWrite`, `canValidate`, `readOnly` | `canWrite` si admin ou rédacteur, `canValidate` si admin ou validateur ; tout est permis tant que le profil n'est pas chargé |
 | [`veille/kit/hooks.ts`](../src/components/veille/kit/hooks.ts) | veille, entreprises, paramètres | `readOnly`, `isAdmin`, `readOnlyTitle` | `readOnly` seulement si tous les rôles valent `lecteur` |
 
-La page `/signaux` et les cartes du dashboard ne désactivent aucune action selon le rôle, hormis « Recalculer les scores », réservé à l'administrateur. Les écarts avec la matrice serveur sont listés dans [Dette technique connue](#dette-technique-connue). Les droits eux-mêmes sont décrits dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
+La page `/signaux` et les cartes du dashboard ne désactivent aucune action selon le rôle, hormis « Recalculer les scores », réservé à l'administrateur. L'onglet « Utilisateurs & rôles » lit directement `useMe` : « Ajouter », la modification, le renvoi d'invitation et la suppression ne sont affichés qu'aux administrateurs. La suppression y est désactivée pour son propre compte et pour le dernier compte portant le rôle administrateur, et la case « Administrateur » est verrouillée sur son propre compte ; le serveur, en mode `supabase`, ne compte que les administrateurs ayant déjà activé leur compte et peut donc refuser une suppression que l'interface permet (422 `last_admin`). Les écarts avec la matrice serveur sont listés dans [Dette technique connue](#dette-technique-connue). Les droits eux-mêmes sont décrits dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
 
 ### Ajouter un hook et une mutation
 
@@ -794,9 +811,9 @@ Chaque section donne les fichiers, les données et les interactions principales.
 ![Veille](images/veille.webp)
 
 - Route : [`veille.tsx`](../src/routes/veille.tsx). Données : `useSources()`, `useCollectionRuns({ limit: 500 })`, `useUsage()`, `useCompanyMap()` et `usePermissions()` du kit.
-- En-tête : « Ajouter une source » ([`AddSourceDialog`](../src/components/veille/AddSourceDialog.tsx), validation locale de l'URL et affichage des refus serveur) et « Lancer la collecte » (`useCollectAll` de [`useCollect.ts`](../src/components/veille/useCollect.ts), toast de synthèse). Côté serveur, les collectes lisent réellement les flux RSS et Google News (elles ne sont simulées que dans les tests).
+- En-tête : « Ajouter une source » ([`AddSourceDialog`](../src/components/veille/AddSourceDialog.tsx), validation locale de l'URL et affichage des refus serveur) et « Lancer la collecte » (`useCollectAll` de [`useCollect.ts`](../src/components/veille/useCollect.ts), toast de synthèse). Côté serveur, les collectes lisent réellement les flux RSS et Google News, complétés par une recherche Perplexity (elles ne sont simulées que dans les tests). Une collecte refusée parce qu'une autre est en cours (409 `collection_in_progress`) n'a pas de traitement dédié : le toast d'erreur de `useKoraMutation` affiche le message du serveur, « Une collecte est déjà en cours : réessayez dans quelques minutes. » Le toast d'une collecte réussie ne mentionne pas un avertissement (`NO_FEED`, échec de Google News relayé) : seul l'historique l'affiche.
 - [`FailingSourcesAlert`](../src/components/veille/FailingSourcesAlert.tsx) : sources en échec et relance unitaire ; [`VeilleKpis`](../src/components/veille/VeilleKpis.tsx) : quatre tuiles (sources actives, en échec, collectes des dernières 24 h, observations du mois).
-- Onglets : « Registre des sources » ([`SourceRegistry`](../src/components/veille/SourceRegistry.tsx) : filtre d'accès, pagination par 20, collecte, activation et suppression confirmée ; ligne `id="source-<id>"`), « Historique des collectes » ([`CollectionHistory`](../src/components/veille/CollectionHistory.tsx) : filtres, pagination ; un clic ouvre la source dans le registre), « Couverture » ([`CoveragePanel`](../src/components/veille/CoveragePanel.tsx) : collectes par jour sur 14 jours, statistiques). Les agrégats viennent de [`runs.ts`](../src/components/veille/runs.ts), qui compte à part les échecs d'accès et ne les confond jamais avec une collecte « sans actualité ».
+- Onglets : « Registre des sources » ([`SourceRegistry`](../src/components/veille/SourceRegistry.tsx) : filtre d'accès, pagination par 20, collecte, activation et suppression confirmée ; ligne `id="source-<id>"`), « Historique des collectes » ([`CollectionHistory`](../src/components/veille/CollectionHistory.tsx) : filtres, pagination ; un clic ouvre la source dans le registre ; colonnes Date, Source, Statut, Nouvelles observations, Perplexity et Code d'erreur. La colonne Perplexity (`EnrichmentCell`) affiche « — » sans recherche, « N résultats · M pertinents » suivi de « +K » en vert pour les observations ajoutées, ou une pastille « Erreur » ou « Non configuré » avec le message. La colonne Code d'erreur montre aussi les avertissements d'une collecte réussie, avec leur motif), « Couverture » ([`CoveragePanel`](../src/components/veille/CoveragePanel.tsx) : collectes par jour sur 14 jours, statistiques). Les agrégats viennent de [`runs.ts`](../src/components/veille/runs.ts), qui compte à part les échecs d'accès et ne les confond jamais avec une collecte « sans actualité ».
 
 ### Signaux
 
@@ -807,7 +824,7 @@ Chaque section donne les fichiers, les données et les interactions principales.
 - Barre de titre : « Recalculer les scores » (administrateur seulement, `api.rescoreSignals`) et « Exporter (CSV) » (export complet de l'entité `signals`, indépendant des filtres).
 - [`UnderlineTabs`](../src/components/kora/primitives.tsx) de statut, puis [`SignalFiltersBar`](../src/components/signals/SignalFiltersBar.tsx) : recherche (250 ms de stabilité), entreprise, catégorie, thématique, média, tri. Entreprise, catégorie et thématique vont dans l'URL ; recherche, média et tri restent locaux.
 - Colonne gauche : [`SignalTable`](../src/components/signals/SignalTable.tsx) (table ARIA, sélection au clic ou au clavier, cases à cocher [`KoraCheckbox`](../src/components/signals/KoraCheckbox.tsx)). À partir de deux signaux cochés, « Fusionner » ouvre [`MergeDialog`](../src/components/signals/MergeDialog.tsx).
-- Colonne droite : [`SignalDetailCard`](../src/components/signals/SignalDetailCard.tsx) (« Créer un article », « Dans la newsletter », « Générer le post LinkedIn », « Ignorer »), [`ReviewPanel`](../src/components/signals/ReviewPanel.tsx) (homonymie, fusion incertaine, entreprise ou observations non rattachées : rattachement manuel, regroupement avec le sujet proche), [`StatusActions`](../src/components/signals/StatusActions.tsx) (« Surveiller », « À traiter », « Traité », « Rejeter » avec motif dans [`ReasonDialog`](../src/components/signals/ReasonDialog.tsx)), [`ScoreBreakdown`](../src/components/signals/ScoreBreakdown.tsx) (sous-notes et pondérations), [`EvidencePanel`](../src/components/signals/EvidencePanel.tsx) (indicateur documentaire), [`ObservationList`](../src/components/signals/ObservationList.tsx) (observations sources et défusion).
+- Colonne droite : [`SignalDetailCard`](../src/components/signals/SignalDetailCard.tsx) (« Créer un article », « Dans la newsletter », « Générer le post LinkedIn », « Ignorer » ; bloc [`SignalSources`](../src/components/signals/SignalSources.tsx) « Sources prises en compte dans le score » : nombre de publications et de reprises, média, date, pastilles « Perplexity » et « Reprise », lien vers la source, quatre lignes puis « Voir les N autres sources »), [`ReviewPanel`](../src/components/signals/ReviewPanel.tsx) (homonymie, fusion incertaine, entreprise ou observations non rattachées : rattachement manuel, regroupement avec le sujet proche), [`StatusActions`](../src/components/signals/StatusActions.tsx) (« Surveiller », « À traiter », « Traité », « Rejeter » avec motif dans [`ReasonDialog`](../src/components/signals/ReasonDialog.tsx)), [`ScoreBreakdown`](../src/components/signals/ScoreBreakdown.tsx) (sous-notes et pondérations), [`EvidencePanel`](../src/components/signals/EvidencePanel.tsx) (indicateur documentaire), [`ObservationList`](../src/components/signals/ObservationList.tsx) (observations sources et défusion ; pastille `PerplexityPill` et provenance « Collecté le … via flux de la source, Google News ou Perplexity », libellés `VIA_LABEL` de [`signal-utils.ts`](../src/components/signals/signal-utils.ts)).
 - Les actions passent par `useSignalActions` ([`signals/hooks.ts`](../src/components/signals/hooks.ts)) ; une fusion ou une défusion resélectionne le signal obtenu avec `status: "tous"`.
 
 ### Articles
@@ -826,10 +843,13 @@ Chaque section donne les fichiers, les données et les interactions principales.
 
 ![LinkedIn](images/linkedin.webp)
 
-- Route : [`linkedin.tsx`](../src/routes/linkedin.tsx), qui délègue à [`LinkedInPage`](../src/components/linkedin/LinkedInPage.tsx). Bandeau rappelant que la publication par l'API LinkedIn dépend des accès et que l'export manuel est la voie du pilote.
+- Route : [`linkedin.tsx`](../src/routes/linkedin.tsx), qui délègue à [`LinkedInPage`](../src/components/linkedin/LinkedInPage.tsx).
+- [`ConnectionCard`](../src/components/linkedin/ConnectionCard.tsx), sous l'en-tête : état du compte LinkedIn de l'utilisateur courant (`useLinkedInConnection`). Relié : « Compte LinkedIn connecté … — les publications partiront de ce compte. » (nom lu sur LinkedIn) et « Déconnecter » (`useLinkedInUnlink`). Autorisation à renouveler : « Reconnecter LinkedIn ». Requête en erreur : son message. Sinon, y compris quand le serveur répond `error: "linkedin_unavailable"` : « Aucun compte LinkedIn relié : la publication reste un export manuel… » et « Connecter mon compte LinkedIn ». La connexion ouvre une fenêtre surgissante vide au clic (pour échapper au bloqueur), obtient l'adresse de consentement (`useLinkedInLink`), y dirige la fenêtre puis attend le message de [`return.ts`](../src/routes/api/oauth/linkedin/return.ts) : seuls sont acceptés les messages de même origine, venus de cette fenêtre et du connecteur `linkedin`. Le code reçu est transmis avec `state` à `useLinkedInComplete`, puis l'état est rechargé. Une fenêtre fermée avant la fin ou un échec affichent un toast d'erreur. C'est le seul endroit où relier son compte : ni Paramètres ni le menu ne le proposent.
 - Données : `useLinkedInPosts()` (liste triée par date de modification), `usePublications({ channel: "linkedin" })` pour les tentatives, `useArticles()` dans le dialogue de création.
-- [`PostList`](../src/components/linkedin/PostList.tsx) à gauche, [`PostDetail`](../src/components/linkedin/PostDetail.tsx) à droite : choix de la variante (`RadioGroup`), édition du texte et des hashtags (limite `LINKEDIN_MAX_CHARS = 3000`, [`text.ts`](../src/components/linkedin/text.ts)), aperçu [`LinkedInPreview`](../src/components/linkedin/LinkedInPreview.tsx), puis une suite de trois boutons « Soumettre à validation », « Approuver la version n », « Exporter » dont seul le suivant attendu est un `PrimaryButton` ; chaque bouton désactivé porte la raison dans `title`.
-- Après export : « Télécharger l'export » (`downloadUrl.linkedin`) et « Copier le texte » (presse-papiers).
+- [`PostList`](../src/components/linkedin/PostList.tsx) à gauche, [`PostDetail`](../src/components/linkedin/PostDetail.tsx) à droite : choix de la variante (`RadioGroup`), édition du texte et des hashtags (limite `LINKEDIN_MAX_CHARS = 3000`, [`text.ts`](../src/components/linkedin/text.ts)), aperçu [`LinkedInPreview`](../src/components/linkedin/LinkedInPreview.tsx), puis une suite de trois boutons « Soumettre à validation », « Approuver la version n » et un troisième bouton, dont seul le suivant attendu est un `PrimaryButton` ; chaque bouton désactivé porte la raison dans `title`. Le troisième s'intitule « Publier sur LinkedIn » si le compte de l'utilisateur est relié, « Exporter » sinon ; les deux appellent `POST /api/linkedin/:id/publish`, et le serveur choisit selon le compte relié. Un `useRef` écarte le double clic avant que `isPending` ne désactive le bouton.
+- Résultat sous les boutons : toast « Post publié sur LinkedIn », « Export LinkedIn prêt » ou « Publication confirmée » ; bandeau « Publication déjà en cours » sur 409 `publication_in_progress`, avec rechargement automatique au bout de 5 secondes ; `RefusalResult` pour un autre refus, `AttemptResult` sinon ([`publication.tsx`](../src/components/articles/publication.tsx)).
+- [`UnconfirmedPublication`](../src/components/linkedin/UnconfirmedPublication.tsx) remplace ce résultat quand la dernière tentative de la version courante est `verification_requise` : bandeau « Publication LinkedIn à vérifier » (auteur, date, message), boutons « Le post est bien sur LinkedIn » (`resolution: "published"`) et « Le post n'y est pas : republier » (`not_published`, après le dialogue « Republier ce post sur LinkedIn ? »). Le bouton de publication est alors désactivé (« Indiquez d'abord si la publication précédente figure sur LinkedIn. »). [`resolution.ts`](../src/components/linkedin/resolution.ts) reproduit la règle du serveur (auteur de la tentative ou administrateur) pour désactiver les boutons ; un utilisateur sans droit de validation lit « La vérification est réservée aux validateurs. ».
+- Après export ou publication : « Télécharger l'export » (`downloadUrl.linkedin`) et « Copier le texte » (presse-papiers). « Historique des exports (N) » liste toutes les tentatives, publications comprises, avec leur mode.
 - [`NewPostDialog`](../src/components/linkedin/NewPostDialog.tsx) : choix d'un article non rejeté, les articles approuvés, programmés ou publiés en tête ; un article qui a déjà un post est grisé (« Post existant »).
 
 ### Newsletter
@@ -839,7 +859,7 @@ Chaque section donne les fichiers, les données et les interactions principales.
 - Route : [`newsletter.tsx`](../src/routes/newsletter.tsx), qui délègue à [`NewsletterPage`](../src/components/newsletter/NewsletterPage.tsx). Bandeau « Export uniquement » : aucun envoi de campagne n'est implémenté.
 - Données : `useNewsletters()`, `usePublications({ channel: "newsletter" })`, et dans le panneau d'ajout `useSignals({ sort: "score", limit: 60 })` et `useArticles()`.
 - Sélecteur d'édition (`Select` shadcn) et « Nouvelle édition » ([`NewEditionDialog`](../src/components/newsletter/NewEditionDialog.tsx), semaine par défaut au lundi suivant).
-- [`EditionWorkspace`](../src/components/newsletter/EditionWorkspace.tsx) : en-tête avec version et statut, « Approuver la version n », « Export HTML » et « Export texte » ; titre, introduction et résumés éditables puis enregistrés ensemble ; [`ItemsList`](../src/components/newsletter/ItemsList.tsx) (ordre par flèches, retrait) ; [`AddTopicsPanel`](../src/components/newsletter/AddTopicsPanel.tsx) (ajout de signaux ou d'articles) ; aperçu [`NewsletterPreview`](../src/components/newsletter/NewsletterPreview.tsx). Une édition exportée est verrouillée.
+- [`EditionWorkspace`](../src/components/newsletter/EditionWorkspace.tsx) : en-tête avec version et statut, « Approuver la version n », « Export HTML » et « Export texte » ; titre, introduction et résumés éditables puis enregistrés ensemble ; [`ItemsList`](../src/components/newsletter/ItemsList.tsx) (ordre par flèches, retrait) ; [`AddTopicsPanel`](../src/components/newsletter/AddTopicsPanel.tsx) (ajout de signaux ou d'articles) ; aperçu [`NewsletterPreview`](../src/components/newsletter/NewsletterPreview.tsx). Les liens d'export téléchargent le fichier sans effet ; pour un validateur, sur une version approuvée et non encore exportée, le clic appelle aussi `POST /api/newsletters/:id/export` (`recordExport`), qui fige l'édition (voir [Téléchargements](#téléchargements)). La ligne sous les boutons l'annonce : « L'export de la version approuvée est consigné (clé d'idempotence) et fige l'édition. », ou, pour un autre profil, « seul un validateur peut le consigner comme diffusion ». Une édition exportée est verrouillée.
 
 ### Entreprises
 
@@ -857,11 +877,17 @@ Chaque section donne les fichiers, les données et les interactions principales.
 - Route : [`parametres.tsx`](../src/routes/parametres.tsx). Un encadré « consultation seule » s'affiche sur les onglets grille et DNA pour un profil lecteur.
 - « Grille de score » ([`ScoringGridTab`](../src/components/parametres/ScoringGridTab.tsx), `useScoringGrids`) : curseurs [`WeightEditor`](../src/components/parametres/scoring/WeightEditor.tsx) dont la somme doit valoir 100 ([`weights.ts`](../src/components/parametres/scoring/weights.ts)), radar [`GridRadar`](../src/components/parametres/scoring/GridRadar.tsx), motif, enregistrement d'une nouvelle version, recalcul des scores, historique [`GridHistory`](../src/components/parametres/scoring/GridHistory.tsx).
 - « Editorial DNA » ([`EditorialDnaTab`](../src/components/parametres/EditorialDnaTab.tsx), `useEditorialDna`) : [`RulesCard`](../src/components/parametres/dna/RulesCard.tsx), [`ProposalsCard`](../src/components/parametres/dna/ProposalsCard.tsx) (acceptation ou refus explicite), [`ExamplesCard`](../src/components/parametres/dna/ExamplesCard.tsx).
-- « Utilisateurs & rôles » ([`UsersRolesTab`](../src/components/parametres/UsersRolesTab.tsx), `useUsers`, `useMe`) : comptes, matrice de droits affichée (constante `MATRIX` locale), alerte en cas de cumul rédacteur et validateur.
+- « Utilisateurs & rôles » ([`UsersRolesTab`](../src/components/parametres/UsersRolesTab.tsx), `useUsers`, `useMe`, `useAuth`) : carte « Comptes nominatifs » (nom, adresse, équipe, rôles ; en mode `supabase`, pastille « Compte activé » ou « Invitation en attente » selon `hasAccount`), matrice de droits affichée (constante `MATRIX` locale), alerte en cas de cumul rédacteur et validateur. Pour un administrateur : « Ajouter » et « Modifier les rôles de … » ouvrent [`UserFormDialog`](../src/components/auth/UserFormDialog.tsx) (nom, équipe, adresse non modifiable après création, au moins un rôle ; bouton « Ajouter et inviter » en mode `supabase`) ; « Renvoyer l'invitation » n'apparaît qu'en mode `supabase` pour un compte non activé ; la suppression passe par un `ConfirmDialog`. Les retours (invitation envoyée, compte existant rattaché, échec d'envoi) et les erreurs (`email_taken`, `last_admin`, `self_demotion`, `self_delete`) sont traduits par [`lib/auth/accounts.ts`](../src/lib/auth/accounts.ts).
 - « WordPress » ([`WordPressTab`](../src/components/parametres/WordPressTab.tsx), `useWordPressStatus`) : mode et site, procédure de configuration en `non_configure` (variables de `missing`), « Tester la connexion » (`useWordPressCheck`, activé au clic, administrateurs), correspondance des catégories (`useWordPressCategories` chargé au clic sur « Modifier la correspondance », `useSaveWordPressSettings`), lecture seule pour les autres profils. Fonctions pures dans [`parametres/wordpress.ts`](../src/components/parametres/wordpress.ts) (arborescence des catégories, construction des réglages, verdict du test).
 - « Quotas & budget » ([`QuotasTab`](../src/components/parametres/QuotasTab.tsx), `useUsage`) : jauge circulaire du budget API sur panneau sombre, compteurs avec alerte à 80 %.
 - « Exports & réversibilité » ([`ExportsTab`](../src/components/parametres/ExportsTab.tsx)) : manifeste et export CSV ou JSON de chaque entité de `EXPORT_ENTITY`.
 - « Journal d'audit » ([`AuditTab`](../src/components/parametres/AuditTab.tsx), `useAudit` limité à 500 événements) : filtre d'entité, recherche locale, pagination par 25, export CSV.
+
+### Connexion
+
+- Routes : [`connexion/index.tsx`](../src/routes/connexion/index.tsx) et [`connexion/nouveau-mot-de-passe.tsx`](../src/routes/connexion/nouveau-mot-de-passe.tsx), rendues hors `AuthGate` et `AppLayout` dans [`AuthPageShell`](../src/components/auth/AuthPageShell.tsx), avec la balise `robots: noindex`. Toute la logique est dans [`lib/auth/session.ts`](../src/lib/auth/session.ts) ; les messages d'erreur de Supabase Auth sont traduits par [`lib/auth/messages.ts`](../src/lib/auth/messages.ts).
+- `/connexion` : [`LoginForm`](../src/components/auth/LoginForm.tsx) (« Adresse e-mail », « Mot de passe », « Se connecter » ; erreur sur place « Connexion impossible »). `signInWithPassword` ouvre la session Supabase puis la fait valider par le serveur ; un refus (compte absent de KORA) ferme aussitôt la session. Une fois la session validée, la page vide le cache `["kora"]`, y place l'utilisateur renvoyé (`qk.me`) et navigue vers `redirect`, à défaut `/`. Un bandeau reprend le motif d'une déconnexion forcée (« Vous avez été déconnecté », « Compte non autorisé »). « Mot de passe oublié ? » bascule sur [`ResetRequestForm`](../src/components/auth/ResetRequestForm.tsx), qui demande un lien de réinitialisation vers `/connexion/nouveau-mot-de-passe` et répond de la même façon que le compte existe ou non. En mode `demo`, la page indique « Mode démonstration » et renvoie au dashboard.
+- `/connexion/nouveau-mot-de-passe` : page d'arrivée des liens d'invitation (« Activez votre compte », bouton « Activer mon compte ») et de réinitialisation (« Nouveau mot de passe », « Enregistrer le mot de passe »). [`NewPasswordForm`](../src/components/auth/NewPasswordForm.tsx) exige 8 caractères au moins (`MIN_PASSWORD_LENGTH`) et une confirmation identique ; après l'enregistrement, les autres sessions du compte sont fermées, le cache est vidé et la page navigue vers `/`. Un lien expiré, déjà utilisé ou invalide affiche « Lien expiré ou invalide » et renvoie vers la page de connexion.
 
 ## Recettes
 
@@ -926,7 +952,7 @@ Chaque section donne les fichiers, les données et les interactions principales.
 1. Ajouter la valeur à l'union de [`types.ts`](../src/lib/api/types.ts), en accord avec le serveur (validation et règles côté `src/server`).
 2. Compléter la table de [`labels.ts`](../src/components/kora/labels.ts), ou du `labels.ts` du dossier, avec son libellé français et son ton. Comme ces tables sont des `Record<Enum, …>`, TypeScript signale toute valeur manquante.
 3. Les listes dérivées se mettent à jour d'elles-mêmes : `SIGNAL_STATUSES`, `THEMES` et `CATEGORIES` ([`signal-utils.ts`](../src/components/signals/signal-utils.ts)), les options de filtres de [`veille/labels.ts`](../src/components/veille/labels.ts), les gardes `isSignalStatus`, `isTheme` et `isCategory` des search params.
-4. Vérifier les listes écrites à la main : `STATUS_TABS` de [`signaux.tsx`](../src/routes/signaux.tsx), `ARTICLE_TABS` et `matchesTab` de [`articles/search.ts`](../src/components/articles/search.ts), `LINKEDIN_TABS` et `matchesLinkedInTab`, `CRITERIA` et `CRITERION_META` de [`parametres/labels.ts`](../src/components/parametres/labels.ts), `ROLES` et `MATRIX` d'`UsersRolesTab`.
+4. Vérifier les listes écrites à la main : `STATUS_TABS` de [`signaux.tsx`](../src/routes/signaux.tsx), `ARTICLE_TABS` et `matchesTab` de [`articles/search.ts`](../src/components/articles/search.ts), `LINKEDIN_TABS` et `matchesLinkedInTab`, `CRITERIA` et `CRITERION_META` de [`parametres/labels.ts`](../src/components/parametres/labels.ts), `ROLES` et `MATRIX` d'`UsersRolesTab`, `ROLES` et `ROLE_HINT` d'[`UserFormDialog`](../src/components/auth/UserFormDialog.tsx).
 5. Pour un nouveau texte d'interface, l'écrire directement en français dans le JSX, guillemets « » compris (`&apos;` pour l'apostrophe dans le texte JSX).
 
 ## Accessibilité et internationalisation
@@ -967,6 +993,6 @@ Ces points n'empêchent pas le fonctionnement mais compliquent la maintenance ou
 
 - Doublons de composants entre boîtes à outils : trois `HrefLink`, deux `KoraDialog` de même nom aux props différentes plus le `Dialog` shadcn, deux `Field`, deux `TagInput`, deux `FilterSelect` (valeurs « tout » `__tous__` et `all`), trois `plural` (dont un sans séparateur de milliers), deux `ScoreBox`, deux `MiniBars`, deux `useCompanyMap` plus `useCompanyIndex`, deux `useMounted`, deux `useSvgId`, deux logos LinkedIn (`LinkedInIcon`, `LinkedInMark`) et deux logos WordPress (`WordPressIcon`, `WordPressMark`), deux `ROLE_TONE` aux tons différents (rédacteur bleu dans les paramètres, teal dans « Mon espace »).
 - Droits d'interface : `usePermissions` du kit ne désactive les actions que pour un profil exclusivement lecteur, alors que le serveur réserve la suppression d'entreprise, la grille de score, le recalcul et l'Editorial DNA à l'administrateur, et le registre et la collecte aux rédacteurs. `/signaux` ne désactive aucune action pour un lecteur. La matrice affichée dans « Utilisateurs & rôles » ne correspond pas à celle du serveur.
-- Code mort : `SeeAll`, `CHANNEL`, `TONE_HEX`, `useIsReadOnly`, `api.newsletter`, `api.setNewsletterIncludeNext`, `qk.newsletter`, la branche de `LoadError` dédiée au statut 501, que le serveur ne renvoie jamais, 31 composants shadcn jamais montés (les 14 importés directement plus `button`, utilisé par `calendar`, sont les seuls actifs) et `use-mobile.tsx`.
+- Code mort : `SeeAll`, `CHANNEL`, `TONE_HEX`, `useIsReadOnly`, `api.newsletter`, `api.setNewsletterIncludeNext`, `qk.newsletter`, la branche de `LoadError` dédiée au statut 501, que le serveur ne renvoie jamais, 30 composants shadcn jamais montés (les 15 importés directement plus `button`, utilisé par `calendar`, sont les seuls actifs) et `use-mobile.tsx`.
 - Sources de vérité multiples : `.kora-nav-active` recouverte par `ACTIVE`, couleurs littérales des graphiques, seuil de priorité 80 répété dans `signaux.tsx` et `AnalyticsView.tsx`, quotas de repli codés en dur (150 entreprises, 300 sources, 6 000 observations), version `APP_VERSION` codée en dur, période par défaut du dashboard différente côté front (mois courant affiché pendant le chargement) et côté serveur (30 derniers jours).
 - Options de TanStack Query laissées par défaut (trois nouvelles tentatives même sur 4xx) et invalidation de tout le cache à chaque mutation, qui recharge notamment toutes les pages de `useAllSignals`.

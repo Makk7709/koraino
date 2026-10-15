@@ -178,7 +178,7 @@ Chaque élément renvoyé par le collecteur passe par `ingest` ([`services/colle
 6. `decideCluster` rattache l'observation à un signal existant ou crée un signal.
 7. Le signal est reconstruit (`rebuildSignal` dans [`services/signals.ts`](../src/server/services/signals.ts)) : reprises, dates, observation primaire, score. Un nouveau signal de score au moins égal à 80 déclenche une notification.
 
-Une collecte retient au plus trois éléments par source (`MAX_ITEMS`) : les trois premiers renvoyés par le collecteur, c'est-à-dire, pour le collecteur réel, les trois publications les plus récentes (voir [WF1](#wf1--collecte-et-classement)).
+Une collecte crée au plus trois observations nouvelles par source (`MAX_ITEMS`). Les éléments sont examinés dans l'ordre du collecteur, du plus récent au plus ancien pour le collecteur réel ; un élément ignoré (URL refusée ou déjà connue, texte vide) ne compte pas dans cette limite (voir [WF1](#wf1--collecte-et-classement)).
 
 ### Rattachement aux entreprises
 
@@ -213,7 +213,7 @@ Sous le seuil de 60, `companyId` vaut `null` : le signal est « à rattacher » 
 
 Les homonymies et les fusions incertaines sont ainsi soumises à revue humaine (§3.2) : la revue s'affiche sur le signal et se résout par rattachement, fusion ou défusion.
 
-Le collecteur réel ne fournit jamais de date d'événement : la date de référence d'un signal collecté est donc sa date de création. Une publication antérieure de plus de 7 jours à cette date n'est jamais rattachée par `decideCluster`, même si elle reprend le même communiqué. La première collecte d'une source, qui peut ramener des publications vieilles de 180 jours, crée donc des signaux distincts pour un même événement ancien, sans revue ; seule une fusion manuelle les réunit.
+Le collecteur réel ne fournit jamais de date d'événement : la date de référence d'un signal collecté est donc sa date de création. Une publication antérieure de plus de 7 jours à cette date n'est jamais rattachée par `decideCluster`, même si elle reprend le même communiqué. La première collecte d'une source, qui peut ramener des publications vieilles de 30 jours, crée donc des signaux distincts pour un même événement ancien, sans revue ; seule une fusion manuelle les réunit.
 
 ### Fusion et défusion
 
@@ -223,9 +223,11 @@ Le collecteur réel ne fournit jamais de date d'événement : la date de référ
 
 ### Dates
 
-Chaque observation porte trois dates : `collectedAt` (toujours renseignée, heure du serveur à l'ingestion), `publishedAt` (fournie par la source ou `null`) et `eventDate` (`null` si inconnue). Aucun collecteur ne fournit de date d'événement : le collecteur réel ne lit que la date de publication (`pubDate`, `published` ou `updated`), et le collecteur simulé des tests n'en produit pas. Seul le jeu de démonstration contient des dates d'événement. Sans date d'événement, la nouveauté se calcule sur la plus ancienne date de publication : une publication de plus de 30 jours au moment de la création du signal perd 25 points (« événement antérieur de N jours à sa détection »), ce qui touche les entrées anciennes ramenées par la fenêtre de 180 jours. Le signal reprend la plus ancienne valeur de chaque date parmi ses observations, recalculée à chaque reconstruction.
+Chaque observation porte trois dates : `collectedAt` (toujours renseignée, heure du serveur à l'ingestion), `publishedAt` (fournie par la source ou `null`) et `eventDate` (`null` si inconnue). Aucun collecteur ne fournit de date d'événement : le collecteur réel ne lit que la date de publication (`pubDate`, `published` ou `updated`, ou la date d'un résultat Perplexity), et le collecteur simulé des tests n'en produit pas. Seul le jeu de démonstration contient des dates d'événement. Sans date d'événement, la nouveauté se calcule sur la plus ancienne date de publication : une publication de plus de 30 jours au moment de la création du signal perd 25 points (« événement antérieur de N jours à sa détection »). La collecte réelle écartant les publications de plus de 30 jours, ce retrait ne touche plus guère un signal collecté que s'il a absorbé, par fusion, des observations plus anciennes. Le signal reprend la plus ancienne valeur de chaque date parmi ses observations, recalculée à chaque reconstruction.
 
-Une date inconnue n'est jamais inventée : elle reste `null` dans l'API et dans les exports JSON, vide dans les exports CSV. L'interface affiche la date de publication, à défaut la date d'événement (`signalDate` dans [`signal-utils.ts`](../src/components/signals/signal-utils.ts)), et « Date inconnue » si les deux manquent (`formatDate` dans [`labels.ts`](../src/components/kora/labels.ts)). La liste des sources du brouillon écrit « date inconnue ». La date de collecte sert de repli uniquement pour ordonner les observations et calculer les fenêtres de regroupement ; elle n'est jamais présentée comme date de publication. L'absence de toute date d'événement et de publication retire 8 points à la nouveauté, et une fraîcheur inconnue est signalée dans l'indicateur documentaire (« Date de publication inconnue »).
+Une date inconnue n'est jamais inventée : elle reste `null` dans l'API et dans les exports JSON, vide dans les exports CSV. L'interface affiche la date de publication, à défaut la date d'événement (`signalDate` dans [`signal-utils.ts`](../src/components/signals/signal-utils.ts)), et « Date inconnue » si les deux manquent (`formatDate` dans [`labels.ts`](../src/components/kora/labels.ts)). La liste des sources du brouillon écrit « date inconnue ». La date de collecte sert de repli uniquement pour ordonner les observations et les signaux et calculer les fenêtres de regroupement ; elle n'est jamais présentée comme date de publication.
+
+**Tri des signaux récents.** `GET /api/signals` ([`handlers/signals.ts`](../src/server/handlers/signals.ts)), avec `sort=recent` (valeur par défaut), trie par date d'actualité décroissante : date de publication, à défaut date d'événement, à défaut date de collecte ; à égalité, par date de création puis identifiant décroissants. Un signal créé aujourd'hui pour une publication d'il y a trois semaines se range donc à sa date de publication, et non en tête. `sort=score` trie par score décroissant, puis selon le même ordre. La page Signaux, qui fusionne deux requêtes, retrie avec la même règle (`byNewsDate` dans [`signal-utils.ts`](../src/components/signals/signal-utils.ts)). L'absence de toute date d'événement et de publication retire 8 points à la nouveauté, et une fraîcheur inconnue est signalée dans l'indicateur documentaire (« Date de publication inconnue »).
 
 ### Statuts d'un signal
 
@@ -274,7 +276,7 @@ Les six workflows sont ceux du §6 du cahier des charges. Les endpoints cités s
 | WF1 | Collecte et classement | Bouton « Lancer la collecte » ou « Réessayer » | rédacteur, administrateur |
 | WF2 | Sujet sélectionné vers brouillon sourcé | Bouton « Rédiger » sur un signal | rédacteur ; validateur pour l'approbation |
 | WF3 | Import d'un article humain | Dépôt d'un fichier DOCX ou TXT | rédacteur, administrateur |
-| WF4 | Post LinkedIn | Création depuis un article ou un signal | rédacteur ; validateur pour l'approbation et l'export |
+| WF4 | Post LinkedIn | Création depuis un article ou un signal | rédacteur ; validateur pour l'approbation, la publication et l'export |
 | WF5 | Newsletter | Création d'une édition ou interrupteur « Inclure dans la prochaine édition » | rédacteur ; validateur pour l'approbation et l'export |
 | WF6 | Corrections et référentiel | Enregistrement d'une version humaine après une version KORA | automatique ; administrateur pour la décision |
 
@@ -294,32 +296,38 @@ Les six workflows sont ceux du §6 du cahier des charges. Les endpoints cités s
 
 `googleNewsUrl` construit `https://news.google.com/rss/search?q=…&hl=fr&gl=FR&ceid=FR:fr`, la requête étant le nom de l'entreprise entre guillemets, à défaut le libellé de la source. Pour une page d'actualités ordinaire, l'URL déclarée n'est donc jamais lue. La réponse est ensuite traitée ainsi :
 
-1. Si elle n'est pas un flux (aucune balise `rss`, `feed` ou `rdf:RDF`), le collecteur cherche dans la page une balise `<link>` de type `application/rss+xml` ou `application/atom+xml` et lit le flux annoncé : c'est la découverte automatique. Sans flux annoncé, il renvoie un succès avec zéro publication.
+1. Si elle n'est pas un flux (aucune balise `rss`, `feed` ou `rdf:RDF`), le collecteur cherche dans la page une balise `<link>` de type `application/rss+xml` ou `application/atom+xml` et lit le flux annoncé : c'est la découverte automatique. Sans flux annoncé, il renvoie un succès sans publication, accompagné de l'avertissement `NO_FEED` : « Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités. »
 2. `parseFeed` extrait par expressions régulières les entrées RSS 2.0 (`item`) et Atom (`entry`) : titre, lien, date (`pubDate`, `published`, à défaut `updated`) et description (`description`, `summary` ou `content`). Le média est lu dans la balise `source` de Google News, dont le nom est retiré de la fin du titre ; à défaut, c'est l'entreprise de la source, ou le nom d'hôte pour une source sans entreprise.
-3. Pour une source d'entreprise qui ne passe pas par Google News, et dont l'hôte ne se termine pas par le domaine de l'entreprise, seules les entrées dont le titre ou la description contient le nom ou un alias sont gardées. Ce filtre est une simple inclusion de chaîne, insensible à la casse mais sensible aux accents et sans frontière de mot, à la différence de `matchCompany`.
-4. Les entrées publiées depuis plus de 180 jours sont écartées ; les entrées sans date sont gardées. La liste est triée de la plus récente à la plus ancienne, les entrées sans date en dernier.
-5. La date d'événement vaut toujours `null`.
+3. Pour une source lue par Google News et rattachée à une entreprise, les résultats de la recherche Perplexity sont ajoutés (voir l'enrichissement ci-dessous).
+4. Pour une source d'entreprise qui ne passe pas par Google News, et dont l'hôte ne se termine pas par le domaine de l'entreprise, seules les entrées dont le titre ou la description contient le nom ou un alias sont gardées. Ce filtre est une simple inclusion de chaîne, insensible à la casse mais sensible aux accents et sans frontière de mot, à la différence de `matchCompany`.
+5. Règle de fraîcheur (`FRESHNESS_DAYS = 30`) : seules les entrées publiées depuis 30 jours au plus sont gardées. Une entrée sans date est écartée, car sa fraîcheur n'est pas vérifiable ; une entrée datée de plus d'un jour dans le futur l'est aussi (certains agendas d'événements mettent la date de l'événement à la place de la date de publication). La liste est triée de la plus récente à la plus ancienne.
+6. La date d'événement vaut toujours `null`.
 
 Chaque requête est interrompue après 15 secondes (code `TIMEOUT`). Un statut HTTP d'erreur donne le code `HTTP_<statut>`, une autre erreur réseau le code porté par l'erreur, à défaut `NETWORK` ; seuls `HTTP_403` et `HTTP_404` sont marqués non transitoires. Les contrôles réseau (redirections, adresses internes) sont décrits dans [Collecteur web](06-securite-et-flux-tiers.md#collecteur-web).
 
 Pour Google News, le lien d'une entrée pointe vers `news.google.com` et non vers le site du média, et la description ne contient qu'un lien titré suivi du nom du média : l'extrait nettoyé se réduit au titre, répété, et au nom du média. Le classement, l'extraction des montants, l'indicateur documentaire et la liste des faits du dossier ne disposent donc, pour ces observations, que du titre. Le rattachement par le domaine de l'URL (confiance 97) ne s'y applique jamais.
 
-**Source Google News automatique.** `POST /api/companies` ([`handlers/registry.ts`](../src/server/handlers/registry.ts)) crée, avec l'entreprise, une source `recherche_web` intitulée `Google News — <nom>`, d'URL `googleNewsUrl(nom)`, de fréquence quotidienne et d'accès `en_attente`. La réponse porte donc `sourceCount: 1`. Cette source n'est pas contrôlée par `assertQuota("sources")`, que seul `POST /api/sources` appelle : le nombre de sources peut ainsi dépasser le plafond de 300. Seul l'événement `company.create` est journalisé. L'URL étant lue telle quelle, un renommage de l'entreprise ne change pas la requête : la collecte continue d'interroger Google News sur l'ancien nom.
+**Enrichissement Perplexity.** Pour une source lue par Google News (`recherche_web`, ou `actualites` sans URL de flux) et rattachée à une entreprise, le collecteur interroge aussi Perplexity, en parallèle de Google News, par la passerelle de connexion de la plateforme d'hébergement (`perplexitySearch`). La requête est `"<nom de l'entreprise>" Grenoble actualité entreprise`, limitée à cinq résultats publiés dans le dernier mois et interrompue après 20 secondes. Un résultat n'est retenu (`mapPerplexityResults`) que s'il a un titre, une URL et une date lisible, s'il n'est pas hébergé sur le domaine de l'entreprise ou un de ses sous-domaines (couverts par ses propres sources), et si son titre ou son extrait contient le nom ou un alias (même inclusion de chaîne que le filtre des flux généralistes). `mergeEnrichment` écarte ensuite les résultats déjà présents dans Google News, par URL ou par titre : Google News ne donnant que des liens de redirection, deux titres normalisés d'au moins 25 caractères dont l'un commence par l'autre désignent le même article. Le média d'un résultat Perplexity est son nom d'hôte. Les résultats retenus suivent ensuite la règle de fraîcheur et la chaîne d'ingestion communes. Chaque élément porte sa provenance (`via` : `flux`, `google_news` ou `perplexity`), conservée sur l'observation et reprise dans l'export CSV des observations. Le bilan de la recherche est enregistré sur la collecte (`enrichment` : statut `ok`, `non_configure` ou `erreur`, résultats reçus, résultats retenus, observations ajoutées, message). Sans les secrets `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY`, le statut est `non_configure` (« Secret manquant : … ») ; une erreur HTTP ou un délai dépassé donne `erreur`. Dans les deux cas, la lecture de Google News suit son cours. L'appel à Perplexity n'a pas de ligne de consommation propre (voir le coût ci-dessous).
+
+**Relais quand Google News échoue.** Si la lecture de Google News échoue alors que Perplexity a répondu (statut `ok`, même sans résultat retenu), la collecte n'échoue pas : elle se poursuit avec les seuls résultats Perplexity et porte un avertissement, `errorCode` reprenant le code de l'échec (`HTTP_<statut>`, `TIMEOUT`, `NETWORK`) et `errorMessage` le motif préfixé de « Google News : ». Si Perplexity n'a pas répondu ou n'est pas configuré, l'échec de Google News est un échec de la collecte, réessayé comme les autres ; chaque essai relance alors aussi la recherche Perplexity.
+
+**Source Google News automatique.** `POST /api/companies` ([`handlers/registry.ts`](../src/server/handlers/registry.ts)) crée, avec l'entreprise, une source `recherche_web` intitulée `Google News — <nom>`, d'URL `googleNewsUrl(nom)`, de fréquence quotidienne et d'accès `en_attente`. La réponse porte donc `sourceCount: 1`. Cette source n'est pas contrôlée par `assertQuota("sources")`, que seul `POST /api/sources` appelle : le nombre de sources peut ainsi dépasser le plafond de 300. Seul l'événement `company.create` est journalisé. L'URL étant lue telle quelle, un renommage de l'entreprise ne change pas la requête : la collecte continue d'interroger Google News sur l'ancien nom (la recherche Perplexity, elle, utilise le nom courant). Les entreprises importées par script n'ont pas reçu cette source : [`db/data/2026-10-15_veille_presse_entreprises.sql`](../db/data/2026-10-15_veille_presse_entreprises.sql) la crée, avec la même URL, pour chaque entreprise qui n'a encore aucune source `recherche_web` (identifiant `src_<entreprise>_presse`, événement `source.create` au nom de « KORA »). Le script est rejouable sans effet.
 
 **Étapes.**
 
 1. Une source désactivée est refusée (409 `source_disabled`) ; la collecte globale l'ignore.
-2. Le coût est réservé avant l'appel (`paidCall`, type `search_query`, estimation `COSTS.search + 3 × COSTS.observation`, soit 0,075 €). En cas de refus, la collecte est enregistrée au statut `bloque_quota` avec le code `budget_exhausted`. Une collecte unitaire répond alors 402 ; la collecte globale marque aussi `bloque_quota` toutes les sources restantes et répond 200 avec la liste des collectes.
-3. Le collecteur est appelé jusqu'à trois fois (`MAX_ATTEMPTS`) dans la même requête, sans délai entre les essais. L'indicateur `transient` de l'échec n'est pas pris en compte : un refus HTTP 403 ou 404 est aussi réessayé. Une source qui ne répond pas retient ainsi la requête 45 secondes, et jusqu'à 90 secondes si la page répond mais pas le flux qu'elle annonce. La collecte globale traite les sources l'une après l'autre.
-4. En cas d'échec, la source passe en `erreur` avec le code et le motif (`failureCode`, `failureReason`) et un compteur d'essais limité à 3. Une notification `erreur_source` n'est émise qu'au premier échec, pas si la source était déjà en erreur. La collecte est enregistrée au statut `echec`.
-5. En cas de succès, les trois premières entrées (`MAX_ITEMS`), c'est-à-dire les trois plus récentes, sont ingérées (voir [Chaîne d'ingestion](#chaîne-dingestion)). Si un flux publie plus de trois entrées entre deux collectes, les plus anciennes ne seront jamais ingérées ; à la première collecte, seules trois publications des 180 derniers jours sont reprises. La source repasse en `ok`, la date de dernière réussite est mise à jour et le motif d'échec effacé. La collecte est au statut `succes` si au moins une observation nouvelle a été créée, `succes_sans_actualite` sinon.
-6. La consommation enregistrée est d'une recherche (0,012 €) et d'une observation (0,021 €) par entrée retenue, dans la limite de trois, y compris les entrées écartées comme doublons.
+2. Une seule collecte à la fois : la collecte globale comme la collecte d'une source prennent le verrou `collecte` (durée de vie de 15 minutes), sans attente. Si une autre collecte le détient, la demande répond aussitôt 409 `collection_in_progress` (« Une collecte est déjà en cours : réessayez dans quelques minutes. ») et rien n'est enregistré. Deux collectes simultanées partiraient du même état et enregistreraient deux fois les mêmes publications.
+3. Le coût est réservé avant l'appel (`paidCall`, type `search_query`, estimation `COSTS.search + 3 × COSTS.observation`, soit 0,075 €). En cas de refus, la collecte est enregistrée au statut `bloque_quota` avec le code `budget_exhausted`. Une collecte unitaire répond alors 402 ; la collecte globale marque aussi `bloque_quota` toutes les sources restantes et répond 200 avec la liste des collectes. Si le budget est seulement occupé (verrou `budget` non obtenu en 5 secondes, 409 `budget_busy`), seule cette exécution est enregistrée `echec`, avec le code `budget_busy` et le message « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. » : le collecteur n'est pas appelé, rien n'est facturé, la source garde son état (ni passage en `erreur`, ni notification, ni mise à jour de la date de passage) et la collecte globale continue avec la source suivante. Une collecte unitaire répond 200 avec cette exécution en échec.
+4. Le collecteur est appelé jusqu'à trois fois (`MAX_ATTEMPTS`) dans la même requête, sans délai entre les essais. L'indicateur `transient` de l'échec n'est pas pris en compte : un refus HTTP 403 ou 404 est aussi réessayé. Une source qui ne répond pas retient ainsi la requête 45 secondes, et jusqu'à 90 secondes si la page répond mais pas le flux qu'elle annonce ; la recherche Perplexity, menée en parallèle, peut porter chaque essai à 20 secondes. La collecte globale traite les sources l'une après l'autre.
+5. En cas d'échec, la source passe en `erreur` avec le code et le motif (`failureCode`, `failureReason`) et un compteur d'essais limité à 3. Une notification `erreur_source` n'est émise qu'au premier échec, pas si la source était déjà en erreur. La collecte est enregistrée au statut `echec`.
+6. En cas de succès, les entrées sont ingérées dans l'ordre, de la plus récente à la plus ancienne, jusqu'à trois observations nouvelles (`MAX_ITEMS`, voir [Chaîne d'ingestion](#chaîne-dingestion)) : une publication déjà connue ne prend plus de place dans cette limite. Si un flux publie plus de trois entrées entre deux collectes, les suivantes sont reprises aux collectes suivantes, tant qu'elles figurent encore dans le flux et datent de 30 jours au plus. La source repasse en `ok`, la date de dernière réussite est mise à jour et le motif d'échec effacé. La collecte est au statut `succes` si au moins une observation nouvelle a été créée, `succes_sans_actualite` sinon ; elle porte l'avertissement éventuel (`NO_FEED`, ou échec de Google News relayé par Perplexity) dans `errorCode` et `errorMessage`, et le bilan Perplexity dans `enrichment`.
+7. La consommation enregistrée est d'une recherche (0,012 €), même en cas d'échec, et d'une observation (0,021 €) par publication renvoyée dont l'URL est acceptée et encore inconnue, dans la limite de trois. Les publications déjà connues ne sont plus facturées.
 
-**Coût de la collecte réelle.** Les flux RSS et Google News sont gratuits, mais chaque exécution reste imputée au budget comme un appel payant, aux coûts estimés d'un fournisseur de recherche. Un flux renvoyant à chaque exécution ses trois entrées les plus récentes, une source active coûte en général 0,075 € par collecte, même sans nouveauté. Pour 150 sources, une collecte complète coûte environ 11 € : le budget mensuel de 150 € permet une douzaine de collectes complètes.
+**Coût de la collecte réelle.** Les flux RSS et Google News sont gratuits, mais chaque exécution reste imputée au budget comme un appel payant, aux coûts estimés d'un fournisseur de recherche. Une source sans nouveauté coûte 0,012 € par collecte, et 0,075 € au plus avec trois publications nouvelles. Pour 150 sources, une collecte complète coûte entre 1,80 € et 11,25 € environ : même au coût maximal, le budget mensuel de 150 € permet une douzaine de collectes complètes. La recherche Perplexity n'est pas imputée à part : son coût réel n'est pas mesuré.
 
-**États.** Une source a un accès `ok`, `erreur`, `en_attente` ou `desactivee`. Une collecte (`CollectionRun`) est `succes`, `succes_sans_actualite`, `echec` ou `bloque_quota`. Une requête en échec n'est jamais présentée comme « succès sans actualité ». En revanche, une page lue sans flux détectable l'est, alors qu'aucune publication n'a pu y être lue ; le §6 demande qu'une source indisponible ne soit jamais affichée comme une collecte réussie sans actualité. L'accès d'une source ne peut pas être mis manuellement à `erreur` (422 `invalid_access`) ; une modification d'URL le repasse en `en_attente`.
+**États.** Une source a un accès `ok`, `erreur`, `en_attente` ou `desactivee`. Une collecte (`CollectionRun`) est `succes`, `succes_sans_actualite`, `echec` ou `bloque_quota`. Une requête en échec n'est jamais présentée comme « succès sans actualité ». Une page lue sans flux détectable reste au statut `succes_sans_actualite`, mais l'avertissement `NO_FEED` et son motif sont enregistrés sur la collecte et affichés dans l'historique : l'utilisateur voit qu'aucune publication n'a pu y être lue, comme le demande le §6. L'accès d'une source ne peut pas être mis manuellement à `erreur` (422 `invalid_access`) ; une modification d'URL le repasse en `en_attente`.
 
-**Contrôles.** Droit `collect`, filtrage des URL collectées, réservation budgétaire, filtre par nom des flux généralistes, fenêtre de 180 jours, dédoublonnage par URL canonique, nettoyage du texte.
+**Contrôles.** Droit `collect`, une seule collecte à la fois, filtrage des URL collectées, réservation budgétaire, filtre par nom des flux généralistes et des résultats Perplexity, fraîcheur de 30 jours avec date obligatoire, dédoublonnage par URL canonique, nettoyage du texte.
 
 **Sorties.** Collectes, observations et signaux `nouveau` ; notifications (signal prioritaire, erreur de source, alertes de quota) ; événement `collect.all` pour la collecte globale. La collecte d'une seule source n'est pas journalisée.
 
@@ -368,11 +376,12 @@ stateDiagram-v2
   approuve --> approuve : publier (brouillon WordPress ou export)
   programme --> programme : publier (brouillon WordPress ou export)
   note right of publie
-    Atteint uniquement par le jeu de démonstration
+    Atteint quand WordPress signale
+    le contenu publié
   end note
 ```
 
-La soumission (`POST /api/articles/:id/submit`) n'est possible que depuis `brouillon` ou `rejete` ; répétée sur un article `en_revue`, elle est sans effet ; depuis un autre statut, elle répond 409 `invalid_state`. Elle notifie les validateurs. L'approbation et le rejet sont décrits dans [Approbation et publication](#approbation-et-publication). La publication ne change pas le statut de l'article : aucune règle du code ne produit le statut `publie` ni ne renseigne `publishedAt`, que seul le jeu de démonstration contient. Le statut `programme` enregistre une date sans qu'aucun planificateur ne l'exploite.
+La soumission (`POST /api/articles/:id/submit`) n'est possible que depuis `brouillon` ou `rejete` ; répétée sur un article `en_revue`, elle est sans effet ; depuis un autre statut, elle répond 409 `invalid_state`. Elle notifie les validateurs. L'approbation et le rejet sont décrits dans [Approbation et publication](#approbation-et-publication). La publication elle-même ne change pas le statut de l'article : KORA n'envoie à WordPress qu'un brouillon, mis en ligne par une personne dans WordPress. L'article passe en `publie`, avec `publishedAt`, lorsqu'une relecture du brouillon (`POST /api/articles/:id/wordpress/refresh`, ou un nouvel envoi) le trouve publié ou privé sur le site (`settleArticle` dans [`wordpress/publish.ts`](../src/server/wordpress/publish.ts)). Le statut `programme` enregistre une date sans qu'aucun planificateur ne l'exploite.
 
 **Endpoints.** [Articles, dossier factuel et publication](03-reference-api.md#8-articles-dossier-factuel-et-publication).
 
@@ -417,7 +426,7 @@ stateDiagram-v2
 
 **Déclencheur.** `POST /api/linkedin` avec `articleId` ou `signalId`.
 
-**Rôles.** Rédacteur et administrateur créent, modifient et soumettent (`linkedin.write`) ; validateur et administrateur approuvent (`linkedin.decide`) et consignent l'export (`publish`).
+**Rôles.** Rédacteur et administrateur créent, modifient et soumettent (`linkedin.write`) ; validateur et administrateur approuvent (`linkedin.decide`) et publient ou exportent (`publish`). Chaque utilisateur, quel que soit son rôle, peut relier son propre compte LinkedIn.
 
 **Contrôles à la création.** L'article ou le signal doit exister (404). Un seul post en préparation est admis par contenu : un post non `exporte` ni `publie` sur le même article, ou sur le même signal sans article, répond 409 `post_exists`. Le quota `linkedin_posts` (422) et le budget (402, `COSTS.linkedin` = 0,08 €) doivent être disponibles. Le serveur accepte un article dans n'importe quel statut, y compris `brouillon`, alors que le cahier des charges décrit WF4 comme le « post LinkedIn d'un article approuvé » ; l'interface se contente de proposer d'abord les articles approuvés.
 
@@ -425,7 +434,35 @@ stateDiagram-v2
 
 **Modification.** `PATCH /api/linkedin/:id` modifie les variantes (une à quatre, texte de 3 000 caractères au plus, quinze hashtags au plus) ou la variante sélectionnée. Un post `publie` n'est pas modifiable (409). Sans changement effectif, rien n'est versionné. Sinon la version augmente, l'approbation est invalidée et un post `approuve` ou `exporte` repasse `a_valider`.
 
-**Soumission, approbation, export.** La soumission n'est possible que depuis `brouillon` (sans effet si le post est déjà `a_valider`). L'approbation exige la version courante (409 `version_mismatch`) et un statut `a_valider` ou `approuve` (409 `invalid_state`) ; elle remplace l'approbation précédente. `POST /api/linkedin/:id/publish` vérifie l'approbation (voir [Contrôle juste avant l'envoi](#contrôle-juste-avant-lenvoi)), consigne une tentative réussie en mode `export` avec le code `linkedin_api_unavailable` et fait passer le post en `exporte`. `GET /api/linkedin/:id/export` renvoie le texte de la variante sélectionnée et ses hashtags, sans effet de bord ; si la version courante n'est pas approuvée, le fichier commence par « [APERÇU — version non approuvée, ne pas publier] ». Il n'existe pas de rejet de post.
+**Soumission, approbation, export.** La soumission n'est possible que depuis `brouillon` (sans effet si le post est déjà `a_valider`). L'approbation exige la version courante (409 `version_mismatch`) et un statut `a_valider` ou `approuve` (409 `invalid_state`) ; elle remplace l'approbation précédente. `GET /api/linkedin/:id/export` renvoie le texte de la variante sélectionnée et ses hashtags, sans effet de bord ; si la version courante n'est pas approuvée, le fichier commence par « [APERÇU — version non approuvée, ne pas publier] ». Il n'existe pas de rejet de post.
+
+**Compte LinkedIn de l'utilisateur.** Chaque utilisateur relie son propre compte ([`handlers/connectors.ts`](../src/server/handlers/connectors.ts)) ; ces routes n'exigent aucun droit, mais seul un validateur ou un administrateur peut ensuite publier.
+
+- `POST /api/me/linkedin/connect` renvoie l'adresse de consentement LinkedIn (autorisations `openid`, `profile` et `w_member_social`) et ouvre, pour cet utilisateur seulement, une connexion en attente valable 10 minutes ; une nouvelle demande remplace la précédente. L'adresse de retour est bâtie sur `KORA_PUBLIC_URL` (à défaut, l'origine de la requête) ; le consentement exige le secret `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`.
+- Le consentement a lieu dans une fenêtre surgissante. La page publique `/api/oauth/linkedin/return` ([`return.ts`](../src/routes/api/oauth/linkedin/return.ts)) transmet à la fenêtre de KORA, et à elle seule (même origine), le code à usage unique renvoyé par la passerelle.
+- `POST /api/me/linkedin/complete` échange ce code, par la passerelle de connexion de la plateforme d'hébergement, contre une clé de connexion. Il exige la connexion en attente ouverte par le même utilisateur, consommée une seule fois (sinon 409 `linkedin_connect_not_pending`), et un retour du connecteur LinkedIn (400 `missing_code`, `connector_mismatch`). La clé est stockée chiffrée (AES-256-GCM, secret `APP_USER_CONNECTION_KEY_SECRET`) dans la table `app_user_connections`, une ligne par utilisateur ([`appUserConnections.server.ts`](../src/server/appUserConnections.server.ts)) ; le navigateur ne la reçoit jamais. Audit `linkedin.connect`.
+- `GET /api/me/linkedin` donne l'état : relié (`connected`, nom et identifiant du membre lus sur LinkedIn), autorisation à renouveler (`reconnectRequired`, quand la passerelle répond 401 avec un type `credential_…`), autre erreur de LinkedIn ou de la passerelle (`error: "linkedin_unavailable"`) ou non relié. Une clé illisible répond 503 `linkedin_unavailable`.
+- `POST /api/me/linkedin/disconnect` révoque l'accès auprès de la passerelle puis supprime la clé. Audit `linkedin.disconnect`. Une clé illisible (secret changé, ligne altérée) est supprimée sans révocation, ici comme à la reconnexion, et l'audit le signale.
+- La suppression d'un utilisateur révoque et supprime aussi sa connexion et sa connexion en attente. Sans base (tests, développement local), aucune connexion n'est lue : la publication est toujours un export.
+
+**Publication.** `POST /api/linkedin/:id/publish` (droit `publish`, [`handlers/distribution.ts`](../src/server/handlers/distribution.ts)) publie la version courante depuis le compte relié de la personne qui clique, ou consigne un export si elle n'en a pas.
+
+1. Une tentative réussie de même clé d'idempotence (post, version, `linkedin`) est renvoyée telle quelle (200), sans nouvel envoi. Cela vaut aussi pour un export : une version exportée ne peut plus être publiée par l'API, même après avoir relié un compte ; il faut enregistrer et faire approuver une nouvelle version.
+2. Une tentative `verification_requise` de même clé bloque tout nouvel envoi (409 `publication_verification_required`) tant qu'une personne n'a pas tranché (voir [Reprise après une réponse ambiguë](#reprise-après-une-réponse-ambiguë)).
+3. `checkPublishable` exige l'approbation de la version courante (voir [Contrôle juste avant l'envoi](#contrôle-juste-avant-lenvoi)) ; un refus est consigné `bloque` (422).
+4. Le verrou `linkedin-publish:<post>:v<version>` (2 minutes, sans attente) écarte un second envoi simultané : la seconde demande reçoit 409 `publication_in_progress`. Sous le verrou, les tentatives et le post sont relus.
+5. Avant l'appel, une tentative `verification_requise` (mode `publication`, code `linkedin_confirmation_pending`) est enregistrée : si l'exécution s'interrompt après l'envoi, elle subsiste et bloque toute republication.
+6. Le texte envoyé est la variante retenue, une ligne vide et les hashtags (préfixés `#`). Vide ou au-delà de 3 000 caractères, il est refusé avant tout appel. KORA lit l'identité du membre (`/v2/userinfo`, 10 secondes), puis crée le post (`POST /v2/ugcPosts`, 20 secondes) sur son profil personnel (`urn:li:person:<membre>`), texte seul, visibilité publique, par la passerelle ([`linkedin/publish.ts`](../src/server/linkedin/publish.ts)). Ce n'est pas la page entreprise d'Inovallée.
+7. La tentative est complétée selon le résultat :
+   - post créé : `succes`, `remoteId` égal à l'URN du post, message portant le lien `https://www.linkedin.com/feed/update/<URN>` ; post `publie` ; audit `publication.success` ; 201 ;
+   - autorisation expirée, révoquée ou incomplète (401, 403) : `echec`, code `linkedin_reconnect_required`, 422 ;
+   - refus net (texte vide ou trop long, contenu refusé, trop de requêtes, identité illisible, coupure avant la création) : `echec`, code `linkedin_api_error`, 422, audit `publication.failed` ;
+   - résultat incertain (coupure ou délai dépassé pendant la création, erreur 5xx, réponse de succès sans identifiant, post signalé comme doublon) : `verification_requise`, code `linkedin_api_error`, 422, audit `publication.unconfirmed` ;
+   - clé illisible : `echec`, 503 `linkedin_unavailable`, sans export de repli ; autre erreur interne : `echec`, code `linkedin_internal_error` ;
+   - aucun compte relié : `succes` en mode `export`, code `linkedin_api_unavailable`, post `exporte`, audit `publication.success`, 201.
+8. Le statut du post n'est écrit que si sa version n'a pas changé pendant l'appel.
+
+La publication n'est pas imputée au budget, n'émet pas de notification et ne change pas le statut du signal. Les tests de [`linkedin-api.test.ts`](../src/test/server/linkedin-api.test.ts) (requête et traduction des refus), [`linkedin-concurrence.test.ts`](../src/test/server/linkedin-concurrence.test.ts) (double envoi, confirmation humaine) et [`securite-linkedin.test.ts`](../src/test/server/securite-linkedin.test.ts) (connexion en attente, droit de résolution, clé illisible) vérifient ces règles.
 
 ```mermaid
 stateDiagram-v2
@@ -433,14 +470,17 @@ stateDiagram-v2
   brouillon --> a_valider : soumettre
   a_valider --> approuve : approuver la version courante
   approuve --> approuve : approuver à nouveau
-  approuve --> exporte : publish (export consigné)
+  approuve --> exporte : publish sans compte relié (export consigné)
+  approuve --> publie : publish avec compte relié, ou présence confirmée
   approuve --> a_valider : modification des variantes
   exporte --> a_valider : modification des variantes
   brouillon --> brouillon : modification des variantes
   a_valider --> a_valider : modification des variantes
-  note right of exporte
-    Le statut publie existe dans le type
-    mais aucune règle ne le produit.
+  note right of publie
+    Post créé sur LinkedIn par l'API,
+    ou présence confirmée par une personne
+    après un résultat incertain.
+    Un post publie n'est plus modifiable.
   end note
 ```
 
@@ -450,7 +490,7 @@ stateDiagram-v2
 
 **Déclencheur.** `POST /api/newsletters`, ou `PATCH /api/signals/:id` avec `inNewsletter: true`, qui crée l'édition courante si elle n'existe pas.
 
-**Rôles.** Rédacteur et administrateur composent (`newsletter.write`) ; validateur et administrateur approuvent (`newsletter.decide`) ; l'export n'est consigné que pour un utilisateur ayant le droit `publish`.
+**Rôles.** Rédacteur et administrateur composent (`newsletter.write`) ; validateur et administrateur approuvent (`newsletter.decide`) et consignent l'export (`publish`). Le téléchargement des fichiers est ouvert à tous.
 
 **Étapes.**
 
@@ -458,11 +498,11 @@ stateDiagram-v2
 2. Ajout de sujets (signal ou article), avec un résumé payant par sujet.
 3. Réordonnancement, modification des résumés, du titre et de l'introduction ; retrait de sujets.
 4. Approbation de la version courante (`POST /api/newsletters/:id/approve`).
-5. Export HTML ou texte (`GET /api/newsletters/:id/export?format=html|txt`).
+5. Export HTML ou texte : téléchargement sans effet (`GET /api/newsletters/:id/export?format=html|txt`) et, pour la version approuvée, consignation de l'export (`POST /api/newsletters/:id/export`).
 
-**Contrôles.** Une édition exportée n'est plus modifiable (409 `invalid_state`). Un même sujet ne peut figurer deux fois (409 `already_in_newsletter`). L'approbation exige la version courante (409 `version_mismatch`) et au moins un sujet (422 `newsletter_empty`). Il n'y a ni étape de soumission ni rejet.
+**Contrôles.** Une édition exportée n'est plus modifiable (409 `invalid_state`). Un même sujet ne peut figurer deux fois (409 `already_in_newsletter`) ; deux ajouts simultanés du même sujet ne déclenchent qu'un résumé payant (voir [Créations simultanées](#créations-simultanées)). La consignation exige l'approbation de la version courante (409 `approval_missing`). L'approbation exige la version courante (409 `version_mismatch`) et au moins un sujet (422 `newsletter_empty`). Il n'y a ni étape de soumission ni rejet.
 
-**Sorties.** Fichiers d'export ; à la première exportation d'une édition approuvée par un utilisateur ayant le droit `publish`, une tentative de publication réussie en mode `export` et le passage en `exportee`. Aucun e-mail n'est jamais envoyé. Les règles de sélection, d'ordre et de rendu sont dans [Newsletter](#newsletter).
+**Sorties.** Fichiers d'export ; à la première consignation de la version approuvée, une tentative de publication réussie en mode `export` et le passage en `exportee`. Aucun e-mail n'est jamais envoyé. Les règles de sélection, d'ordre et de rendu sont dans [Newsletter](#newsletter).
 
 ```mermaid
 stateDiagram-v2
@@ -470,11 +510,11 @@ stateDiagram-v2
   composition --> composition : ajout, retrait, réordonnancement, édition
   composition --> approuvee : approuver la version courante
   approuvee --> composition : toute modification
-  approuvee --> exportee : export par un utilisateur ayant le droit publish
+  approuvee --> exportee : consignation de l'export (POST, droit publish)
   exportee --> [*]
   note right of exportee
     Édition figée : plus aucune modification.
-    Les exports suivants produisent le fichier sans nouvelle consignation.
+    Les fichiers restent téléchargeables à l'identique.
   end note
 ```
 
@@ -491,6 +531,27 @@ stateDiagram-v2
 **Sorties.** Règles versionnées ; événements `rule.create`, `rule.update`, `rule.proposal`. Le détail est dans [Editorial DNA](#editorial-dna).
 
 **Endpoints.** [Editorial DNA](03-reference-api.md#12-editorial-dna).
+
+### Créations simultanées
+
+Les données sont lues puis réécrites sans transaction : deux requêtes simultanées (double clic, deux onglets, deux personnes) partiraient du même état. Les opérations qui créent un contenu, déclenchent un appel payant, publient ou figent une décision prennent donc un verrou nommé, stocké dans le dépôt avec une durée de vie (`withLock` dans [`services/locks.ts`](../src/server/services/locks.ts), `acquireLock` pour WordPress, LinkedIn et les utilisateurs). La requête qui ne l'obtient pas reçoit un 409, aussitôt ou après une courte attente, sans rien écrire ni rien facturer. Le verrou est libéré à la fin de l'opération ; si l'instance s'arrête avant, il expire seul.
+
+| Opération | Verrou et durée de vie | Attente | Refus |
+|---|---|---|---|
+| Collecte globale ou d'une source | `collecte`, 15 min | aucune | 409 `collection_in_progress` |
+| Dossier et brouillon d'un signal | `article-create:<signal>`, 2 min | aucune | 409 `generation_in_progress` |
+| Post LinkedIn d'un article ou d'un signal | `linkedin-create:<article ou signal>`, 2 min | aucune | 409 `generation_in_progress` |
+| Création de l'édition de newsletter courante | `newsletter-current`, 30 s | 5 s | 409 `newsletter_busy` |
+| Ajout d'un sujet à une édition (résumé payant) | `newsletter-item:<édition>:<sujet>`, 2 min | aucune | 409 `generation_in_progress` |
+| Écriture du sujet ajouté dans l'édition | `newsletter-write:<édition>`, 30 s | 5 s | 409 `newsletter_busy` |
+| Conversion d'un import | `import-convert:<import>`, 30 s | aucune | 409 `conversion_in_progress` |
+| Décision sur une proposition de règle | `rule-proposal:<proposition>`, 30 s | aucune | 409 `already_decided` |
+| Envoi ou rafraîchissement WordPress | `wordpress-publish:<article>`, 2 min | aucune | 409 `publication_in_progress` |
+| Publication d'un post LinkedIn | `linkedin-publish:<post>:v<version>`, 2 min | aucune | 409 `publication_in_progress` |
+| Création, modification, suppression ou réinvitation d'un compte | `users:admins`, 60 s | aucune | 409 `users_busy` |
+| Réservation et libération du budget, alertes | `budget`, 10 s | 5 s | 409 `budget_busy` |
+
+Sous le verrou, l'état est relu avant d'agir : la seconde demande trouve l'article ou le post déjà créé (409 `article_exists` ou `post_exists`) ou le sujet déjà présent dans l'édition (409 `already_in_newsletter`). Une seule génération payante a donc lieu par contenu, et un seul résumé par sujet de newsletter. Après le résumé, l'élément est écrit sous le verrou de l'édition, sur l'édition relue : une modification faite pendant la génération n'est pas écrasée. Le verrou des comptes protège aussi la règle du dernier administrateur (422 `last_admin`) : deux administrateurs qui se retireraient mutuellement le rôle ne passent pas tous deux le contrôle.
 
 ## Approbation et publication
 
@@ -520,7 +581,7 @@ L'approbation d'un article (`POST /api/articles/:id/approve`, `article.decide`) 
 
 L'événement `article.approve` est journalisé. Le rejet (`POST /api/articles/:id/reject`, `article.decide`) exige un motif d'au moins trois caractères (400 `validation_error`) et un statut `en_revue`, `approuve` ou `programme`. Il invalide toutes les approbations valides avec le motif « Rejet : … », journalise `article.reject` et notifie.
 
-Aucune règle n'empêche un utilisateur d'approuver une version qu'il a rédigée. Seuls les rôles comptent : Sophie Martin, compte de démonstration également installé dans la base de production, cumule les rôles rédacteur et validateur et peut approuver son propre texte. Le cahier des charges (§7) admet ce cumul par décision d'Inovallée, en précisant qu'il ne constitue pas une séparation à deux personnes.
+Aucune règle n'empêche un utilisateur d'approuver une version qu'il a rédigée. Seuls les rôles comptent : un compte qui cumule les rôles rédacteur et validateur, comme Sophie Martin en démonstration, peut approuver son propre texte. Le cahier des charges (§7) admet ce cumul par décision d'Inovallée, en précisant qu'il ne constitue pas une séparation à deux personnes.
 
 ### Invalidation
 
@@ -547,7 +608,7 @@ Chaque demande de publication revérifie le droit `publish` (administrateur, val
 | 5 | La dernière approbation de ce canal a été invalidée | `approval_invalidated` |
 | 6 | Aucune approbation | `approval_missing` |
 
-Un refus répond 422 avec le code, un message explicatif et la tentative bloquée dans `details.attempt`. Pour un post LinkedIn, seul l'état d'approbation est vérifié : les faits de l'article source ne sont pas examinés. Pour la newsletter, l'export n'appelle pas `checkPublishable` ; il ne consigne la publication que si l'approbation est valide sur la version courante. Le modèle de texte n'a aucun droit : une publication ne résulte que d'un appel HTTP d'un utilisateur autorisé.
+Un refus répond 422 avec le code, un message explicatif et la tentative bloquée dans `details.attempt`. Pour un post LinkedIn, seul l'état d'approbation est vérifié : les faits de l'article source ne sont pas examinés. Pour la newsletter, la consignation de l'export (`POST /api/newsletters/:id/export`) n'appelle pas `checkPublishable` : elle exige seulement une approbation valide sur la version courante, sinon 409 `approval_missing`, sans tentative enregistrée. Le modèle de texte n'a aucun droit : une publication ne résulte que d'un appel HTTP d'un utilisateur autorisé.
 
 ### Clé d'idempotence
 
@@ -557,35 +618,42 @@ idempotencyKey(contentId, version, channel) = sha256Hex(`${contentId}:${version}
 
 La clé ([`domain/workflow.ts`](../src/server/domain/workflow.ts)) est l'empreinte SHA-256 en hexadécimal (64 caractères) de la chaîne UTF-8 `identifiant:version:canal`, calculée par une implémentation JavaScript pure ([`domain/sha256.ts`](../src/server/domain/sha256.ts)). L'identifiant est celui de l'article, du post ou de l'édition. Par exemple, `art_pasqal:1:wordpress` donne `d49c3a574a302ed418569561b903df66d6abf55156707a8dedd1477685055b0e`, clé de la tentative `pub_0001` du jeu de démonstration.
 
-Avant tout envoi, le serveur cherche une tentative réussie portant la même clé. S'il la trouve, il la renvoie telle quelle (200) sans nouvel envoi ; pour un article, l'événement `publication.replay` est journalisé. Une tentative bloquée de même clé et de même code est mise à jour (compteur `attempts` incrémenté) plutôt que dupliquée. Une nouvelle version produit une nouvelle clé ; pour WordPress, le même brouillon distant est alors mis à jour, car son identifiant distant est conservé sur l'article.
+Avant tout envoi, le serveur cherche une tentative réussie portant la même clé (pour WordPress, seulement si le brouillon de cette tentative est toujours celui de l'article). S'il la trouve, il la renvoie telle quelle (200) sans nouvel envoi ; pour un article, l'événement `publication.replay` est journalisé. Pour un post LinkedIn, un export réussi compte comme une tentative réussie : la même version ne peut plus être publiée par l'API. Une tentative bloquée de même clé et de même code est mise à jour (compteur `attempts` incrémenté) plutôt que dupliquée. Une nouvelle version produit une nouvelle clé ; pour WordPress, le même brouillon distant est alors mis à jour, car son identifiant distant est conservé sur l'article.
 
 ### Reprise après une réponse ambiguë
 
-Le §6 demande de vérifier l'existence du contenu distant avant toute reprise, à défaut de passer en revue humaine. L'interface `WordPressClient` prévoit `findDraftByKey(key)`, appelée quand l'article n'a pas encore d'identifiant distant, et `upsertDraft`, qui réutilise le brouillon connu par sa clé ou par son identifiant. L'adaptateur simulé ne produit jamais d'échec ni de réponse ambiguë. Les statuts `echec` et `verification_requise` existent dans le type `PublicationStatus` mais aucune règle ne les produit, et l'appel à `upsertDraft` n'est pas protégé : une exception de l'adaptateur donne une erreur 500 `internal_error` sans tentative enregistrée. Un client WordPress réel devra rechercher le brouillon par sa clé avant toute reprise et enregistrer `verification_requise` quand cette vérification est impossible.
+Le §6 demande de vérifier l'existence du contenu distant avant toute reprise, à défaut de passer en revue humaine. Pour WordPress ([`wordpress/publish.ts`](../src/server/wordpress/publish.ts)), un seul envoi ou rafraîchissement à la fois est admis par article (verrou `wordpress-publish:<article>`, 409 `publication_in_progress`). Avant d'écrire, le serveur enregistre une tentative `verification_requise`. Une création au résultat incertain (délai dépassé, coupure, erreur 5xx, réponse illisible) garde ce statut : au prochain envoi, KORA recherche sur le site les brouillons de son compte portant le marqueur de l'article, dans la fenêtre qui suit l'envoi interrompu. Un seul brouillon trouvé est repris, aucun donne une absence confirmée et un nouveau brouillon, plusieurs répondent 409 `publication_verification_required` avec la liste à nettoyer dans WordPress. Une mise à jour interrompue se renvoie sans risque de doublon. Les refus survenus avant toute écriture (configuration, compte capable de publier, brouillon retouché dans WordPress ou déjà publié) sont enregistrés en `echec` avec leur code.
+
+Pour LinkedIn ([`handlers/distribution.ts`](../src/server/handlers/distribution.ts)), KORA ne relit pas le fil du membre : la vérification est humaine. La tentative `verification_requise` posée avant l'appel, ou laissée par un résultat incertain, bloque tout nouvel envoi de la version : 409 `publication_verification_required`, ou 409 `publication_in_progress` si la publication est encore en cours (verrou détenu). La personne qui a lancé la tentative, ou un administrateur, tranche en rappelant `POST /api/linkedin/:id/publish` avec `resolution` (sinon 403 `resolution_forbidden` ; une tentative sans auteur connu est réservée à l'administrateur) :
+
+- `published` : la tentative passe `succes` (code `linkedin_confirmed_by_user`, sans `remoteId`), le post `publie`, audit `publication.confirmed` ;
+- `not_published` : la tentative passe `echec` (code `linkedin_absence_confirmed`), audit `publication.absence_confirmed`, puis le post est publié de nouveau depuis le compte relié de la personne qui répond, ou exporté si elle n'en a pas.
+
+Une résolution sans tentative à vérifier répond 409 `verification_not_pending`.
 
 ### Tentatives et codes d'échec
 
-- **Collecte.** Trois essais au plus par collecte, code et motif visibles sur la source et sur la collecte, notification au premier échec. Codes du collecteur réel : `HTTP_<statut>`, `TIMEOUT`, et `NETWORK` pour une erreur réseau sans code ; le collecteur simulé des tests produit `HTTP_403`, `HTTP_404`, `TIMEOUT` et `TLS_ERROR`.
-- **Publication.** Aucune reprise automatique. Chaque demande refusée est enregistrée comme tentative `bloque` avec son code ; le compteur `attempts` compte les demandes répétées et n'est pas borné.
-- **Budget.** Un appel refusé répond 402 `budget_exhausted` ; une collecte refusée est enregistrée `bloque_quota`.
+- **Collecte.** Trois essais au plus par collecte, code et motif visibles sur la source et sur la collecte, notification au premier échec. Codes du collecteur réel : `HTTP_<statut>`, `TIMEOUT`, et `NETWORK` pour une erreur réseau sans code ; le collecteur simulé des tests produit `HTTP_403`, `HTTP_404`, `TIMEOUT` et `TLS_ERROR`. Le code `budget_busy` (budget momentanément occupé) n'apparaît que sur la collecte : la source n'est ni marquée en erreur ni notifiée. Une collecte réussie peut aussi porter un code d'avertissement : `NO_FEED`, ou le code de l'échec de Google News relayé par Perplexity.
+- **Publication.** Aucune reprise automatique. Chaque demande refusée par `checkPublishable` est enregistrée comme tentative `bloque` avec son code ; un refus de WordPress avant écriture, comme tentative `echec` ; un refus de LinkedIn, comme tentative `echec` (`linkedin_reconnect_required`, `linkedin_api_error`, `linkedin_unavailable`, `linkedin_internal_error`) ou `verification_requise` si le post a pu être créé. Le compteur `attempts` compte les demandes répétées et n'est pas borné.
+- **Budget.** Un appel refusé répond 402 `budget_exhausted` ; une collecte refusée est enregistrée `bloque_quota`. Un budget momentanément occupé répond 409 `budget_busy` ; pour une collecte, l'exécution est enregistrée `echec` avec ce code, sans toucher à l'état de la source.
 
 ### Comportement réel de chaque canal au pilote
 
 | Canal | Endpoint | Adaptateur | Mode | Effet sur le contenu |
 |---|---|---|---|---|
-| WordPress | `POST /api/articles/:id/publish` avec `channel: "wordpress"` | `SimulatedWordPress` | `brouillon_distant` | `wordpress.status = "brouillon"`, identifiant distant conservé |
-| LinkedIn (post) | `POST /api/linkedin/:id/publish` | `ExportOnlyLinkedIn` | `export` | post `exporte` |
-| Newsletter | `GET /api/newsletters/:id/export` | aucun | `export` | édition `exportee` |
+| WordPress | `POST /api/articles/:id/publish` avec `channel: "wordpress"` | `RestWordPress` (site configuré), `SimulatedWordPress` (tests et démonstration locale) | `brouillon_distant` | `wordpress.status = "brouillon"`, identifiant distant conservé |
+| LinkedIn (post) | `POST /api/linkedin/:id/publish` | compte LinkedIn relié de la personne qui publie ([`linkedin/publish.ts`](../src/server/linkedin/publish.ts)) ; à défaut, export (`ExportOnlyLinkedIn`) | `publication`, ou `export` sans compte relié | post `publie`, ou `exporte` |
+| Newsletter | `POST /api/newsletters/:id/export` | aucun | `export` | édition `exportee` |
 | LinkedIn ou newsletter (article) | `POST /api/articles/:id/publish` avec `channel: "linkedin"` ou `"newsletter"` | aucun | `export` | aucun |
 
 [`adapters/channels.ts`](../src/server/adapters/channels.ts) contient les adaptateurs. Leur comportement est le suivant :
 
-- **WordPress** est simulé. L'adaptateur crée ou met à jour, dans la mémoire de l'instance serveur, un brouillon fictif `wp-NNNN` avec le titre, le contenu (chapô puis corps), l'extrait, les catégories et les tags. Le titre SEO et les médias ne sont pas transmis. Rien ne sort du serveur et le message précise « Aucune publication publique : la mise en ligne reste manuelle. » Avec la base persistante, l'identifiant distant reste enregistré dans l'article alors que la table de l'adaptateur est perdue à chaque redémarrage de l'instance.
-- **LinkedIn** n'a pas d'API (`apiAvailable: false`). La publication consigne seulement que l'export est prêt ; le texte est récupéré par `GET /api/linkedin/:id/export`.
+- **WordPress** est réel quand les variables `WORDPRESS_URL`, `WORDPRESS_USERNAME` et `WORDPRESS_APP_PASSWORD` sont définies ([`wordpress/config.ts`](../src/server/wordpress/config.ts)) : `RestWordPress` crée ou met à jour un brouillon (statut `draft`, ou `pending` conservé) sur le site, avec un compte qui ne doit pas pouvoir publier. Rien n'est jamais publié par KORA ; le message précise « Aucune publication : la mise en ligne se fait dans WordPress. » Sans aucune de ces variables, sous Vitest ou en démonstration locale sans base, `SimulatedWordPress` crée un brouillon fictif `wp-NNNN` sans contacter de site ; en production, une configuration absente ou incomplète refuse l'envoi (`non_configure`).
+- **LinkedIn** publie réellement quand la personne qui clique a relié son compte (voir [WF4](#wf4--post-linkedin)) : le post est créé sur son profil, par la passerelle de connexion de la plateforme d'hébergement, sans passer par les adaptateurs. `ExportOnlyLinkedIn` (`apiAvailable: false`) reste déclaré dans `adapters().linkedin`, mais ne sert plus qu'à fournir le code `linkedin_api_unavailable` et le message de l'export de repli, quand aucun compte n'est relié. Le texte reste récupérable par `GET /api/linkedin/:id/export`.
 - **Newsletter** : le fichier HTML ou texte est produit à la demande, jamais envoyé.
 - **Publication d'un article sur un autre canal** que WordPress : une tentative « Export … prêt : diffusion manuelle » est consignée, sans fichier associé.
 
-Toute publication réussie d'un article fait passer son signal en `traite` et notifie. Le statut de l'article ne change pas (voir [WF2](#wf2--sujet-sélectionné-vers-brouillon-sourcé)) ; la programmation (`scheduledAt`) ne conditionne pas la publication.
+Toute publication réussie d'un article fait passer son signal en `traite` et notifie. Le statut de l'article ne change pas à l'envoi (voir [WF2](#wf2--sujet-sélectionné-vers-brouillon-sourcé)) ; la programmation (`scheduledAt`) ne conditionne pas la publication.
 
 ## Matrice des droits
 
@@ -593,8 +661,8 @@ Les droits sont définis dans [`domain/permissions.ts`](../src/server/domain/per
 
 | Action | Endpoints | Lecteur | Rédacteur | Validateur | Administrateur |
 |---|---|---|---|---|---|
-| Lecture (aucun contrôle) | Tous les `GET`, y compris exports, audit et liste des utilisateurs | oui | oui | oui | oui |
-| Aucun contrôle | `POST /me`, `POST /notifications/read` | oui | oui | oui | oui |
+| Lecture (aucun contrôle) | Tous les `GET`, y compris exports, audit et liste des utilisateurs, sauf `GET /wordpress/check` et `GET /wordpress/categories` | oui | oui | oui | oui |
+| Aucun contrôle | `POST /notifications/read` ; `POST /me` (changement de profil, en démonstration seulement : 403 `demo_only` sinon) ; `POST /me/linkedin/connect`, `complete`, `disconnect` (compte LinkedIn de l'utilisateur courant) | oui | oui | oui | oui |
 | `registry.write` | `POST`, `PATCH /companies` ; `POST`, `PATCH`, `DELETE /sources` | non | oui | non | oui |
 | `registry.delete` | `DELETE /companies/:id` | non | non | non | oui |
 | `collect` | `POST /collect`, `POST /sources/:id/collect` | non | oui | non | oui |
@@ -607,18 +675,20 @@ Les droits sont définis dans [`domain/permissions.ts`](../src/server/domain/per
 | `linkedin.write` | `POST /linkedin`, `PATCH`, `submit` | non | oui | non | oui |
 | `linkedin.decide` | `POST /linkedin/:id/approve` | non | non | oui | oui |
 | `newsletter.decide` | `POST /newsletters/:id/approve` | non | non | oui | oui |
-| `publish` | `POST /articles/:id/publish`, `POST /linkedin/:id/publish`, consignation de l'export newsletter | non | non | oui | oui |
+| `publish` | `POST /articles/:id/publish`, `POST /articles/:id/wordpress/refresh`, `POST /linkedin/:id/publish`, `POST /newsletters/:id/export` | non | non | oui | oui |
 | `grid.write` | `POST /scoring-grids`, `POST /signals/rescore` | non | non | non | oui |
 | `rule.write` | Règles et propositions de l'Editorial DNA | non | non | non | oui |
+| `users.manage` | `POST /users`, `PATCH`, `DELETE /users/:id`, `POST /users/:id/invite` | non | non | non | oui |
+| `wordpress.manage` | `GET /wordpress/check`, `GET /wordpress/categories`, `PUT /wordpress/settings` | non | non | non | oui |
 
-Les comptes de démonstration sont décrits dans [Démarrage](01-demarrage.md). Ce sont aussi les seuls comptes de la base de production, qui les reçoit à sa première initialisation. Les tests de [`security.test.ts`](../src/test/server/security.test.ts) et [`studio.test.ts`](../src/test/server/studio.test.ts) vérifient notamment qu'un lecteur ne peut rien modifier, qu'un rédacteur ne peut pas approuver et qu'un validateur ne peut pas rédiger.
+Les comptes de démonstration sont décrits dans [Démarrage](01-demarrage.md) ; ils n'existent que dans le dépôt en mémoire (tests et développement local sans base). La base de production ne contient que les comptes créés par invitation, le premier administrateur étant désigné par la variable `KORA_ADMIN_EMAILS` (voir [Session et identité](06-securite-et-flux-tiers.md#session-et-identité)). Les tests de [`security.test.ts`](../src/test/server/security.test.ts) et [`studio.test.ts`](../src/test/server/studio.test.ts) vérifient notamment qu'un lecteur ne peut rien modifier, qu'un rédacteur ne peut pas approuver et qu'un validateur ne peut pas rédiger.
 
 Quatre points sont à connaître :
 
-- **Approbation de son propre texte.** Rien ne compare le validateur à l'auteur de la version : un utilisateur à la fois rédacteur et validateur (Sophie Martin, en démonstration comme en production) approuve son propre texte.
+- **Approbation de son propre texte.** Rien ne compare le validateur à l'auteur de la version : un utilisateur à la fois rédacteur et validateur (Sophie Martin en démonstration, ou tout compte auquel un administrateur donne ces deux rôles) approuve son propre texte.
 - **Suppression d'une source.** `DELETE /sources/:id` exige `registry.write` et est donc ouvert aux rédacteurs, alors que la suppression d'une entreprise est réservée à l'administrateur.
 - **Propriété des contenus.** Aucune règle de propriété n'existe : tout rédacteur peut modifier tout article, post ou édition.
-- **Lectures.** Toutes les lectures sont ouvertes à tous les rôles, y compris le journal d'audit et les exports. La sécurité de la session elle-même est décrite dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
+- **Lectures.** Toutes les lectures sont ouvertes à tous les rôles, y compris le journal d'audit et les exports, à l'exception du test de connexion WordPress et de la liste de ses catégories, qui interrogent le site. La sécurité de la session elle-même est décrite dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
 
 ## Quotas et budget
 
@@ -656,24 +726,25 @@ Le coût est réservé et enregistré par unité, que le texte soit produit par 
 
 `paidCall` encadre chaque appel payant :
 
-1. Il calcule la dépense du mois à partir du journal de consommation.
+1. Sous le verrou `budget` (voir ci-dessous), il calcule la dépense du mois à partir du journal de consommation.
 2. `decideReservation` refuse l'appel si les appels payants sont déjà suspendus pour le mois, ou si la dépense, plus les réservations en cours (`reservedEur`), plus l'estimation dépassent le plafond.
-3. En cas de refus, il marque la suspension pour le mois (`paidCallsSuspended`, `suspendedMonth`), journalise `quota.suspension` au nom de « KORA », notifie « Budget API : appels payants suspendus » et répond 402 `budget_exhausted`.
-4. Sinon il ajoute l'estimation aux réservations, exécute l'appel, puis libère la réservation, que l'appel réussisse ou échoue.
-5. Il enregistre les lignes de consommation : le coût réel fourni par l'appelant (seule la collecte en fournit un) ou, à défaut, l'estimation. Le total enregistré ne dépasse jamais l'estimation réservée.
-6. Il vérifie les alertes.
+3. En cas de refus, il marque la suspension pour le mois (`paidCallsSuspended`, `suspendedMonth`), puis, hors verrou, journalise `quota.suspension` au nom de « KORA », notifie « Budget API : appels payants suspendus » et répond 402 `budget_exhausted`.
+4. Sinon il ajoute l'estimation aux réservations, toujours sous le verrou, puis exécute l'appel hors verrou.
+5. Si l'appel réussit, il enregistre les lignes de consommation : le coût réel fourni par l'appelant (seule la collecte en fournit un) ou, à défaut, l'estimation. Le total enregistré ne dépasse jamais l'estimation réservée.
+6. Il libère ensuite la réservation, sous le verrou, que l'appel ait réussi ou échoué. Le coût réel étant enregistré avant la libération, l'appel reste compté à tout instant, en réservation ou en consommation, et ne peut échapper au plafond.
+7. Il vérifie les alertes. Un échec de cette vérification (verrou `budget` occupé, base indisponible) est seulement journalisé côté serveur : l'appel, déjà payé et enregistré, aboutit quand même, et les alertes sont revérifiées au prochain appel payant.
 
-Deux appels à OpenAI échappent à cette réservation. Le résumé produit à la collecte est calculé pendant l'ingestion, après la libération de la réservation, et aucune ligne de consommation ne lui correspond en propre. Le résumé produit à la défusion n'est encadré par aucun `paidCall` et reste possible quand le budget est suspendu.
+Deux appels à OpenAI échappent à cette réservation. Le résumé produit à la collecte est calculé pendant l'ingestion, après l'enregistrement de la consommation et la libération de la réservation, et aucune ligne de consommation ne lui correspond en propre. Le résumé produit à la défusion n'est encadré par aucun `paidCall` et reste possible quand le budget est suspendu.
 
-Les réservations (`reservedEur`), la suspension et les alertes déjà notifiées sont stockées dans un seul document de réglages. Avec la base Supabase, `paidCall` le relit puis le réécrit en entier (`saveSettings`), sans transaction ni verrou : deux requêtes simultanées peuvent perdre une réservation, une libération ou une alerte. Une exécution interrompue par l'hébergeur entre la réservation et la libération laisserait aussi sa réservation en base, où aucun redémarrage ne l'efface plus.
+Les réservations (`reservedEur`), la suspension et les alertes déjà notifiées sont stockées dans un seul document de réglages, relu puis réécrit en entier (`saveSettings`). Ces écritures sont sérialisées par le verrou `budget` (durée de vie de 10 secondes) : la réservation, la libération et la mémorisation des alertes le prennent tour à tour, en attendant jusqu'à 5 secondes ; au-delà, la requête répond 409 `budget_busy` (« Le budget API est en cours de mise à jour : réessayez dans quelques secondes. »). Ce refus ne survient qu'à la réservation, avant l'appel : la libération ne le renvoie jamais (voir ci-dessous) et la vérification des alertes ne fait pas échouer l'appel. Pour une collecte, il ne fait échouer que l'exécution de la source concernée (voir [WF1](#wf1--collecte-et-classement)). Deux appels simultanés ne peuvent donc plus dépasser ensemble le plafond ni perdre une réservation. Si la libération ne peut pas prendre le verrou, elle est faite sans lui plutôt que laissée en suspens. Une exécution interrompue par l'hébergeur entre la réservation et la libération laisserait encore sa réservation en base, où aucun redémarrage ne l'efface.
 
 ### Alertes à 80 % et 100 %
 
-`alertLevel` classe chaque compteur : `seuil_80` à partir de 80 % du plafond, `atteint` à 100 %, `ok` sinon. Après chaque appel payant, `checkAlerts` examine le budget, les recherches, les observations, les articles, les posts, les newsletters et le stockage (pas les entreprises ni les sources) et émet une notification par compteur, par niveau et par mois, mémorisée sous la clé `AAAA-MM:clé:niveau` dans `notifiedAlerts`. Seul le niveau courant est notifié : un compteur qui passe en une fois de moins de 80 % à 100 % ne reçoit que l'alerte `atteint`. Les alertes ne sont vérifiées qu'après un appel payant : un dépassement du stockage par un import, par exemple, n'est notifié qu'au prochain appel payant.
+`alertLevel` classe chaque compteur : `seuil_80` à partir de 80 % du plafond, `atteint` à 100 %, `ok` sinon. Après chaque appel payant, `checkAlerts` examine le budget, les recherches, les observations, les articles, les posts, les newsletters et le stockage (pas les entreprises ni les sources) et émet une notification par compteur, par niveau et par mois, mémorisée sous la clé `AAAA-MM:clé:niveau` dans `notifiedAlerts`. Seul le niveau courant est notifié : un compteur qui passe en une fois de moins de 80 % à 100 % ne reçoit que l'alerte `atteint`. Les alertes ne sont vérifiées qu'après un appel payant : un dépassement du stockage par un import, par exemple, n'est notifié qu'au prochain appel payant. Une vérification qui échoue ne fait pas échouer l'appel ; l'alerte est émise au prochain appel payant.
 
 ### Comportement à 100 % du budget
 
-Les appels payants sont refusés : création d'article, création de post LinkedIn, ajout d'un sujet à une newsletter, collecte. La consultation, les exports CSV et JSON, les exports LinkedIn et newsletter, les décisions (approbation, rejet, publication), les imports, les modifications du registre et l'enregistrement de versions restent possibles. Le test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts) vérifie la consultation, l'export CSV, l'export de newsletter et la publication WordPress. Le moteur est affiché comme inactif sur le tableau de bord.
+Les appels payants sont refusés : création d'article, création de post LinkedIn, ajout d'un sujet à une newsletter, collecte. La consultation, les exports CSV et JSON, la publication et les exports LinkedIn, les exports de newsletter, les décisions (approbation, rejet, publication), les imports, les modifications du registre et l'enregistrement de versions restent possibles. Le test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts) vérifie la consultation, l'export CSV, l'export de newsletter et la publication WordPress. Le moteur est affiché comme inactif sur le tableau de bord.
 
 La suspension dure jusqu'à la fin du mois, même si le plafond était relevé ; en base, elle survit aux redémarrages. Aucun endpoint ne modifie les plafonds (`quotaLimits`). Le dépôt en mémoire les copie de `DEFAULT_LIMITS` à chaque démarrage ; la base Supabase ne les copie qu'une fois, à l'initialisation des réglages, si bien qu'une modification ultérieure de `DEFAULT_LIMITS` n'a plus d'effet sur une base existante (voir [Exploitation](09-exploitation.md)).
 
@@ -772,14 +843,14 @@ Chaque sujet a un rang (`order`) de 1 à n. `PATCH /api/newsletters/:id` modifie
 
 ### Export HTML et texte
 
-`GET /api/newsletters/:id/export?format=html|txt` produit un fichier `newsletter-AAAA-MM-JJ-vN.html` ou `.txt` (400 `invalid_format` pour un autre format) :
+`GET /api/newsletters/:id/export?format=html|txt` produit un fichier `newsletter-AAAA-MM-JJ-vN.html` ou `.txt` (400 `invalid_format` pour un autre format), sans aucun effet sur l'édition :
 
 - Le **HTML** est une page autonome aux styles en ligne, sur une largeur de 640 pixels : en-tête « Inovallée · Semaine du … », titre, introduction, sujets numérotés (titre et résumé), pied de page. Tout le texte est échappé (`escapeHtml`).
 - Le **texte** contient le titre en majuscules, l'en-tête, l'introduction, les sujets numérotés et le pied de page.
 
 Le pied de page indique « Export préparé avec KORA Newsroom ; aucun envoi automatique. ». Sans approbation valide sur la version courante, le fichier porte la mention « Aperçu — version N non approuvée. » en bandeau HTML ou « [APERÇU — version N non approuvée] » en première ligne du texte.
 
-À la première exportation d'une édition approuvée par un utilisateur ayant le droit `publish`, le serveur consigne une tentative réussie en mode `export`, fait passer l'édition en `exportee` et journalise `publication.success`. Les exports suivants produisent le fichier sans nouvelle consignation. Un rédacteur qui exporte une édition approuvée obtient le fichier sans mention d'aperçu, et rien n'est consigné.
+La consignation est une requête d'écriture distincte : `POST /api/newsletters/:id/export` (droit `publish`, en-tête anti-CSRF comme toute écriture). Elle exige une approbation valide sur la version courante (409 `approval_missing`). À la première consignation de cette version, le serveur enregistre une tentative réussie en mode `export` (clé d'idempotence de l'édition, de la version et du canal `newsletter`), fait passer l'édition en `exportee` et journalise `publication.success` ; une consignation répétée renvoie l'édition sans nouvelle tentative. L'interface l'appelle au clic sur « Export HTML » ou « Export texte » quand la version est approuvée, l'édition pas encore exportée et l'utilisateur validateur ou administrateur. Un simple téléchargement, par exemple par un lien ouvert directement ou par un rédacteur, ne fige donc jamais l'édition ; un rédacteur qui télécharge une édition approuvée obtient le fichier sans mention d'aperçu.
 
 ## Amélioration par OpenAI
 

@@ -41,16 +41,16 @@ flowchart LR
     C --> D["Dossier factuel et brouillon<br/>(Articles)"]
     D --> E["Approbation<br/>par version et par canal"]
     E --> F["WordPress : brouillon distant"]
-    E --> G["LinkedIn : export"]
+    E --> G["LinkedIn : publication<br/>ou export"]
     E --> H["Newsletter : export HTML et texte"]
 ```
 
 1. Vous tenez à jour le registre des entreprises et de leurs sources (sites officiels, pages d'actualités, flux RSS…). Chaque entreprise ajoutée reçoit automatiquement une source Google News.
-2. La collecte lit les flux RSS et Atom des sources et les résultats de Google News, puis rapporte des **observations** : un article, une page, un communiqué, avec son URL, son média et ses dates.
+2. La collecte lit les flux RSS et Atom des sources et les résultats de Google News, complétés par une recherche Perplexity sur l'entreprise, puis rapporte des **observations** : un article, une page, un communiqué, avec son URL, son média et ses dates.
 3. Les observations qui décrivent le même événement sont regroupées en un **signal**, qui reçoit un **score IA** sur 10 et un **indicateur documentaire**.
 4. À partir d'un signal, KORA prépare un **dossier factuel** (faits, sources, contradictions), des angles et un brouillon. Vous pouvez aussi importer un article rédigé par l'équipe.
 5. Un validateur approuve une version précise pour un canal précis.
-6. La diffusion crée un brouillon WordPress distant ou un fichier d'export ; la mise en ligne reste manuelle.
+6. La diffusion crée un brouillon WordPress distant, publie le post LinkedIn depuis votre compte si vous l'avez relié, ou produit un fichier d'export. La mise en ligne sur WordPress et l'envoi de la newsletter restent manuels.
 
 ### Les trois principes de confiance
 
@@ -62,19 +62,19 @@ flowchart LR
 
 ### Ce qui est simulé au pilote
 
-La collecte et la conservation des données sont réelles ; la diffusion reste simulée ou limitée à des exports.
+La collecte, la conservation des données, l'envoi des brouillons vers WordPress et la publication sur LinkedIn depuis un compte relié sont réels ; la mise en ligne sur WordPress reste manuelle et la newsletter passe par un export.
 
 | Élément | Comportement au pilote |
 |---|---|
-| Collecte web | Réelle : lecture des flux RSS et Atom des sources et recherche Google News sur le nom de l'entreprise ([`RealCollector`](../src/server/adapters/collector.ts)). Déclenchée à la main uniquement. |
-| WordPress | Simulé : un brouillon distant reçoit un identifiant `wp-NNNN`, rien n'est mis en ligne ([`SimulatedWordPress`](../src/server/adapters/channels.ts)). |
-| LinkedIn | Export uniquement : l'API n'est pas branchée ([`ExportOnlyLinkedIn`](../src/server/adapters/channels.ts)). |
+| Collecte web | Réelle : lecture des flux RSS et Atom des sources et recherche Google News sur le nom de l'entreprise, complétée par une recherche Perplexity ([`RealCollector`](../src/server/adapters/collector.ts)). Déclenchée à la main uniquement. |
+| WordPress | Réel en production : KORA crée et met à jour des brouillons sur le site configuré, sans jamais les mettre en ligne ([`src/server/wordpress/`](../src/server/wordpress/)). Simulé sur une installation de démonstration : le brouillon reçoit un identifiant `wp-NNNN` et rien n'est envoyé ([`SimulatedWordPress`](../src/server/adapters/channels.ts)). |
+| LinkedIn | Réel pour qui a relié son compte : le post est publié sur le profil LinkedIn de la personne qui clique ([`src/server/linkedin/`](../src/server/linkedin/)). Sans compte relié, la publication reste un export manuel. |
 | Newsletter | Export HTML et texte ; KORA n'envoie jamais la newsletter. |
 | Textes générés | Gabarits déterministes, réécrits par un modèle OpenAI si l'exploitant l'a configuré ([`text-model.ts`](../src/server/adapters/text-model.ts)). |
 | Données | Conservées dans une base de données : un redémarrage du serveur ne remet plus rien à zéro. |
-| Budget API | Estimé : chaque appel est décompté à un coût forfaitaire, y compris les collectes, alors que les flux RSS et Google News sont gratuits. |
+| Budget API | Estimé : chaque appel est décompté à un coût forfaitaire, y compris les collectes, alors que les flux RSS et Google News sont gratuits ; la recherche Perplexity est comprise dans le forfait de la collecte. |
 
-**Production et démonstration.** En production, l'application démarre vide : ni entreprise, ni source, ni signal, ni article. Seuls existent les quatre profils, la grille de score et les règles éditoriales de départ. Les données de démonstration, que montrent les captures de ce guide, ne sont chargées que sur une installation sans base de données, par exemple le poste d'un développeur. Elles y reviennent à leur état initial à chaque redémarrage du serveur, et la collecte y est également réelle : son résultat dépend de ce que répondent les adresses, souvent fictives, de ces données.
+**Production et démonstration.** En production, l'application démarre vide : ni compte, ni entreprise, ni source, ni signal, ni article. Seules existent la grille de score et les règles éditoriales de départ. Le premier administrateur est désigné par l'équipe technique ; il invite ensuite ses collègues (voir [Se connecter](#se-connecter)). Les données de démonstration, que montrent les captures de ce guide, ne sont chargées que sur une installation sans base de données, par exemple le poste d'un développeur. Elles y reviennent à leur état initial à chaque redémarrage du serveur, et la collecte y est également réelle : son résultat dépend de ce que répondent les adresses, souvent fictives, de ces données.
 
 ## Prise en main
 
@@ -101,35 +101,36 @@ Le badge à côté de « Signaux » indique le nombre de signaux au statut « No
 
 **Recherche globale.** Cliquez dans le champ « Rechercher une entreprise, un sujet, une source... » ou utilisez le raccourci ⌘K (Mac) ou Ctrl+K (Windows, Linux). Saisissez au moins deux caractères. Les résultats sont groupés en « Entreprises », « Sujets », « Articles » et « Sources » ; un clic ouvre la fiche entreprise, le signal, l'article ou la source dans le registre de veille. Sans correspondance, le message « Aucun résultat. » s'affiche.
 
-**Notifications.** La cloche porte un point rouge lorsqu'il existe des notifications non lues. Le panneau indique le nombre de non lues et liste les plus récentes : article ou post à valider, article rejeté, brouillon WordPress prêt, nouveau signal prioritaire, source en échec, alertes de quota et de budget. Un clic sur une notification ouvre l'écran concerné. Toutes les notifications sont marquées comme lues à la fermeture du panneau. Au pilote, les notifications sont communes à tous les profils : ce que vous marquez comme lu l'est aussi pour vos collègues.
+**Notifications.** La cloche porte un point rouge lorsqu'il existe des notifications non lues. Le panneau indique le nombre de non lues et liste les plus récentes : article ou post à valider, article rejeté, brouillon WordPress prêt, nouveau signal prioritaire, source en échec, alertes de quota et de budget. Un clic sur une notification ouvre l'écran concerné. Toutes les notifications sont marquées comme lues à la fermeture du panneau. Au pilote, les notifications sont communes à tous les utilisateurs : ce que vous marquez comme lu l'est aussi pour vos collègues.
 
-**Menu utilisateur.** Il affiche votre nom, votre équipe et vos rôles. La section « Changer de profil » permet de basculer sur un autre compte de démonstration (voir ci-dessous).
+**Menu utilisateur.** Il affiche votre nom, votre adresse e-mail et vos rôles, et propose « Se déconnecter ». Sur une installation de démonstration, il propose à la place « Changer de profil » (voir ci-dessous).
 
-### Changer de profil de démonstration
+### Se connecter
 
-Le pilote n'a pas d'écran de connexion. Quatre comptes de démonstration sont disponibles ; vous arrivez par défaut sous le profil de Sophie Martin. Pour changer, ouvrez le menu utilisateur en haut à droite et choisissez un nom sous « Changer de profil ». Le message « Connecté en tant que … » confirme le changement, et le journal d'audit le consigne.
+L'accès à KORA est nominatif : chaque personne se connecte avec son adresse e-mail et son propre mot de passe, et le journal d'audit indique qui a fait quoi. Il n'existe pas d'inscription libre : c'est un administrateur qui crée les comptes (voir [Utilisateurs & rôles](#utilisateurs--rôles)). Toute page ouverte sans être connecté renvoie vers la page « Connexion ».
 
-Ces quatre comptes sont aussi les seuls comptes de la production, sans mot de passe. Toute personne qui ouvre l'adresse de l'application arrive donc sous le profil de Sophie Martin, avec les droits d'administrateur, et ce qu'elle modifie ou supprime est conservé. Ne communiquez l'adresse qu'aux personnes concernées. Le journal d'audit indique le profil utilisé, pas la personne réelle.
+**Activer son compte.** Lorsqu'un administrateur vous ajoute, vous recevez un e-mail d'invitation. Son lien ouvre la page « Activez votre compte » : choisissez un « Nouveau mot de passe » d'au moins 8 caractères, saisissez-le de nouveau dans « Confirmation », puis cliquez sur « Activer mon compte ». Le message « Compte activé : bienvenue sur KORA. » s'affiche et le Dashboard s'ouvre. Si le mot de passe est jugé trop faible, le message en donne la raison. Le lien ne sert qu'une fois et pour une durée limitée : s'il a expiré ou a déjà servi, la page « Lien expiré ou invalide » s'affiche ; demandez un nouveau lien avec « Mot de passe oublié ? » ou demandez à l'administrateur de renvoyer l'invitation.
 
-| Compte | Équipe | Rôles |
-|---|---|---|
-| Sophie Martin (par défaut) | Équipe Communication | Administrateur, Rédacteur, Validateur |
-| Lucas Bernard | Équipe Communication | Rédacteur |
-| Claire Dubois | Direction | Validateur |
-| Marc Lefèvre | Développement économique | Lecteur |
+**Connexion.** Sur la page « Connexion », saisissez votre « Adresse e-mail » et votre « Mot de passe », puis cliquez sur « Se connecter ». Vous arrivez sur la page que vous vouliez ouvrir, à défaut sur le Dashboard. En cas d'échec, l'encadré « Connexion impossible » en donne la raison, par exemple « E-mail ou mot de passe incorrect. ». Une adresse qui n'a pas de compte KORA est refusée avec « Votre compte n'est pas autorisé sur KORA. Demandez à un administrateur de vous inviter. ».
 
-Pour tester un circuit complet de double contrôle, rédigez avec Lucas Bernard puis approuvez avec Claire Dubois. Sophie Martin cumule rédaction et validation : l'écran « Utilisateurs & rôles » rappelle qu'une approbation donnée sur son propre contenu ne vaut pas double contrôle.
+**Mot de passe oublié.** Cliquez sur « Mot de passe oublié ? », à côté du champ « Mot de passe », saisissez votre adresse puis cliquez sur « Envoyer le lien ». Le message « Vérifiez votre boîte de réception » s'affiche, que l'adresse corresponde ou non à un compte. Le lien reçu ouvre la page « Nouveau mot de passe » : choisissez votre nouveau mot de passe, confirmez-le, puis cliquez sur « Enregistrer le mot de passe ». Vos sessions ouvertes sur d'autres appareils sont alors fermées.
+
+**Se déconnecter.** Votre session reste ouverte dans le navigateur d'une visite à l'autre. Pour la fermer, par exemple sur un poste partagé, ouvrez le menu utilisateur et cliquez sur « Se déconnecter » : la page de connexion s'affiche. Si votre session expire ou si votre compte est supprimé pendant que vous travaillez, KORA vous renvoie vers la page de connexion avec l'encadré « Vous avez été déconnecté » ou « Compte non autorisé » ; les modifications non enregistrées sont perdues. Après reconnexion, vous revenez sur la page où vous étiez.
+
+**Installation de démonstration.** Sur une installation sans base de données, par exemple le poste d'un développeur, il n'y a pas d'écran de connexion : la page « Connexion » affiche « Mode démonstration ». Quatre profils sont disponibles : Sophie Martin (par défaut ; administratrice, rédactrice et validatrice), Lucas Bernard (rédacteur), Claire Dubois (validatrice) et Marc Lefèvre (lecteur). Pour en changer, choisissez un nom sous « Changer de profil » dans le menu utilisateur ; le message « Connecté en tant que … » confirme le changement. Pour tester un circuit complet de double contrôle, rédigez avec Lucas Bernard puis approuvez avec Claire Dubois.
 
 ### Les quatre rôles
 
 | Rôle | Ce qu'il permet |
 |---|---|
-| Administrateur | Tout ce que permettent les autres rôles, plus la modification de la grille de score, du référentiel éditorial et la suppression d'une entreprise. |
+| Administrateur | Tout ce que permettent les autres rôles, plus la gestion des comptes et des rôles, la connexion au site WordPress, la modification de la grille de score, du référentiel éditorial et la suppression d'une entreprise. |
 | Rédacteur | Registre (entreprises, sources), collectes, qualification des signaux, articles, imports, posts LinkedIn, composition de la newsletter. |
-| Validateur | Approbation et rejet des contenus, diffusion vers WordPress, export LinkedIn et export consigné de la newsletter. |
+| Validateur | Approbation et rejet des contenus, diffusion vers WordPress, publication ou export LinkedIn et export consigné de la newsletter. |
 | Lecteur | Consultation de tous les écrans et téléchargement des exports ; aucune modification. |
 
-Les droits sont contrôlés par le serveur ([`permissions.ts`](../src/server/domain/permissions.ts)). Un refus s'affiche sous la forme d'un message qui se termine par « Votre profil (…) ne le permet pas. ». Le tableau « Droits par rôle » de l'onglet Paramètres ne coche pas « Rédaction » ni « Validation » pour l'administrateur ; dans les faits, le serveur les lui accorde.
+Chacun, quel que soit son rôle, peut relier son propre compte LinkedIn depuis l'écran [LinkedIn](#linkedin) ; seuls les validateurs et les administrateurs publient.
+
+Les droits sont contrôlés par le serveur ([`permissions.ts`](../src/server/domain/permissions.ts)). Un refus s'affiche sous la forme d'un message qui se termine par « Votre profil (…) ne le permet pas. ». Le tableau « Droits par rôle » de l'onglet Paramètres reprend ces droits : l'administrateur dispose aussi de la rédaction et de la validation.
 
 ### Conventions d'interface
 
@@ -142,11 +143,11 @@ Les droits sont contrôlés par le serveur ([`permissions.ts`](../src/server/dom
 
 En production, l'application démarre sans aucune donnée. Avant la première collecte, le Dashboard et les écrans Signaux, Articles, LinkedIn et Newsletter sont vides ; les compteurs de consommation sont à zéro, sauf « Stockage », qui part d'une base fixe de 2,4 Go. Pour démarrer la veille :
 
-1. **Choisir un profil de rédaction**. Restez sous Sophie Martin ou passez sous Lucas Bernard : l'ajout d'entreprises et de sources demande le rôle rédacteur ou administrateur.
-2. **Créer les entreprises**. Dans Entreprises, cliquez sur « Ajouter une entreprise » pour chacune des entreprises à suivre (150 au maximum ; voir [Ajouter une entreprise](#ajouter-une-entreprise)). Soignez la raison sociale, les alias et le domaine officiel : la recherche Google News porte sur la raison sociale, et le rattachement des publications s'appuie sur les noms et le domaine. KORA crée pour chaque entreprise la source « Google News — » suivie de la raison sociale.
+1. **Inviter l'équipe**. Connecté avec le premier compte administrateur, ajoutez vos collègues dans Paramètres, onglet [Utilisateurs & rôles](#utilisateurs--rôles). L'ajout d'entreprises et de sources demande le rôle rédacteur ou administrateur.
+2. **Créer les entreprises**. Dans Entreprises, cliquez sur « Ajouter une entreprise » pour chacune des entreprises à suivre (150 au maximum ; voir [Ajouter une entreprise](#ajouter-une-entreprise)). Soignez la raison sociale, les alias et le domaine officiel : les recherches Google News et Perplexity portent sur la raison sociale, et le rattachement des publications s'appuie sur les noms et le domaine. KORA crée pour chaque entreprise la source « Google News — » suivie de la raison sociale.
 3. **Compléter les sources**, si vous le souhaitez. Dans Veille, « Ajouter une source » permet d'ajouter le flux RSS d'un site officiel ou d'un média (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
 4. **Lancer la collecte**. Dans Veille, cliquez sur « Lancer la collecte ». Le bouton affiche « Collecte en cours… » ; pour un registre complet, comptez plusieurs minutes. Le message « Collecte terminée sur N sources » donne le bilan, et chaque collecte consomme une part du budget API (voir [Lancer une collecte](#lancer-une-collecte)).
-5. **Qualifier les premiers signaux**. Ouvrez Signaux. Les premières collectes rapportent des publications qui peuvent dater de plusieurs mois (jusqu'à 180 jours) : leur note « Nouveauté » est alors basse.
+5. **Qualifier les premiers signaux**. Ouvrez Signaux. La collecte ne retient que les publications de moins de 30 jours : les actualités plus anciennes des entreprises n'apparaissent pas, même au premier passage.
 
 Le « Corpus d'exemples historiques » de l'onglet « Editorial DNA » reste vide en production (« Aucun exemple dans le corpus ») : aucun écran ne permet d'y ajouter des exemples.
 
@@ -174,7 +175,7 @@ Le Dashboard donne en un coup d'œil l'état de la veille et de la production. I
 
 **Actualités détectées par l'IA.** Ce tableau montre les cinq signaux les plus récents, avec les colonnes « Entreprises », « Date », « Événement / Titre », « Source », « Score IA » et « Statut ». Les filtres « Tous les statuts », « Toutes les entreprises » et « Toutes les sources » et le tri « Plus récent » ou « Meilleur score » s'appliquent à ce tableau. Survolez le symbole ⓘ à côté de « Score IA » pour voir comment le score est calculé. Un signal sans entreprise rattachée affiche « À rattacher » et la pastille « Rattachement à revoir ».
 
-**Le détail du signal sélectionné.** La première ligne est sélectionnée automatiquement ; cliquez sur une autre ligne pour changer. La carte de détail présente l'entreprise, le titre, le temps de lecture, le lien « Voir la source », la rubrique « Pourquoi c'est intéressant ? » et l'« Angle éditorial suggéré ». Sa barre d'actions est décrite dans [Signaux](#le-détail-dun-signal).
+**Le détail du signal sélectionné.** La première ligne est sélectionnée automatiquement ; cliquez sur une autre ligne pour changer. La carte de détail présente l'entreprise, le titre, le temps de lecture, le lien « Voir la source », la rubrique « Pourquoi c'est intéressant ? », l'« Angle éditorial suggéré » et le bloc « Sources prises en compte dans le score ». Ce bloc et la barre d'actions sont décrits dans [Signaux](#le-détail-dun-signal).
 
 **Les quatre cartes du bas.**
 
@@ -213,7 +214,7 @@ L'écran Veille (« KORA Radar ») gère les sources approuvées, lance les coll
 
 **L'onglet « Registre des sources ».** Le tableau liste les sources, 20 par page, avec les colonnes « Entreprise », « Type », « URL », « Fréquence », « Statut d'accès », « Dernière réussite » et « Dernier passage ». Filtrez avec le champ « Entreprise, libellé, URL… », « Tous les statuts » et « Tous les types ». Les icônes de la colonne « Actions » sont décrites plus bas.
 
-**L'onglet « Historique des collectes ».** Chaque passage de collecte y figure avec sa date, la source, le statut, le nombre de « Nouvelles observations » et le « Code d'erreur ». Une source supprimée apparaît comme « Source supprimée ». Cliquer sur une ligne cible la source : le bandeau « Source ciblée : … » apparaît et le registre se concentre sur elle.
+**L'onglet « Historique des collectes ».** Chaque passage de collecte y figure avec sa date, la source, le statut, le nombre de « Nouvelles observations », le bilan « Perplexity » et le « Code d'erreur ». La colonne « Perplexity » indique ce qu'a donné la recherche complémentaire : « 5 résultats · 2 pertinents · +1 » signifie que Perplexity a renvoyé cinq articles, que deux concernaient bien l'entreprise et qu'un seul était nouveau ; la pastille « Erreur » ou « Non configuré » signale une recherche qui n'a pas abouti, sans faire échouer la collecte ; un tiret indique qu'aucune recherche n'a eu lieu pour cette source. La colonne « Code d'erreur » affiche aussi les avertissements d'une collecte réussie, avec leur motif (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)). Une source supprimée apparaît comme « Source supprimée ». Cliquer sur une ligne cible la source : le bandeau « Source ciblée : … » apparaît et le registre se concentre sur elle.
 
 **L'onglet « Couverture ».** Le graphique « Collectes par jour » montre les 14 derniers jours en trois séries : « Avec nouveautés », « Sans actualité » et « Échecs ». « Couverture du registre » donne la part des sources actives jointes avec succès sur 14 jours et les « Codes d'erreur fréquents ». « Couverture par type de source » détaille la même mesure par type.
 
@@ -232,15 +233,19 @@ Le type de source détermine ce que la collecte lit réellement (voir ci-dessous
 
 | Type de source | Ce que KORA interroge |
 |---|---|
-| « Recherche web » | Google News, sur la raison sociale. |
-| « Page actualités » | Google News, sauf si l'adresse est celle d'un flux. |
+| « Recherche web » | Google News et Perplexity, sur la raison sociale. |
+| « Page actualités » | Google News et Perplexity, sauf si l'adresse est celle d'un flux. |
 | « Site officiel », « Communiqués », « Flux RSS », « Newsletter importée » | L'adresse saisie. |
 
-**Google News.** KORA recherche la raison sociale entre guillemets ; les alias ne sont pas interrogés. Pour une source « Recherche web », l'adresse saisie n'est utilisée que si c'est une adresse Google News ; sinon, KORA interroge Google News sous la raison sociale actuelle. La source créée avec l'entreprise garde le nom saisi à la création : si vous renommez l'entreprise, elle continue de chercher l'ancien nom. Une « Page actualités » n'est lue directement que si son adresse contient « rss », « feed », « atom » ou « xml ». Le lien d'une observation trouvée par Google News pointe vers une adresse `news.google.com` qui redirige vers l'article du média ; le nom du média est celui qu'indique Google News.
+**Google News.** KORA recherche la raison sociale entre guillemets ; les alias ne sont pas interrogés. Pour une source « Recherche web », l'adresse saisie n'est utilisée que si c'est une adresse Google News ; sinon, KORA interroge Google News sous la raison sociale actuelle. La source créée avec l'entreprise garde le nom saisi à la création : si vous renommez l'entreprise, elle continue de chercher l'ancien nom dans Google News, alors que la recherche Perplexity suit le nom actuel. Une « Page actualités » n'est lue directement que si son adresse contient « rss », « feed », « atom » ou « xml ». Le lien d'une observation trouvée par Google News pointe vers une adresse `news.google.com` qui redirige vers l'article du média ; le nom du média est celui qu'indique Google News.
 
-**Adresse saisie.** Un flux RSS ou Atom est lu directement. Pour une page web, KORA cherche le flux que la page déclare et lit celui-ci ; il ne lit pas le contenu de la page elle-même. Une page qui ne déclare aucun flux ne rapporte aucune publication, et la collecte est affichée « Succès · aucune actualité » alors que rien n'a pu être lu.
+**Perplexity.** En même temps que Google News, KORA interroge Perplexity, un moteur de recherche d'actualités, sur la raison sociale suivie des mots « Grenoble actualité entreprise » (cinq résultats du dernier mois au plus). Un résultat n'est gardé que s'il a un titre, une adresse et une date, s'il ne vient pas du site de l'entreprise et s'il cite la raison sociale ou un alias. Un article déjà trouvé par Google News n'est pas compté deux fois. Les observations trouvées ainsi portent la pastille violette « Perplexity ». Une panne de Perplexity ne fait jamais échouer la collecte : elle n'apparaît que dans la colonne « Perplexity » de l'historique.
 
-**Filtres.** Lorsqu'un flux n'appartient pas au domaine officiel de l'entreprise, par exemple celui d'un média, seules les publications qui citent la raison sociale ou un alias sont retenues. Les publications de plus de 180 jours sont ignorées ; celles qui n'ont pas de date sont conservées et affichées « Date inconnue ».
+**Relais quand Google News échoue.** Si Google News ne répond pas mais que Perplexity répond, la collecte est réussie avec les seuls résultats de Perplexity, et l'historique affiche un avertissement : le code de l'erreur de Google News, avec un motif qui commence par « Google News : ». Si Perplexity échoue aussi, la collecte est en échec comme d'habitude.
+
+**Adresse saisie.** Un flux RSS ou Atom est lu directement. Pour une page web, KORA cherche le flux que la page déclare et lit celui-ci ; il ne lit pas le contenu de la page elle-même. Une page qui ne déclare aucun flux ne rapporte aucune publication : la collecte est affichée « Succès · aucune actualité », et l'historique porte l'avertissement `NO_FEED` avec le motif « Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités. ». Remplacez alors la source par l'adresse de son flux.
+
+**Filtres.** Lorsqu'un flux n'appartient pas au domaine officiel de l'entreprise, par exemple celui d'un média, seules les publications qui citent la raison sociale ou un alias sont retenues. Seules les publications de moins de 30 jours sont retenues. Celles qui n'ont pas de date sont écartées, tout comme celles datées de plus d'un jour dans le futur, par exemple les annonces d'un agenda d'événements.
 
 ### Lancer une collecte
 
@@ -251,13 +256,16 @@ Le type de source détermine ce que la collecte lit réellement (voir ci-dessous
 | « Collecte réussie » | De nouvelles observations ont été rattachées. |
 | « Succès · aucune actualité » | La source a répondu, mais aucune publication nouvelle n'a été retenue. |
 | « Échec de collecte · CODE » | La source n'a pas pu être lue après trois essais. |
+| « Échec de collecte · budget_busy » | Le budget API était en cours de mise à jour par une autre action : la source n'a pas été interrogée, rien n'a été décompté et elle n'est pas marquée en échec. Relancez-la dans quelques secondes. |
 | « Budget API atteint : la collecte est suspendue… » | Le budget API du mois est épuisé. |
 
-Les codes d'échec et la conduite à tenir sont décrits dans le [parcours F](#f-traiter-une-source-en-échec).
+Lors d'une collecte complète, une source tombée sur un budget momentanément occupé compte parmi les échecs du bilan, sans apparaître dans l'encadré des échecs, et la collecte continue avec les sources suivantes. Les autres codes d'échec et la conduite à tenir sont décrits dans le [parcours F](#f-traiter-une-source-en-échec). Un avertissement (page sans flux, Google News relayé par Perplexity) n'apparaît pas dans ce message : consultez l'onglet « Historique des collectes ».
 
-**Trois publications par source.** À chaque passage, KORA ne retient que les trois publications les plus récentes de chaque source. Si une source publie davantage entre deux collectes, les plus anciennes de ces publications ne seront jamais rattachées : collectez plus souvent les sources très actives. Les publications déjà connues sont écartées ; si les trois sont déjà connues, la collecte est « Succès · aucune actualité ». Les nouvelles observations sont regroupées avec les signaux existants quand elles décrivent le même événement, ou forment un nouveau signal. Un signal d'au moins 8/10 déclenche la notification « Nouveau signal prioritaire ».
+**Une collecte à la fois.** Une seule collecte peut tourner à un moment donné, toutes personnes confondues. Si vous lancez une collecte, complète ou d'une seule source, pendant qu'une autre est en cours, le message « Une collecte est déjà en cours : réessayez dans quelques minutes. » s'affiche et rien n'est lancé.
 
-**Coût d'une collecte.** Chaque passage sur une source est décompté du budget API comme un appel payant estimé : 0,012 € pour l'interrogation, plus 0,021 € par publication retenue, soit au plus 0,075 € par source. Une collecte complète de 150 sources coûte ainsi jusqu'à environ 11 €, et le budget mensuel de 150 € permet une douzaine de collectes complètes. Chaque passage compte aussi une unité dans « Recherches web ». Les publications retenues sont décomptées dans « observations ce mois » et dans le compteur « Nouvelles observations », même lorsqu'elles étaient déjà connues. Une source en échec ne coûte que l'interrogation, quel que soit le nombre d'essais.
+**Trois nouvelles publications par source.** À chaque passage, KORA rattache au plus trois publications nouvelles par source, en commençant par les plus récentes. Les publications déjà connues sont écartées et ne comptent pas dans cette limite ; si aucune n'est nouvelle, la collecte est « Succès · aucune actualité ». Si une source en a publié davantage, les suivantes seront reprises aux collectes suivantes tant qu'elles ont moins de 30 jours : collectez plus souvent les sources très actives. Les nouvelles observations sont regroupées avec les signaux existants quand elles décrivent le même événement, ou forment un nouveau signal. Un signal d'au moins 8/10 déclenche la notification « Nouveau signal prioritaire ».
+
+**Coût d'une collecte.** Chaque passage sur une source est décompté du budget API comme un appel payant estimé : 0,012 € pour l'interrogation, plus 0,021 € par publication nouvelle (trois au plus), soit au plus 0,075 € par source. Une collecte complète de 150 sources coûte ainsi entre 1,80 € et environ 11 €, et le budget mensuel de 150 € permet au moins une douzaine de collectes complètes. Chaque passage compte aussi une unité dans « Recherches web ». Seules les publications nouvelles sont facturées et décomptées dans « observations ce mois » ; une publication déjà connue ne coûte rien. Une source en échec ne coûte que l'interrogation, quel que soit le nombre d'essais.
 
 ### Désactiver, réactiver ou supprimer une source
 
@@ -279,7 +287,7 @@ L'écran Signaux (« Sujets détectés, scorés et sourcés par le Signal Engine
 
 **Les onglets de statut.** « Prioritaires », « Nouveautés » (par défaut), « À traiter », « En revue », « Surveillés », « Traités », « Rejetés » et « Tous », chacun avec son effectif. « Prioritaires » réunit les signaux « Nouveau » et « À traiter » d'au moins 8/10.
 
-**Les filtres.** Champ « Rechercher un titre, une entreprise, un média… », listes « Toutes les entreprises », « Toutes les catégories », « Tous les thèmes », « Tous les médias », tri « Meilleur score » ou « Plus récent », et « Réinitialiser ». Si la liste est tronquée, le message « N premiers signaux affichés sur T — affinez les filtres pour voir les autres. » s'affiche.
+**Les filtres.** Champ « Rechercher un titre, une entreprise, un média… », listes « Toutes les entreprises », « Toutes les catégories », « Tous les thèmes », « Tous les médias », tri « Meilleur score » ou « Plus récent », et « Réinitialiser ». « Plus récent » classe les signaux selon la date de l'actualité : sa date de publication, à défaut la date de l'événement, à défaut la date de collecte. Si la liste est tronquée, le message « N premiers signaux affichés sur T — affinez les filtres pour voir les autres. » s'affiche.
 
 **Les boutons d'en-tête.** « Exporter (CSV) » télécharge les signaux. « Recalculer les scores » (administrateurs seulement) applique la grille active à tous les signaux non décidés ; les signaux « Traité » et « Rejeté » gardent leur score d'origine.
 
@@ -294,6 +302,8 @@ Cliquez sur une ligne. Le panneau de droite empile plusieurs cartes.
 - « Générer le post LinkedIn » prépare des variantes et ouvre l'écran LinkedIn.
 - « Ignorer » ouvre « Ignorer ce signal » : indiquez un motif, puis « Ignorer le signal ». Le signal passe au statut « Rejeté ». Un signal rejeté affiche « Restaurer », qui le remet « À traiter ».
 
+Au-dessus de la barre d'actions, le bloc **« Sources prises en compte dans le score »** liste les publications sur lesquelles repose le signal, avec leur nombre et celui des reprises (« 5 publications dont 2 reprises »). Chaque ligne donne le média, la date de publication, le titre et un lien vers l'article ; la pastille « Perplexity » signale une publication trouvée par la recherche Perplexity, la pastille « Reprise » une reprise d'un même communiqué. Les quatre premières sont affichées ; « Voir les N autres sources » déplie la liste.
+
 **L'alerte de revue** apparaît lorsque l'application n'est pas sûre d'elle : « Homonymie à vérifier », « Fusion incertaine », « Entreprise non rattachée » ou « Observations à rattacher ». Pour rattacher le signal, choisissez l'entreprise dans « Choisir une entreprise… » puis cliquez sur « Rattacher » (« Rattachement enregistré »). Pour une fusion incertaine, « Regrouper avec ce sujet » fusionne avec le signal jumeau cité dans la note.
 
 **La carte « Décision éditoriale »** montre le statut, la date de mise à jour et le motif éventuel. Les boutons « Surveiller », « À traiter » et « Traité » changent le statut ; le bouton du statut courant est grisé. « Rejeter » ouvre « Rejeter ce signal » : le motif est obligatoire (au moins trois caractères), conservé dans le journal des décisions, et le signal reste restaurable. Quatre motifs rapides sont proposés : « Hors périmètre territorial », « Doublon d'un sujet existant », « Information non vérifiable » et « Intérêt éditorial insuffisant ».
@@ -302,7 +312,7 @@ Cliquez sur une ligne. Le panneau de droite empile plusieurs cartes.
 
 **La carte « Indicateur documentaire »** indique s'il existe une « Source directe », le nombre de « Corroborations indépendantes » et la « Fraîcheur » de l'information, puis liste les « Contradictions » et les « Explications ». Voir [Indicateur documentaire](#indicateur-documentaire).
 
-**La liste « Observations »** montre chaque article source avec son média, ses dates (« Collecté le … »), sa confiance de rattachement et, le cas échéant, les pastilles « Reprise » ou « À rattacher ». « Ouvrir » affiche la page d'origine.
+**La liste « Observations »** montre chaque article source avec son média, ses dates et sa provenance (« Collecté le … via flux de la source », « via Google News » ou « via Perplexity »), sa confiance de rattachement et, le cas échéant, les pastilles « Perplexity », « Reprise » ou « À rattacher ». « Ouvrir » affiche la page d'origine.
 
 ### Fusionner et défusionner
 
@@ -330,6 +340,8 @@ stateDiagram-v2
 ```
 
 En plus de ces transitions automatiques, les boutons « Surveiller », « À traiter » et « Traité » de la carte « Décision éditoriale » font passer un signal à ces statuts à tout moment, et « Rejeter » est disponible quel que soit le statut.
+
+**Actualités anciennes.** Avant l'introduction de la règle des 30 jours, la collecte retenait des publications de plusieurs mois. Pour les retirer de la file « Nouveautés », l'équipe technique dispose d'un traitement ponctuel ([`2026-10-15_signaux_anciens_hors_file.sql`](../db/data/2026-10-15_signaux_anciens_hors_file.sql)) : une fois appliqué, les signaux « Nouveau » dont l'actualité a plus de 30 jours passent « Rejeté », avec le motif « Actualité ancienne : publiée il y a plus de 30 jours ». Ils figurent dans l'onglet « Rejetés », le journal d'audit attribue ce changement à « KORA », et « Restaurer » remet un signal « À traiter » si vous souhaitez malgré tout le traiter. Les signaux sans date ne sont pas touchés.
 
 ## Articles
 
@@ -437,11 +449,11 @@ L'onglet « Approbation & diffusion » commence par le bandeau « Pilote : WordP
 Pour diffuser (validateur), cliquez sur le bouton WordPress ou sur « Exporter » dans la ligne du canal. Le bouton reste grisé tant que la version courante n'est pas approuvée pour ce canal (« Approbation valide requise pour la version N sur ce canal. »).
 
 - **WordPress** : le brouillon distant reçoit le titre, le corps, l'extrait, les catégories et les tags. Le bouton s'intitule « Créer le brouillon WordPress » au premier envoi, « Mettre à jour le brouillon WordPress » lorsqu'un brouillon existe, « Recréer le brouillon WordPress » s'il a été supprimé sur le site, et « Envoyer à WordPress » lorsque le contenu est déjà en ligne ou programmé. Le résultat « Brouillon WordPress envoyé (version N) » indique son identifiant distant. La mise en ligne reste manuelle dans WordPress. Un second envoi de la même version ne crée pas de doublon ; l'envoi d'une nouvelle version approuvée met à jour le même brouillon.
-- **État WordPress** : sous le bouton, l'encadré « État WordPress » donne le statut du contenu sur le site, son numéro et la « Dernière synchronisation ». Les statuts sont « Aucun brouillon WordPress », « Brouillon WordPress », « En attente de relecture », « Programmé sur WordPress », « Publié sur WordPress » et « Supprimé sur WordPress » ; dès le premier envoi, le même libellé apparaît dans l'en-tête de l'article, à côté de son statut. « Ouvrir dans WordPress » ouvre le contenu dans l'administration du site, dans un nouvel onglet. « Actualiser le statut » (validateur ou administrateur, lorsqu'un brouillon existe) relit le statut sur WordPress, par exemple après une mise en ligne faite dans WordPress. Une fois le contenu programmé ou publié, KORA ne le modifie plus : toute correction se fait dans WordPress.
+- **État WordPress** : sous le bouton, l'encadré « État WordPress » donne le statut du contenu sur le site, son numéro et la « Dernière synchronisation ». Les statuts sont « Aucun brouillon WordPress », « Brouillon WordPress », « En attente de relecture », « Programmé sur WordPress », « Publié sur WordPress » et « Supprimé sur WordPress » ; dès le premier envoi, le même libellé apparaît dans l'en-tête de l'article, à côté de son statut. « Ouvrir dans WordPress » ouvre le contenu dans l'administration du site, dans un nouvel onglet. « Actualiser le statut » (validateur ou administrateur, lorsqu'un brouillon existe) relit le statut sur WordPress, par exemple après une mise en ligne faite dans WordPress ; si le contenu y est publié, l'article passe « Publié » dans KORA. Une fois le contenu programmé ou publié, KORA ne le modifie plus : toute correction se fait dans WordPress.
 - **WordPress non configuré** : tant qu'un administrateur n'a pas renseigné la connexion au site, le bouton est grisé et l'encadré « WordPress n'est pas configuré : voir Paramètres > WordPress. » renvoie vers l'onglet [WordPress](#wordpress) des Paramètres. Sur une installation de démonstration, la mention « Mode démonstration : brouillon simulé » rappelle qu'aucun site réel ne reçoit le brouillon.
-- **LinkedIn et Newsletter** : le résultat « Export … prêt (version N) : diffusion manuelle. » est consigné. Pour obtenir un texte à publier, utilisez l'écran [LinkedIn](#linkedin) ou [Newsletter](#newsletter).
+- **LinkedIn et Newsletter** : le résultat « Export … prêt (version N) : diffusion manuelle. » est consigné ; rien n'est publié depuis l'article, même avec un compte LinkedIn relié. Pour publier un post ou obtenir un texte, utilisez l'écran [LinkedIn](#linkedin) ou [Newsletter](#newsletter).
 
-Un envoi refusé s'affiche dans un encadré qui nomme le problème (« Envoi bloqué par l'API » pour une règle d'approbation, « Site WordPress injoignable », « Identifiants WordPress refusés »…) avec le message du serveur (voir [Envoi bloqué](#envoi-bloqué)). Le refus est lui aussi consigné dans l'historique, au statut « Bloqué ». La diffusion réussie fait passer le signal source à « Traité » ; l'article garde son statut « Prêt à publier ».
+Un envoi refusé s'affiche dans un encadré qui nomme le problème (« Envoi bloqué par l'API » pour une règle d'approbation, « Site WordPress injoignable », « Identifiants WordPress refusés »…) avec le message du serveur (voir [Envoi bloqué](#envoi-bloqué)). Le refus est lui aussi consigné dans l'historique, au statut « Bloqué ». La diffusion réussie fait passer le signal source à « Traité » ; l'article garde son statut « Prêt à publier » jusqu'à ce que KORA constate sa mise en ligne sur WordPress.
 
 ### Importer un article rédigé par l'équipe
 
@@ -463,18 +475,28 @@ Les fichiers refusés produisent un message explicite : « Format .doc non pris 
 
 ![LinkedIn](images/linkedin.webp)
 
-L'écran LinkedIn (« Posts et variantes préparés à partir d'articles approuvés ») sert à préparer, faire valider et exporter les posts de la page Inovallée. Le bandeau rappelle que la publication par l'API LinkedIn dépend d'accès non accordés au pilote : la diffusion passe par un export manuel.
+L'écran LinkedIn (« Posts et variantes préparés à partir d'articles approuvés ») sert à préparer, faire valider, puis publier ou exporter les posts. La publication part du compte LinkedIn de la personne qui clique, si elle l'a relié : le post paraît sur son profil personnel, pas sur une page entreprise. Sans compte relié, ou pour diffuser sur la page Inovallée, passez par l'export et publiez le texte vous-même.
+
+### Relier votre compte LinkedIn
+
+Le bandeau placé sous le titre indique l'état de votre propre compte ; chacun relie le sien, quel que soit son rôle.
+
+- « Aucun compte LinkedIn relié : la publication reste un export manuel. Connectez votre compte pour publier directement. » Cliquez sur « Connecter mon compte LinkedIn ». Une fenêtre LinkedIn s'ouvre : connectez-vous et acceptez que KORA lise votre profil et publie en votre nom. La fenêtre se ferme seule et le bandeau affiche « Compte LinkedIn connecté », suivi de votre nom, « — les publications partiront de ce compte. » Si rien ne s'ouvre, autorisez les fenêtres surgissantes pour KORA dans votre navigateur. Une fenêtre fermée trop tôt affiche « Fenêtre LinkedIn fermée avant la fin de la connexion. ».
+- « Votre accès LinkedIn doit être renouvelé. Reconnectez votre compte pour publier à nouveau. » Cliquez sur « Reconnecter LinkedIn » et refaites le consentement.
+- « Déconnecter » retire à KORA l'accès à votre compte (« Compte LinkedIn déconnecté. ») ; vos publications suivantes redeviennent des exports.
+
+Votre connexion ne sert qu'à vous : un collègue qui publie le fait depuis son propre compte, ou par export s'il n'en a pas relié. La suppression de votre compte KORA retire aussi votre connexion LinkedIn.
 
 ### Lire l'écran
 
 Les onglets « À valider » (par défaut), « Brouillons », « Approuvés », « Exportés / publiés » et « Tous » filtrent la liste de gauche. Le détail du post sélectionné présente :
 
 - l'en-tête : statut, nombre de variantes, variante retenue, et l'encadré de version (« Version approuvée » ou « Non approuvée ») ; le lien « Article source » ouvre l'article ;
-- les boutons « Soumettre à validation », « Approuver la version N » et « Exporter » ; celui qui correspond à l'étape suivante est mis en avant ;
+- les boutons « Soumettre à validation », « Approuver la version N » et « Publier sur LinkedIn » (votre compte est relié) ou « Exporter » (il ne l'est pas) ; celui qui correspond à l'étape suivante est mis en avant ;
 - « Variantes » : les propositions de KORA (« Variante A », « Variante B »…), dont une porte « Retenue » ;
 - « Texte de la variante … » et « Hashtags », avec le compteur de caractères ;
 - « Aperçu LinkedIn », qui montre le post tel qu'il apparaîtra ;
-- « Approbation » et « Historique des exports (N) ».
+- « Approbation » et « Historique des exports (N) », qui liste aussi les publications.
 
 ### Préparer et faire valider un post
 
@@ -484,9 +506,11 @@ stateDiagram-v2
     state "À valider" as a_valider
     state "Approuvé" as approuve
     state "Exporté" as exporte
+    state "Publié" as publie
     [*] --> brouillon : préparation
     brouillon --> a_valider : « Soumettre à validation »
     a_valider --> approuve : « Approuver la version N »
+    approuve --> publie : « Publier sur LinkedIn »
     approuve --> exporte : « Exporter »
     approuve --> a_valider : texte ou variante modifiés
     exporte --> a_valider : texte ou variante modifiés
@@ -496,9 +520,23 @@ stateDiagram-v2
 2. **Choisir et retoucher** (rédacteur). Sélectionnez la variante à retenir, modifiez le texte et les hashtags, puis cliquez sur « Enregistrer la version N+1 ». Chaque enregistrement ou changement de variante crée une nouvelle version.
 3. **Soumettre** (rédacteur). « Soumettre à validation » fait passer le post « À valider » et notifie les validateurs.
 4. **Approuver** (validateur). Relisez l'aperçu puis cliquez sur « Approuver la version N ».
-5. **Exporter** (validateur). « Exporter » consigne l'export et fait passer le post « Exporté ». Les boutons « Télécharger l'export » (fichier texte) et « Copier le texte » apparaissent alors ; publiez le texte à la main sur LinkedIn.
+5. **Publier ou exporter** (validateur).
+   - Votre compte est relié : « Publier sur LinkedIn » publie la variante retenue et ses hashtags sur votre profil. Le message « Post publié sur LinkedIn » s'affiche, le résultat affiché sous les boutons donne le lien du post, et le post passe « Publié » : il n'est plus modifiable.
+   - Il ne l'est pas : « Exporter » consigne l'export et fait passer le post « Exporté ». Les boutons « Télécharger l'export » (fichier texte) et « Copier le texte » apparaissent alors ; publiez le texte à la main sur LinkedIn.
+
+Un double clic, ou un collègue qui clique en même temps, ne publie pas deux fois : la seconde demande affiche « Publication déjà en cours » et l'écran se met à jour quelques secondes plus tard. Une version déjà exportée ne peut plus être publiée par KORA, même après avoir relié votre compte : enregistrez une nouvelle version, faites-la approuver, puis publiez. Si LinkedIn refuse (autorisation expirée, texte refusé, trop de publications rapprochées), le motif s'affiche sous « Envoi bloqué par l'API » ; corrigez la cause, par exemple avec « Reconnecter LinkedIn », puis cliquez de nouveau.
 
 Une modification après approbation crée une nouvelle version, invalide l'approbation et renvoie le post « À valider » : le bandeau « Toute modification invalidera l'approbation » vous prévient. Un fichier téléchargé alors que la version n'est pas approuvée commence par la mention « [APERÇU — version non approuvée, ne pas publier] ».
+
+### Si la publication est à vérifier
+
+Quand KORA ne sait pas si le post a été créé (connexion coupée pendant l'envoi, LinkedIn momentanément indisponible, réponse incomplète, contenu signalé comme déjà publié), il n'essaie pas de republier : le bandeau « Publication LinkedIn à vérifier » indique qui a lancé la publication et quand, et bloque tout nouvel envoi de cette version.
+
+1. Ouvrez le fil LinkedIn du compte indiqué et cherchez le post.
+2. S'il y figure, cliquez sur « Le post est bien sur LinkedIn » : le post passe « Publié » et le message « Publication confirmée » s'affiche.
+3. S'il n'y figure pas, cliquez sur « Le post n'y est pas : republier » et confirmez « Republier ». Le post est publié depuis **votre** compte relié, ou exporté si vous n'en avez pas. Ne confirmez qu'après avoir vérifié le fil : si le post y est déjà, il paraîtra deux fois.
+
+Seuls la personne qui a lancé la publication et un administrateur peuvent répondre ; pour les autres, les boutons sont grisés avec la raison. Si le bandeau indique que KORA n'a pas encore reçu la confirmation et que la publication vient d'être lancée, patientez quelques secondes puis actualisez.
 
 ## Newsletter
 
@@ -534,9 +572,9 @@ stateDiagram-v2
 
 1. **Approuver** (validateur). Cliquez sur « Approuver la version N ». Une édition vide ne peut pas être approuvée (« Ajoutez au moins un sujet avant d'approuver. »).
 2. **Exporter**. « Export HTML » et « Export texte » téléchargent l'édition. Tant que la version n'est pas approuvée, les fichiers portent la mention « Aperçu — version N non approuvée. ».
-3. **Figer**. Lorsqu'un validateur télécharge l'export d'une version approuvée, l'export est consigné et l'édition passe « Exportée » : elle n'est plus modifiable (« Édition exportée — version N figée ») et ses fichiers restent téléchargeables à l'identique. Pour la semaine suivante, créez une nouvelle édition.
+3. **Figer**. Lorsqu'un validateur clique sur « Export HTML » ou « Export texte » pour une version approuvée, le fichier est téléchargé et, en même temps, l'export est consigné : l'édition passe « Exportée », l'export rejoint l'« Historique des exports » et l'édition n'est plus modifiable (« Édition exportée — version N figée »). Ses fichiers restent téléchargeables à l'identique. Pour la semaine suivante, créez une nouvelle édition.
 
-Le simple téléchargement par un validateur fige l'édition : vérifiez le contenu avant de cliquer.
+Le premier clic d'un validateur sur un bouton d'export fige l'édition : vérifiez le contenu avant de cliquer. La phrase sous les boutons le rappelle (« L'export de la version approuvée est consigné (clé d'idempotence) et fige l'édition. »). Pour un rédacteur ou un lecteur, le clic télécharge le fichier sans rien consigner (« seul un validateur peut le consigner comme diffusion »). Si la consignation échoue, un message d'erreur s'affiche : le fichier est téléchargé, mais l'édition n'est pas figée ; cliquez de nouveau sur le bouton.
 
 ## Entreprises
 
@@ -598,7 +636,16 @@ La modification du référentiel est réservée aux administrateurs.
 
 ### Utilisateurs & rôles
 
-« Comptes nominatifs » liste les comptes, leur équipe et leurs rôles ; votre compte porte « Vous ». « Droits par rôle » présente la matrice des droits et ses définitions. Les comptes et les rôles ne se modifient pas depuis cet écran ; pour tester un autre profil, utilisez « Changer de profil » dans le menu utilisateur.
+« Comptes nominatifs » liste les comptes avec leur nom, leur adresse e-mail, leur équipe et leurs rôles ; votre compte porte « Vous ». Sous chaque adresse, la pastille « Compte activé » indique que la personne a choisi son mot de passe, « Invitation en attente » qu'elle ne l'a pas encore fait. « Droits par rôle » présente la matrice des droits et ses définitions ; si votre compte cumule rédaction et validation, un encadré rappelle qu'une approbation donnée sur son propre contenu ne vaut pas double contrôle.
+
+Les administrateurs gèrent les comptes depuis cette carte ; les autres profils la consultent seulement.
+
+- **Ajouter un utilisateur.** Cliquez sur « Ajouter ». Renseignez le « Nom complet », l'« Équipe » (facultative) et l'« Adresse e-mail » professionnelle qui servira à se connecter, cochez au moins un rôle, puis cliquez sur « Ajouter et inviter ». La personne reçoit un e-mail d'invitation pour choisir son mot de passe (voir [Se connecter](#se-connecter)) ; le message « Invitation envoyée à … » le confirme. Si l'adresse possède déjà un compte de connexion confirmé, elle est rattachée sans nouvel e-mail et la personne peut se connecter aussitôt. Une adresse déjà utilisée par un autre compte KORA est refusée (« Adresse e-mail déjà utilisée »).
+- **Modifier les rôles.** Cliquez sur l'icône crayon (« Modifier les rôles de … »), changez le nom, l'équipe ou les rôles, puis cliquez sur « Enregistrer ». L'adresse e-mail, qui identifie le compte, ne se modifie pas. Vous ne pouvez pas retirer votre propre rôle d'administrateur.
+- **Renvoyer l'invitation.** Pour un compte « Invitation en attente », l'icône d'envoi (« Renvoyer l'invitation à … ») envoie un nouvel e-mail, par exemple lorsque le premier lien a expiré. Si l'envoi échoue, le message l'indique et invite à réessayer.
+- **Supprimer un compte.** Cliquez sur l'icône corbeille, puis confirmez « Supprimer le compte de … ? ». La personne n'a plus accès à KORA et sa connexion LinkedIn est retirée ; ses contenus et le journal d'audit sont conservés. Vous ne pouvez pas supprimer votre propre compte, ni le dernier administrateur : KORA en garde toujours au moins un.
+
+Chaque ajout, modification, renvoi et suppression est consigné dans le journal d'audit. Sur une installation de démonstration, les comptes sont créés sans invitation par e-mail.
 
 ### WordPress
 
@@ -649,9 +696,9 @@ Le journal liste les actions horodatées : date, acteur, action, entité et dét
 4. **Vérifier le dossier**. Dans « Dossier factuel », arbitrez chaque fait « Contradictoire » avec « Arbitrer ». Repérez les passages « [À vérifier] ».
 5. **Rédiger**. Dans « Rédaction », corrigez le texte, retirez les marqueurs vérifiés, complétez l'extrait, le titre SEO, les catégories et les tags, puis cliquez sur « Enregistrer la version 2 ».
 6. **Soumettre**. Cliquez sur « Soumettre en revue ».
-7. **Approuver** (validateur, par exemple Claire Dubois). Ouvrez l'article depuis la notification « Article à valider » ou l'onglet « En revue ». Cliquez sur « Approuver la version 2 », choisissez « WordPress », puis confirmez.
+7. **Approuver** (validateur, de préférence une autre personne que le rédacteur). Ouvrez l'article depuis la notification « Article à valider » ou l'onglet « En revue ». Cliquez sur « Approuver la version 2 », choisissez « WordPress », puis confirmez.
 8. **Diffuser** (validateur). Cliquez sur « Diffuser », puis sur « Créer le brouillon WordPress » dans « Diffusion par canal ». Le résultat indique l'identifiant du brouillon distant ; le signal passe « Traité ».
-9. **Mettre en ligne**. Au pilote, la mise en ligne publique se fait à la main dans WordPress ; avec le WordPress simulé, aucune page n'est publiée.
+9. **Mettre en ligne**. Au pilote, la mise en ligne publique se fait à la main dans WordPress : « Ouvrir dans WordPress » mène au brouillon. Une fois l'article publié sur le site, « Actualiser le statut » le fait passer « Publié » dans KORA. Sur une installation de démonstration, le brouillon est simulé et aucune page n'est publiée.
 
 Si vous modifiez l'article après l'étape 7, l'approbation est invalidée : soumettez et approuvez de nouveau avant de renvoyer le brouillon.
 
@@ -670,8 +717,8 @@ Si vous modifiez l'article après l'étape 7, l'approbation est invalidée : sou
 2. **Choisir**. Comparez les variantes, sélectionnez celle à retenir, ajustez le texte et les hashtags en surveillant le compteur de caractères et l'aperçu, puis cliquez sur « Enregistrer la version N+1 ».
 3. **Soumettre**. Cliquez sur « Soumettre à validation ».
 4. **Approuver** (validateur). Dans l'onglet « À valider », relisez puis cliquez sur « Approuver la version N ».
-5. **Exporter** (validateur). Cliquez sur « Exporter », puis sur « Copier le texte » ou « Télécharger l'export ».
-6. **Publier**. Collez le texte sur la page LinkedIn d'Inovallée.
+5. **Publier** (validateur). Si votre compte LinkedIn est relié, cliquez sur « Publier sur LinkedIn » : le post paraît sur votre profil et passe « Publié ». En cas de bandeau « Publication LinkedIn à vérifier », voir [Si la publication est à vérifier](#si-la-publication-est-à-vérifier).
+6. **Ou exporter** (validateur). Sans compte relié, ou pour la page LinkedIn d'Inovallée, cliquez sur « Exporter », puis sur « Copier le texte » ou « Télécharger l'export », et collez le texte sur LinkedIn.
 
 ### D. Composer la newsletter de la semaine
 
@@ -679,7 +726,7 @@ Si vous modifiez l'article après l'étape 7, l'approbation est invalidée : sou
 2. **Ouvrir l'édition**. Dans Newsletter, l'édition en composition s'ouvre par défaut. Complétez au besoin avec « Ajouter des sujets ».
 3. **Ordonner et rédiger**. Réordonnez avec « Monter » et « Descendre », retouchez le titre, l'introduction et les résumés, puis cliquez sur « Enregistrer la version N+1 ». Contrôlez l'« Aperçu HTML ».
 4. **Approuver** (validateur). Cliquez sur « Approuver la version N ».
-5. **Exporter** (validateur). Cliquez sur « Export HTML » et « Export texte ». L'édition passe « Exportée » et se fige.
+5. **Exporter** (validateur). Cliquez sur « Export HTML » ou « Export texte ». Dès le premier clic, l'export est consigné : l'édition passe « Exportée » et se fige. Le second format reste téléchargeable.
 6. **Envoyer**. Importez le HTML ou le texte dans votre outil d'envoi habituel ; KORA n'envoie rien.
 
 ### E. Ajuster la grille de score
@@ -748,7 +795,7 @@ Les reprises quasi identiques d'un même communiqué (pastille « Reprise ») ne
 
 ### Date inconnue
 
-Lorsqu'aucune date de publication ni d'événement n'est connue, l'application affiche « Date inconnue » plutôt que d'en estimer une. La sous-note « Nouveauté » le signale par le motif « date de l'événement inconnue ».
+Lorsqu'aucune date de publication ni d'événement n'est connue, l'application affiche « Date inconnue » plutôt que d'en estimer une. La sous-note « Nouveauté » le signale par le motif « date de l'événement inconnue ». La collecte écarte désormais les publications sans date : ce cas ne concerne plus que des signaux collectés avant l'introduction de la règle des 30 jours.
 
 ### Statuts et couleurs
 
@@ -771,7 +818,7 @@ Lorsqu'aucune date de publication ni d'événement n'est connue, l'application a
 | En revue | Bleu | Soumis aux validateurs. |
 | Prêt à publier | Vert | Approuvé pour au moins un canal. |
 | Programmé | Bleu-vert | Approuvé avec une date de diffusion. |
-| Publié | Bleu-vert | Présent dans les données de démonstration. |
+| Publié | Bleu-vert | Mis en ligne sur WordPress, constaté par KORA à l'actualisation du statut ou à un envoi. |
 | Rejeté | Rose | Renvoyé au rédacteur avec un motif. |
 
 **Posts LinkedIn** : « Brouillon » (gris), « À valider » (ambre), « Approuvé » (vert), « Exporté » et « Publié » (bleu-vert).
@@ -790,15 +837,15 @@ Lorsqu'aucune date de publication ni d'événement n'est connue, l'application a
 
 ## Ce que l'application ne fait pas au pilote
 
-- **Elle ne collecte pas d'elle-même.** La collecte lit réellement les flux RSS et Google News, mais seulement lorsque vous cliquez sur « Lancer la collecte », « Collecter maintenant » ou « Réessayer » : il n'existe pas de collecte planifiée, la « Fréquence » d'une source est indicative.
-- **Elle ne lit pas le contenu des pages web.** Seuls les flux RSS et Atom, déclarés ou saisis, et les résultats de Google News sont exploités, à raison des trois publications les plus récentes par source et par collecte (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
-- **Elle ne publie rien publiquement.** WordPress reçoit un brouillon distant (simulé) ; LinkedIn et la newsletter passent par un export que vous publiez ou envoyez vous-même. Aucune page LinkedIn tierce n'est collectée.
+- **Elle ne collecte pas d'elle-même.** La collecte lit réellement les flux RSS, Google News et Perplexity, mais seulement lorsque vous cliquez sur « Lancer la collecte », « Collecter maintenant » ou « Réessayer » : il n'existe pas de collecte planifiée, la « Fréquence » d'une source est indicative.
+- **Elle ne lit pas le contenu des pages web.** Seuls les flux RSS et Atom, déclarés ou saisis, et les résultats de Google News et de Perplexity sont exploités, à raison de trois publications nouvelles de moins de 30 jours au plus par source et par collecte (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
+- **Elle ne publie directement que sur LinkedIn.** Seul « Publier sur LinkedIn », cliqué par un validateur ou un administrateur qui a relié son compte, met un contenu en ligne, sur son profil. WordPress reçoit un brouillon distant, que vous mettez en ligne vous-même ; la newsletter passe par un export que vous envoyez vous-même. Aucune page LinkedIn tierce n'est collectée.
 - **Elle n'exécute pas les programmations.** « Programmer la diffusion » enregistre une date et fait passer l'article « Programmé », mais aucun envoi ne part à cette date.
-- **Elle ne fait jamais passer un article au statut « Publié ».** Ce statut n'existe que dans les données de démonstration.
+- **Elle ne fait passer un article « Publié » qu'après coup.** Le statut suit la mise en ligne faite dans WordPress, lorsque KORA la constate (« Actualiser le statut »).
 - **Elle n'envoie pas la newsletter** et ne gère ni contacts ni délivrabilité.
 - **Elle ne lit pas les PDF, les .doc ni les images** : pas d'OCR, seulement DOCX et texte UTF-8.
 - **Elle n'apprend pas seule.** Aucun modèle n'est entraîné sur vos textes ; les corrections produisent des propositions de règles que vous acceptez ou refusez.
-- **Elle ne gère pas les comptes et ne protège pas l'accès.** Pas d'écran de connexion, pas de création de compte ni de modification de rôle : quatre profils de démonstration, que chacun peut emprunter. En production, toute personne qui connaît l'adresse agit en administratrice sur des données conservées.
+- **Elle ne propose pas d'inscription libre.** Les comptes sont créés sur invitation par un administrateur ; il n'existe ni connexion par un compte Google ou Microsoft, ni double authentification.
 - **Elle ne permet pas de modifier les plafonds** de quotas et de budget, ni l'URL d'une source existante, depuis l'interface.
 - **Elle ne propose ni corbeille ni restauration.** Les données sont conservées dans une base, mais une suppression est définitive, et le projet ne prévoit ni sauvegarde documentée ni procédure de restauration. Exportez régulièrement ce que vous souhaitez garder (voir [Exports & réversibilité](#exports--réversibilité) et [Exploitation](09-exploitation.md)).
 
@@ -810,8 +857,8 @@ Survolez le bouton : l'infobulle donne la raison. Les cas les plus fréquents :
 
 | Infobulle ou message | Que faire |
 |---|---|
-| « Réservé aux rédacteurs. » / « Réservé aux validateurs. » | Changez de profil. |
-| « Profil lecteur : consultation seule » | Changez de profil. |
+| « Réservé aux rédacteurs. » / « Réservé aux validateurs. » | Demandez le rôle nécessaire à un administrateur, ou confiez l'action à un collègue qui l'a. |
+| « Profil lecteur : consultation seule » | Demandez un autre rôle à un administrateur. |
 | « Modifications non enregistrées : enregistrez d'abord une nouvelle version. » | Enregistrez ou annulez vos modifications. |
 | « Soumettez d'abord l'article en revue. » | Cliquez sur « Soumettre en revue ». |
 | « N contradiction(s) à arbitrer dans le dossier factuel avant approbation. » | Arbitrez dans « Dossier factuel ». |
@@ -868,7 +915,7 @@ Après un envoi interrompu, aucune vérification manuelle n'est nécessaire : au
 
 Lorsque le budget API du mois est épuisé, les actions qui appellent le modèle de texte ou le collecteur sont refusées avec le message « Plafond budgétaire API atteint (… € consommés sur 150 €) : les appels payants sont suspendus. Consultation et exports restent disponibles. » ou « Les appels payants sont suspendus : plafond budgétaire API du mois atteint. ». Sont concernés la création d'un article, la préparation d'un post LinkedIn, l'ajout d'un sujet à la newsletter (son résumé est généré) et la collecte. Le refus peut survenir un peu avant 150 € : le coût estimé de l'action est réservé avant l'appel, et l'action est refusée si cette réservation dépasse le plafond.
 
-Restent disponibles : la consultation, les exports, la rédaction et l'enregistrement de versions, les approbations, la diffusion WordPress et les exports LinkedIn et newsletter. La carte « Moteur d'analyse IA » passe « En pause » et l'onglet « Quotas & budget » affiche « Budget API atteint ». Le plafond ne se modifie pas depuis l'interface. La consommation est comptée par mois : les appels payants redeviennent possibles le mois suivant. En production, un redémarrage du serveur ne remet pas la consommation à zéro ; sur une installation de démonstration, il la ramène à son niveau initial (environ 112 €).
+Restent disponibles : la consultation, les exports, la rédaction et l'enregistrement de versions, les approbations, la diffusion WordPress, la publication et l'export LinkedIn, et l'export de la newsletter. La carte « Moteur d'analyse IA » passe « En pause » et l'onglet « Quotas & budget » affiche « Budget API atteint ». Le plafond ne se modifie pas depuis l'interface. La consommation est comptée par mois : les appels payants redeviennent possibles le mois suivant. En production, un redémarrage du serveur ne remet pas la consommation à zéro ; sur une installation de démonstration, il la ramène à son niveau initial (environ 112 €).
 
 Les collectes pèsent lourd dans ce budget : une collecte complète de 150 sources coûte jusqu'à environ 11 € (voir [Lancer une collecte](#lancer-une-collecte)). Si le budget s'épuise en cours de collecte, les sources suivantes sont marquées « Bloquée (quota) » dans l'historique.
 
@@ -893,17 +940,34 @@ Les autres quotas fonctionnent de même avec leur propre libellé, par exemple �
 | « Le motif est obligatoire pour rejeter un signal. » | Saisissez un motif. |
 | « Fusion impossible : les signaux concernent des entreprises différentes. » | Ne fusionnez que des signaux d'une même entreprise. |
 | « Cette source est désactivée : réactivez-la avant de lancer une collecte. » | Réactivez la source. |
+| « Une collecte est déjà en cours : réessayez dans quelques minutes. » | Un collègue, ou vous-même dans un autre onglet, a lancé une collecte : attendez qu'elle se termine, puis consultez l'historique. |
+| « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. » | Une autre action payante se termine au même moment : réessayez quelques secondes plus tard. |
+| « Votre autorisation LinkedIn a expiré ou a été révoquée : reconnectez votre compte depuis la page LinkedIn. » | Cliquez sur « Reconnecter LinkedIn » dans l'écran LinkedIn, puis publiez de nouveau. |
+| « Une publication de ce post est déjà en cours. Patientez quelques secondes puis actualisez. » | Un collègue, ou vous-même dans un autre onglet, publie ce post : attendez le résultat, qui s'affiche après actualisation. |
 | « Cette URL est déjà suivie pour cette entreprise. » | La source existe déjà dans le registre. |
 | « URL de source refusée : … » | Utilisez une adresse publique complète. |
 | « La date de programmation doit être dans le futur. » | Choisissez une date et une heure à venir. |
 | « Erreur interne du serveur. » | Réessayez ; si le message s'affiche sur tous les écrans, prévenez l'équipe technique (base de données injoignable, par exemple). |
 
+### Je n'arrive pas à me connecter
+
+| Message | Que faire |
+|---|---|
+| « E-mail ou mot de passe incorrect. » | Vérifiez l'adresse et le mot de passe, ou utilisez « Mot de passe oublié ? ». |
+| « Votre adresse e-mail n'est pas encore confirmée : ouvrez le lien d'invitation reçu par e-mail. » | Activez d'abord votre compte avec le lien de l'invitation. |
+| « Votre compte n'est pas autorisé sur KORA. Demandez à un administrateur de vous inviter. » | Votre adresse n'a pas de compte KORA, ou le compte a été supprimé : demandez à un administrateur de vous ajouter. |
+| « Lien expiré ou invalide » | Le lien d'invitation ou de réinitialisation a déjà servi ou a expiré : demandez-en un nouveau avec « Mot de passe oublié ? » ou auprès d'un administrateur (« Renvoyer l'invitation »). |
+| « Trop de tentatives : patientez quelques minutes avant de réessayer. » | Attendez quelques minutes avant de réessayer. |
+| « Le service de connexion est injoignable. Vérifiez votre connexion réseau puis réessayez. » | Vérifiez votre connexion internet ; si le problème persiste, prévenez l'équipe technique. |
+
+Vous ne recevez pas l'e-mail d'invitation ou de réinitialisation ? Vérifiez le dossier des indésirables, puis demandez à un administrateur de renvoyer l'invitation ; vérifiez avec lui l'adresse saisie dans « Utilisateurs & rôles ».
+
 ### Mes saisies ont disparu après une pause
 
 En production, ce que vous avez enregistré est conservé dans la base de données, même si le serveur redémarre. Les causes possibles sont les suivantes :
 
-- **Vos modifications n'étaient pas enregistrées.** Le texte saisi dans un article ou un post n'existe que dans la page ouverte tant que vous n'avez pas cliqué sur « Enregistrer la version N+1 ». Il est perdu si vous rechargez ou quittez la page. Il est aussi remplacé, sans avertissement, si un collègue enregistre une nouvelle version du même contenu : l'application rafraîchit les données lorsque vous revenez sur la fenêtre après une pause.
-- **Quelqu'un d'autre a modifié ou supprimé les données.** Sans écran de connexion, toute personne qui dispose de l'adresse peut agir sous n'importe quel profil. Le « Journal d'audit » de l'onglet Paramètres et l'onglet « Versions » d'un article indiquent ce qui a changé, et sous quel profil.
+- **Vos modifications n'étaient pas enregistrées.** Le texte saisi dans un article ou un post n'existe que dans la page ouverte tant que vous n'avez pas cliqué sur « Enregistrer la version N+1 ». Il est perdu si vous rechargez ou quittez la page, ou si KORA vous renvoie vers la page de connexion parce que votre session a expiré. Il est aussi remplacé, sans avertissement, si un collègue enregistre une nouvelle version du même contenu : l'application rafraîchit les données lorsque vous revenez sur la fenêtre après une pause.
+- **Quelqu'un d'autre a modifié ou supprimé les données.** Le « Journal d'audit » de l'onglet Paramètres et l'onglet « Versions » d'un article indiquent ce qui a changé, et qui l'a fait.
 - **Vous travaillez sur une installation de démonstration.** Sans base de données, par exemple sur le poste d'un développeur, chaque redémarrage du serveur ramène les données à leur état initial.
 
 Voir aussi [Ce que l'application ne fait pas au pilote](#ce-que-lapplication-ne-fait-pas-au-pilote).

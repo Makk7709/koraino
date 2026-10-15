@@ -32,14 +32,15 @@ Le `SUPABASE_URL=` vide est volontaire : `.env` contient l'adresse de la base de
 
 - Aucun secret dans le code ni dans un fichier commité.
 - `.env` **est versionné** et ne contient que des valeurs publiques (adresse et clé publique Supabase). Les fichiers `*.local` sont ignorés par git.
-- Les secrets serveur (`SUPABASE_SERVICE_ROLE_KEY`, `AI_API_KEY`, `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, `APP_USER_CONNECTION_KEY_SECRET`, `WORDPRESS_APP_PASSWORD`, etc.) sont enregistrés dans la console Lovable Cloud. La liste complète est dans le [README](README.md#configuration).
+- Les secrets serveur (`SUPABASE_SERVICE_ROLE_KEY`, `AI_API_KEY`, `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, `PERPLEXITY_API_KEY`, `APP_USER_CONNECTION_KEY_SECRET`, `WORDPRESS_APP_PASSWORD`, etc.) sont enregistrés dans la console Lovable Cloud. La liste complète est dans le [README](README.md#configuration).
 - `APP_USER_CONNECTION_KEY_SECRET` chiffre les connexions LinkedIn en base : la changer rend illisibles toutes les connexions existantes.
 - `WORDPRESS_APP_PASSWORD` ne doit apparaître dans aucun message, journal, réponse ni audit. Les tests n'utilisent que `https://wp.example.test` avec un `fetch` simulé, jamais un vrai site.
 
 ## Conventions du code
 
 - **Persistance.** En production, les données sont dans la base du projet : tables `kora_records` et `kora_settings`, un enregistrement JSON par ligne, accessibles uniquement côté serveur. `MemoryRepository` et le jeu de démonstration (`src/server/store/seed.ts`) ne servent qu'aux tests et au mode démonstration local. On garde ainsi la même interface `Repository` partout.
-- **Collecte.** `RealCollector` lit réellement les flux RSS/Atom et Google News de chaque entreprise. `SimulatedCollector` n'est utilisé que sous Vitest, pour des tests déterministes et sans réseau.
+- **Collecte.** `RealCollector` lit réellement les flux RSS/Atom et Google News de chaque entreprise, et enrichit les recherches presse par Perplexity. Il ne garde que les publications datées de moins de 30 jours. `SimulatedCollector` sert aux tests des autres fonctions, pour des résultats déterministes ; les tests de `RealCollector` (`collecte-reelle.test.ts`) remplacent `fetch` : aucun test n'appelle le réseau.
+- **Écritures concurrentes.** La base n'offre pas de transactions à l'application. Toute opération qui vérifie puis écrit (création unique, appel payant, compteur, liste modifiée) s'exécute sous `withLock` ([`src/server/services/locks.ts`](src/server/services/locks.ts)) et relit ses données une fois le verrou pris. Les tests de `doubles-clics.test.ts` lancent deux requêtes simultanées pour le vérifier.
 - **Contrat front/back** dans `src/lib/api/` (types, client, hooks) : le modifier des deux côtés en même temps.
 - **Droits** toujours vérifiés côté serveur (`src/server/domain/permissions.ts`), jamais seulement dans l'interface.
 - Une modification de la forme des enregistrements (`src/server/store/records.ts`) ne demande pas de migration SQL, mais les enregistrements déjà en base gardent l'ancienne forme : le code doit accepter les deux, ou une reprise des données doit être écrite dans `db/data/`.
@@ -53,7 +54,7 @@ Le `SUPABASE_URL=` vide est volontaire : `.env` contient l'adresse de la base de
 ## Base de données
 
 - Les migrations de schéma (`drizzle/migrations/`) sont appliquées par la plateforme d'hébergement.
-- Les scripts de données ponctuels (`db/data/`) s'exécutent à la main dans l'éditeur SQL de la console, une seule fois, après relecture. Chacun indique en tête ce qu'il fait et comment le vérifier.
+- Les scripts de données ponctuels (`db/data/`) s'exécutent à la main dans l'éditeur SQL de la console, une seule fois, après relecture. Chacun indique en tête ce qu'il fait et comment le vérifier, et peut être rejoué sans effet. Avant de le committer, le tester sur une base PostgreSQL locale jetable créée avec la migration de `drizzle/migrations/`.
 
 ## Documentation
 

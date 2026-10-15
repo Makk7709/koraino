@@ -37,11 +37,11 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 3. API dans `src/server/` : routeur, handlers, services, domaine pur, repository, adaptateurs.
 4. Données **persistantes** dans la base Supabase (PostgreSQL) de Lovable Cloud, en JSONB ; la production démarre vide. Le jeu de démonstration qui reproduit la maquette ne sert plus qu'aux tests et à la démonstration locale (`SUPABASE_URL= bun run dev`).
 5. Textes générés par gabarits, réécrits par OpenAI (`gpt-4o-mini`) si `AI_API_KEY` est définie, avec repli automatique.
-6. Collecte **réelle** par flux RSS et Google News, déclenchée à la main ; WordPress **simulé** ; LinkedIn et newsletter en export, conformément au pilote. Le flux Google News est réservé par ses conditions à un usage personnel et non commercial : à faire valider avant production.
+6. Collecte **réelle** par flux RSS et Google News, complétée par une recherche Perplexity pour la presse ; publications de moins de 30 jours seulement, au plus 3 nouvelles par source ; déclenchée à la main, une collecte à la fois. Brouillons WordPress **réels** (compte Contributeur), simulés en démonstration ; newsletter en export ; LinkedIn publié par le compte relié de l'utilisateur, ou exporté. Le flux Google News est réservé par ses conditions à un usage personnel et non commercial : à faire valider avant production.
 7. Score éditorial 0–100 (affiché sur 10) issu d'une grille versionnée ; indicateur documentaire distinct.
 8. Toute diffusion exige une approbation valide de la version courante ; une modification l'invalide ; publication idempotente.
-9. Quatre rôles contrôlés côté serveur ; budget API réservé avant chaque appel payant, suspension à 100 %.
-10. Avant production : **authentification** (urgent, la base est aujourd'hui modifiable par quiconque connaît l'adresse), collecte sortie du budget API (elle l'épuise en une douzaine de passages), transactions et sauvegardes, client WordPress réel, recette R01 à R13. Liste complète dans [Anomalies connues](11-anomalies-connues.md).
+9. Comptes nominatifs sur invitation (jeton Supabase vérifié côté serveur) ; quatre rôles contrôlés côté serveur ; budget API réservé avant chaque appel payant, suspension à 100 %.
+10. Avant production : MFA de l'administration, collecte sortie du budget API (chaque exécution reste comptée comme un appel payant), transactions et sauvegardes, planification de la collecte, validation du flux Google News, recette R01 à R13. Liste complète dans [Anomalies connues](11-anomalies-connues.md).
 
 ## Références
 
