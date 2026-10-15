@@ -221,6 +221,58 @@ export function parseFeed(xml: string, fallbackOutlet: Outlet): RawItem[] {
 }
 
 /**
+ * Recherche Perplexity (via la passerelle) : résultats web récents sur l'entreprise.
+ * Silencieuse en cas d'absence de clé ou d'erreur : la collecte Google News continue.
+ */
+async function perplexitySearch(company: CompanyRecord): Promise<RawItem[]> {
+  const lovableKey = process.env["LOVABLE_API_KEY"];
+  const pplxKey = process.env["PERPLEXITY_API_KEY"];
+  if (!lovableKey || !pplxKey || process.env["VITEST"]) return [];
+  try {
+    const res = await fetch("https://connector-gateway.lovable.dev/perplexity/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lovableKey}`,
+        "X-Connection-Api-Key": pplxKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: `"${company.name}" Grenoble actualité entreprise`,
+        max_results: 5,
+        search_recency_filter: "month",
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      console.error(`Perplexity search failed [${res.status}]: ${await res.text()}`);
+      return [];
+    }
+    const data = (await res.json()) as {
+      results?: { title?: string; url?: string; snippet?: string; date?: string }[];
+    };
+    const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+    return (data.results ?? [])
+      .filter((r) => r.url && r.title)
+      .filter((r) => names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n)))
+      .map((r) => {
+        const host = hostOf(r.url!);
+        const d = r.date ? new Date(r.date) : null;
+        return {
+          url: r.url!,
+          title: r.title!,
+          html: `<article><h1>${r.title}</h1><p>${r.snippet ?? ""}</p></article>`,
+          outlet: { name: host, domain: host, brand: brandFor(host) },
+          publishedAt: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
+          eventDate: null,
+        };
+      });
+  } catch (e) {
+    console.error("Perplexity search error", e);
+    return [];
+  }
+}
+
+/**
  * Collecte réelle : lit le flux RSS/Atom de la source (ou le découvre depuis la page HTML),
  * et interroge Google News pour les sources « recherche web » / « actualités ».
  */
@@ -250,6 +302,11 @@ export class RealCollector implements Collector {
         text = await this.fetchText(new URL(href, url).toString());
       }
       let items = parseFeed(text, fallback);
+      if (useGoogle && company) {
+        const extra = await perplexitySearch(company);
+        const seen = new Set(items.map((i) => i.url));
+        items = [...extra.filter((i) => !seen.has(i.url)), ...items];
+      }
       if (company && !useGoogle) {
         // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
         // sauf si le flux est celui de l'entreprise elle-même.
