@@ -20,7 +20,6 @@ import type {
   Source,
   User as UserDto,
   WordPressRemoteStatus,
-  WordPressSettings,
 } from "@/lib/api/types";
 
 /**
@@ -71,6 +70,12 @@ export interface WordPressLink {
    * simulé ou antérieur à l'intégration réelle.
    */
   site?: string | null;
+  /**
+   * `modified_gmt` renvoyé par WordPress après le dernier ENVOI de KORA (interne, jamais exposé) ;
+   * absent pour un lien antérieur à ce suivi. Une actualisation ne le change pas : sinon une
+   * retouche faite dans WordPress serait « blanchie » et le renvoi suivant l'écraserait sans alerte.
+   */
+  sentModifiedGmt?: string | null;
 }
 
 export type ArticleRecord = Omit<Article, "wordpress"> & {
@@ -138,9 +143,18 @@ export interface Settings {
   notifiedAlerts: string[];
   /** Volume de fichiers client hors imports (Go). */
   storageBaseGb: number;
-  /** Correspondance des catégories WordPress ; absente des réglages enregistrés avant elle. */
-  wordpress?: WordPressSettings;
+  /**
+   * Ancien emplacement de la correspondance des catégories WordPress, désormais rangée à part
+   * (`Repository.getWordPressSettings`) : lu en secours tant qu'elle n'y figure pas, jamais réécrit.
+   */
+  wordpress?: unknown;
 }
+
+/**
+ * Tentative stockée. `site` (interne, jamais exposé) : site WordPress visé ; absent avant ce
+ * suivi. Une reprise après interruption n'a lieu que sur ce site.
+ */
+export type PublicationRecord = PublicationAttempt & { site?: string | null };
 
 export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt };
 /** Nom sous lequel `repository.ts` type la collection `users`. */

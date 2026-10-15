@@ -1,15 +1,27 @@
 import { UNVERIFIED } from "../adapters/text-model";
 
+const BRACKETS: Record<string, string> = { "[": "&#91;", "]": "&#93;" };
+
 const ESCAPES: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
   ">": "&gt;",
   '"': "&quot;",
   "'": "&#39;",
+  ...BRACKETS,
 };
 
+/**
+ * Échappe aussi les crochets : WordPress exécute les shortcodes du contenu, y compris dans les
+ * attributs entre guillemets (`href`). L'entité se décode en `[` : affichage et URL identiques.
+ */
 export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ESCAPES[c]!);
+  return text.replace(/[&<>"'[\]]/g, (c) => ESCAPES[c]!);
+}
+
+/** Texte brut envoyé tel quel (extrait) : seuls les crochets sont neutralisés. */
+export function neutralizeShortcodes(text: string): string {
+  return text.replace(/[[\]]/g, (c) => BRACKETS[c]!);
 }
 
 /** Entités nommées produites par WordPress (esc_html, wptexturize) et le français courant. */
@@ -97,8 +109,10 @@ function trimUrl(url: string): string {
   return url.slice(0, end);
 }
 
+const MARK = escapeHtml(UNVERIFIED);
+
 function plain(text: string): string {
-  return escapeHtml(text).split(UNVERIFIED).join(`<mark>${UNVERIFIED}</mark>`);
+  return escapeHtml(text).split(MARK).join(`<mark>${MARK}</mark>`);
 }
 
 function inline(text: string): string {
@@ -112,6 +126,26 @@ function inline(text: string): string {
     last = start + url.length;
   }
   return out + plain(text.slice(last));
+}
+
+/**
+ * Jeton propre à l'article, recherché sur WordPress pour reprendre un envoi interrompu. Hors
+ * `[A-Za-z0-9_]`, tout est encodé `%XX` : ni espace ni virgule (la recherche WordPress y coupe
+ * les mots), ni `-` initial (exclusion), ni `--` (kses le réduit dans un commentaire).
+ */
+export function articleToken(articleId: string): string {
+  const safe = [...new TextEncoder().encode(articleId)]
+    .map((b) => {
+      const c = String.fromCharCode(b);
+      return /[A-Za-z0-9_]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
+    })
+    .join("");
+  return `kora:article=${safe}`;
+}
+
+/** Commentaire HTML invisible en fin de contenu ; kses le conserve pour un Contributeur. */
+export function articleMarker(articleId: string): string {
+  return `<!-- ${articleToken(articleId)} -->`;
 }
 
 const LIST_ITEM = /^\s*- (.*)$/;

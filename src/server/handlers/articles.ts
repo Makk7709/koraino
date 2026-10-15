@@ -422,7 +422,7 @@ export const resolveFactCheck: Handler = async (ctx) => {
 export const publishArticle: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getArticleOr404(ctx, ctx.params["id"]!);
-  const { channel } = parse(schemas.publish, ctx.body);
+  const { channel, overwriteRemoteChanges } = parse(schemas.publish, ctx.body);
   const version = rec.currentVersion;
   const key = idempotencyKey(rec.id, version, channel);
   const at = ctx.now.toISOString();
@@ -493,7 +493,9 @@ export const publishArticle: Handler = async (ctx) => {
     throw unprocessable(check.code, check.message, { attempt: toPublication(attempt) });
   }
 
-  if (channel === "wordpress") return publishWordPress(ctx, rec);
+  if (channel === "wordpress") {
+    return publishWordPress(ctx, rec, { overwriteRemoteChanges: overwriteRemoteChanges === true });
+  }
 
   const attempt: PublicationAttempt = {
     id: ctx.repo.nextId("pub"),

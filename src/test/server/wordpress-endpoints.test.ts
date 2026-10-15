@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ApiErrorBody,
+  Article,
   ArticleDetail,
   AuditEvent,
   Dashboard,
@@ -209,12 +210,17 @@ describe("PUT /wordpress/settings", () => {
         Innovation: "",
         "Distinction & prix": "%c3%a9conomie",
         Recherche: null,
+        Brevet: "propriete_intellectuelle",
       },
       defaultCategory: "",
     });
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual({
-      categoryMap: { "Levée de fonds": "financement", "Distinction & prix": "%c3%a9conomie" },
+      categoryMap: {
+        "Levée de fonds": "financement",
+        "Distinction & prix": "%c3%a9conomie",
+        Brevet: "propriete_intellectuelle",
+      },
       defaultCategory: null,
     });
     const status = await call<WordPressStatus>("GET", "/wordpress", { user: READER });
@@ -229,6 +235,7 @@ describe("PUT /wordpress/settings", () => {
     [{ categoryMap: { Innovation: "Innovation" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "%C3%A9conomie" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "a b" } }, "Slug WordPress attendu"],
+    [{ categoryMap: { Innovation: "a.b" } }, "Slug WordPress attendu"],
     [{ categoryMap: { Innovation: "a".repeat(201) } }, "trop long"],
     [{ categoryMap: {}, defaultCategory: "Défaut" }, "Slug WordPress attendu"],
     [{ categoryMap: [] }, ""],
@@ -250,7 +257,7 @@ describe("PUT /wordpress/settings", () => {
     });
     expect(noCsrf.status).toBe(403);
     expect(noCsrf.body.error.code).toBe("csrf_header_missing");
-    expect((await repo.getSettings()).wordpress).toEqual({
+    expect(await repo.getWordPressSettings()).toEqual({
       categoryMap: {},
       defaultCategory: null,
     });
@@ -363,6 +370,24 @@ describe("POST /articles/:id/wordpress/refresh", () => {
     });
   });
 
+  it("lien « supprimé » relu : un brouillon restauré redevient « brouillon » ; 404 passager sans effet", async () => {
+    const art = await publishedDraft();
+    await publish(art.id);
+    const saved = { ...wp.server.posts.get(100)! };
+    wp.server.posts.delete(100);
+    expect((await refresh(art.id)).body.wordpress.status).toBe("supprime");
+    wp.server.posts.set(100, saved);
+    const restored = await refresh(art.id);
+    expect(restored.status).toBe(200);
+    expect(restored.body.wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+
+    wp.server.fail(() => true, jsonResponse({ code: "rest_no_route" }, 404));
+    const transient = await refresh(art.id);
+    expect(transient.status).toBe(502);
+    expect(transient.body.error.code).toBe("wordpress_invalid");
+    expect((await repo.articles.get(art.id))!.wordpress.status).toBe("brouillon");
+  });
+
   it("le tableau de bord compte les brouillons en attente de relecture", async () => {
     const kpi = async () =>
       (await call<Dashboard>("GET", "/dashboard")).body.kpis.find(
@@ -388,6 +413,44 @@ describe("POST /articles/:id/wordpress/refresh", () => {
     }
     expect(wp.server.requests).toHaveLength(0);
     expect((await refresh("art_inconnu")).status).toBe(404);
+  });
+
+  it("mode réel : lien d'édition nul exactement quand l'actualisation est refusée", async () => {
+    const own = await publishedDraft();
+    await publish(own.id);
+    const unlinked = (await repo.articles.list()).filter((a) => a.wordpress.remoteId === null);
+    expect(unlinked.length).toBeGreaterThanOrEqual(2);
+    for (const [rec, site] of [
+      [unlinked[0]!, "https://preprod.example.test"],
+      [unlinked[1]!, undefined],
+    ] as const) {
+      await repo.articles.update({
+        ...rec,
+        wordpress: {
+          remoteId: "100",
+          ...(site ? { site } : {}),
+          status: "brouillon",
+          lastSyncAt: rec.updatedAt,
+        },
+      });
+    }
+
+    const list = await call<Article[]>("GET", "/articles", { user: VALIDATOR });
+    const linked = list.body.filter((a) => a.wordpress.remoteId !== null);
+    expect(linked.some((a) => a.wordpress.remoteId!.startsWith("wp-"))).toBe(true);
+    for (const article of linked) {
+      const calls = wp.server.requests.length;
+      const res = await refresh(article.id);
+      if (article.id === own.id) {
+        expect(article.wordpress.editUrl).toBe(`${WP_SITE}/wp-admin/post.php?post=100&action=edit`);
+        expect(res.status).toBe(200);
+      } else {
+        expect(article.wordpress.editUrl).toBeNull();
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe("wordpress_no_draft");
+        expect(wp.server.requests).toHaveLength(calls);
+      }
+    }
   });
 
   it("erreur du site : 502, article inchangé", async () => {

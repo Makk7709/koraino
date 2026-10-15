@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { WordPressCategory } from "@/lib/api/types";
 import {
   SimulatedWordPress,
+  type DraftStatus,
   type RemotePost,
   type RemotePostStatus,
   type WordPressAccount,
   type WordPressClient,
   type WordPressDraftPayload,
 } from "../adapters/channels";
+import { now } from "../clock";
 import { readWordPressConfig, type WordPressConfig, type WordPressCredentials } from "./config";
 import { notConfigured, WordPressError } from "./errors";
 import { decodeEntities, htmlToText, textKey } from "./html";
@@ -16,8 +18,11 @@ export const WORDPRESS_TIMEOUT_MS = 15_000;
 export const WORDPRESS_USER_AGENT = "KORA-Newsroom/1.0";
 const PER_PAGE = 100;
 const MAX_CATEGORY_PAGES = 50;
-const MAX_DRAFT_PAGES = 5;
+const DRAFT_SEARCH_SIZE = 20;
 const TAG_LOOKUPS_IN_PARALLEL = 5;
+/** Recherche d'étiquette par nom quand le slug calculé ne correspond pas : 3 pages au plus. */
+const MAX_TAG_SEARCH_PAGES = 3;
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export type WordPressFetch = (input: URL, init: RequestInit) => Promise<Response>;
 
@@ -50,6 +55,7 @@ const postSchema = z.object({
   date_gmt: z.string().nullable().optional(),
   modified_gmt: z.string().nullable().optional(),
   link: z.string().nullable().optional(),
+  content: rendered.optional(),
 });
 const userSchema = z.object({
   id: z.number().int().positive(),
@@ -75,10 +81,16 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** Extrait d'une réponse sur une ligne, borné (journaux et messages). */
+/** Extrait sur une ligne, borné. Ne pas appeler directement sur un texte du site : `#excerpt` masque d'abord. */
 function excerpt(text: string, max = 300): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** Le secret, même découpé par des espaces ou des retours à la ligne (« abcd efgh … »). */
+function secretPattern(secret: string): RegExp {
+  const chars = [...secret].map((c) => c.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+  return new RegExp(chars.join("\\s*"), "g");
 }
 
 function describe(error: unknown): string {
@@ -103,19 +115,6 @@ function retryDelay(headers: Headers): string {
   return seconds < 120 ? `dans ${Math.ceil(seconds)} s` : `dans ${Math.ceil(seconds / 60)} min`;
 }
 
-/**
- * Mots du titre utilisables par la recherche WordPress : un mot commençant par « - » serait une
- * exclusion, et `& < > "` sont stockés encodés (comparaison LIKE impossible).
- */
-function searchTerms(title: string): string {
-  return title
-    .split(/\s+/)
-    .map((w) => w.replace(/^-+/, ""))
-    .filter((w) => w.length > 1 && !/[&<>"]/.test(w))
-    .slice(0, 12)
-    .join(" ");
-}
-
 /** Recherche d'étiquette : nom entier, ou son plus long fragment sans caractère encodé. */
 function tagSearch(name: string): string {
   if (!/[&<>"']/.test(name)) return name.trim();
@@ -124,15 +123,48 @@ function tagSearch(name: string): string {
     .reduce((best, part) => (part.length > best.length ? part : best), "");
 }
 
+/** Approximation de `sanitize_title` de WordPress (« Isère » → `isere`, « R&D » → `rd`). */
+function wordpressSlug(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/œ/g, "oe")
+    .replace(/æ/g, "ae")
+    .replace(/\./g, "-")
+    .replace(/[^a-z0-9 _-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 /** Réponse 2xx inexploitable : après un envoi, WordPress a peut-être enregistré le contenu. */
-function unreadable(status: number, method: "GET" | "POST"): WordPressError {
+function unreadable(
+  status: number,
+  method: "GET" | "POST",
+  remoteId: string | null = null,
+): WordPressError {
   return new WordPressError(
     "wordpress_invalid",
     method === "POST"
-      ? `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu a peut-être été enregistré.`
+      ? remoteId
+        ? `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu n° ${remoteId} a pourtant été enregistré.`
+        : `Réponse de WordPress illisible après l'envoi (HTTP ${status}) : le contenu a peut-être été enregistré.`
       : `Réponse de WordPress illisible (HTTP ${status}) : WORDPRESS_URL désigne-t-elle bien un site WordPress ?`,
     true,
+    remoteId,
   );
+}
+
+/** Identifiant entier positif d'une réponse, même incomplète par ailleurs. */
+function idOf(data: unknown): string | null {
+  const id = (data as { id?: unknown } | null)?.id;
+  return typeof id === "number" && Number.isInteger(id) && id > 0 ? String(id) : null;
+}
+
+function copyAccount(account: WordPressAccount): WordPressAccount {
+  return { ...account, roles: account.roles && [...account.roles] };
 }
 
 function base64(text: string): string {
@@ -158,17 +190,21 @@ export class RestWordPress implements WordPressClient {
   readonly site: string;
   // Champs privés natifs : absents de toute sérialisation (JSON, console, instantané).
   readonly #authorization: string;
-  readonly #secrets: string[];
+  readonly #secrets: RegExp[];
   readonly #fetch: WordPressFetch;
   readonly #timeoutMs: number;
   readonly #log: (line: string) => void;
   #accountId: Promise<number> | null = null;
+  /** Dernier compte lu (instance = un site, un identifiant) : relu à chaque `whoAmI` sans `maxAgeMs`. */
+  #account: { account: WordPressAccount; at: number } | null = null;
 
   constructor(credentials: WordPressCredentials, options: RestWordPressOptions = {}) {
     this.site = credentials.site;
     const token = base64(`${credentials.username}:${credentials.appPassword}`);
     this.#authorization = `Basic ${token}`;
-    this.#secrets = [credentials.appPassword, token].filter((s) => s.length >= 4);
+    this.#secrets = [credentials.appPassword, token]
+      .filter((s) => s.length >= 4)
+      .map(secretPattern);
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#timeoutMs = options.timeoutMs ?? WORDPRESS_TIMEOUT_MS;
     const log = options.log ?? ((line: string) => console.error(line));
@@ -185,18 +221,24 @@ export class RestWordPress implements WordPressClient {
       : null;
   }
 
-  async whoAmI(): Promise<WordPressAccount> {
+  async whoAmI(options: { maxAgeMs?: number } = {}): Promise<WordPressAccount> {
+    const cached = this.#account;
+    const age = cached ? now().getTime() - cached.at : Number.POSITIVE_INFINITY;
+    if (cached && options.maxAgeMs !== undefined && age >= 0 && age <= options.maxAgeMs) {
+      return copyAccount(cached.account);
+    }
     const { status, data } = await this.#send("GET", "/users/me", { context: "edit" });
     const user = userSchema.safeParse(data);
     if (!user.success) throw this.#unreadable("GET /users/me", status, "GET");
     const caps = user.data.capabilities;
     const account: WordPressAccount = {
       id: user.data.id,
-      name: htmlToText(user.data.name),
+      name: this.#redact(htmlToText(user.data.name)),
       roles: user.data.roles ?? null,
       canPublish: caps ? caps["publish_posts"] === true : null,
     };
     this.#accountId = Promise.resolve(account.id);
+    this.#account = { account: copyAccount(account), at: now().getTime() };
     return account;
   }
 
@@ -204,11 +246,11 @@ export class RestWordPress implements WordPressClient {
     if (!/^\d+$/.test(remoteId)) return null;
     const path = `/posts/${remoteId}`;
     const edit = await this.#send("GET", path, { context: "edit" }, undefined, [403, 404, 410]);
-    if (edit.status === 404 || edit.status === 410) return null;
+    if (this.#gone(edit, remoteId)) return null;
     if (edit.status !== 403) return this.#post(edit, "GET");
     // Contenu publié ou programmé : le Contributeur ne peut plus l'éditer, mais peut le lire.
     const view = await this.#send("GET", path, {}, undefined, [401, 403, 404, 410]);
-    if (view.status === 404 || view.status === 410) return null;
+    if (this.#gone(view, remoteId)) return null;
     if (view.status === 401 || view.status === 403) {
       throw new WordPressError(
         "wordpress_forbidden",
@@ -218,36 +260,54 @@ export class RestWordPress implements WordPressClient {
     return this.#post(view, "GET");
   }
 
-  async findOwnDrafts(title: string, since: string) {
+  /**
+   * Contenu supprimé : 410, ou 404 `rest_post_invalid_id`. Tout autre 404 (`rest_no_route` d'une
+   * API filtrée ou en panne passagère) est une erreur : en conclure une suppression créerait un doublon.
+   */
+  #gone(reply: Reply, remoteId: string): boolean {
+    if (reply.status === 410) return true;
+    if (reply.status !== 404) return false;
+    const code = errorSchema.safeParse(reply.data).data?.code ?? "";
+    if (code === "rest_post_invalid_id") return true;
+    this.#log(
+      `[wordpress] GET /posts/${remoteId} → HTTP 404 ${this.#excerpt(code, 60) || "sans code"}`,
+    );
+    throw new WordPressError(
+      "wordpress_invalid",
+      `WordPress répond « introuvable » pour le contenu n° ${remoteId} sans indiquer qu'il a été supprimé (HTTP 404${code ? ` ${this.#excerpt(code, 60)}` : ""}) : API REST filtrée ou indisponible ? Réessayez plus tard.`,
+    );
+  }
+
+  async findOwnDrafts(search: string, since: string, until: string) {
     const author = await this.#ownId();
-    const key = textKey(title);
     const from = Date.parse(since);
-    const search = searchTerms(title);
-    const posts = await this.#pages(
-      "/posts",
-      {
-        context: "edit",
-        status: "draft,pending",
-        author: String(author),
-        orderby: "modified",
-        order: "desc",
-        ...(search ? { search } : {}),
-      },
-      MAX_DRAFT_PAGES,
-      (item, status) => this.#post({ status, data: item }, "GET"),
-    );
-    const latest = (p: RemotePost) =>
-      Math.max(Date.parse(p.modifiedGmt ?? "") || 0, Date.parse(p.dateGmt ?? "") || 0);
-    return posts.filter(
-      (p) => p.authorId === author && textKey(p.title) === key && latest(p) >= from,
-    );
+    const to = Date.parse(until);
+    // Jeton unique : quelques résultats au plus (contenus bruts inclus, d'où une seule page courte).
+    const { status, data } = await this.#send("GET", "/posts", {
+      context: "edit",
+      status: "draft,pending",
+      author: String(author),
+      search,
+      orderby: "modified",
+      order: "desc",
+      per_page: String(DRAFT_SEARCH_SIZE),
+      _fields: "id,status,title,author,date_gmt,modified_gmt,link,content",
+    });
+    if (!Array.isArray(data)) throw this.#unreadable("GET /posts", status, "GET");
+    const modified = (p: RemotePost) => Date.parse(p.modifiedGmt ?? p.dateGmt ?? "");
+    return data
+      .map((item) => this.#post({ status, data: item }, "GET"))
+      .filter((p) => p.authorId === author && modified(p) >= from && modified(p) <= to);
   }
 
   async createDraft(input: WordPressDraftPayload) {
-    return this.#post(await this.#send("POST", "/posts", {}, this.#payload(input)), "POST");
+    return this.#post(
+      await this.#send("POST", "/posts", {}, this.#payload(input, "draft")),
+      "POST",
+    );
   }
 
-  async updateDraft(remoteId: string, input: WordPressDraftPayload) {
+  async updateDraft(remoteId: string, input: WordPressDraftPayload, status: DraftStatus = "draft") {
     if (!/^\d+$/.test(remoteId)) {
       throw new WordPressError(
         "wordpress_invalid",
@@ -255,7 +315,7 @@ export class RestWordPress implements WordPressClient {
       );
     }
     return this.#post(
-      await this.#send("POST", `/posts/${remoteId}`, {}, this.#payload(input)),
+      await this.#send("POST", `/posts/${remoteId}`, {}, this.#payload(input, status)),
       "POST",
     );
   }
@@ -269,30 +329,62 @@ export class RestWordPress implements WordPressClient {
     );
   }
 
+  /**
+   * Étiquettes existantes de même nom : d'abord par slug exact (une requête pour toutes), puis, pour
+   * les autres, par recherche paginée (la recherche WordPress est un « contient » trié par nom :
+   * l'étiquette exacte peut être au-delà de la première page).
+   */
   async findTags(names: string[]) {
     const unique = [...new Map(names.map((n) => [textKey(n), n.trim()])).values()].filter(Boolean);
-    const ids: number[] = [];
-    const missing: string[] = [];
-    for (let i = 0; i < unique.length; i += TAG_LOOKUPS_IN_PARALLEL) {
-      const batch = unique.slice(i, i + TAG_LOOKUPS_IN_PARALLEL);
-      const found = await Promise.all(batch.map((name) => this.#findTag(name)));
-      found.forEach((id, j) => (id === null ? missing.push(batch[j]!) : ids.push(id)));
+    const found = await this.#tagsBySlug(unique);
+    const rest = unique.filter((name) => !found.has(textKey(name)));
+    for (let i = 0; i < rest.length; i += TAG_LOOKUPS_IN_PARALLEL) {
+      const batch = rest.slice(i, i + TAG_LOOKUPS_IN_PARALLEL);
+      const ids = await Promise.all(batch.map((name) => this.#searchTag(name)));
+      ids.forEach((id, j) => id !== null && found.set(textKey(batch[j]!), id));
     }
+    const ids = unique.flatMap((name) => found.get(textKey(name)) ?? []);
+    const missing = unique.filter((name) => !found.has(textKey(name)));
     return { ids: [...new Set(ids)], missing };
   }
 
-  async #findTag(name: string): Promise<number | null> {
-    const search = tagSearch(name);
-    if (!search) return null;
+  /** Slug calculé comme WordPress : un raccourci seulement, le nom doit aussi correspondre. */
+  async #tagsBySlug(names: string[]): Promise<Map<string, number>> {
+    const found = new Map<string, number>();
+    const slugs = [...new Set(names.map(wordpressSlug).filter(Boolean))];
+    if (!slugs.length) return found;
     const { status, data } = await this.#send("GET", "/tags", {
-      search,
+      slug: slugs.join(","),
       per_page: String(PER_PAGE),
       _fields: "id,name,slug",
     });
     if (!Array.isArray(data)) throw this.#unreadable("GET /tags", status, "GET");
+    const wanted = new Set(names.map(textKey));
+    for (const term of data.map((t) => this.#term(t, status))) {
+      const key = textKey(term.name);
+      if (wanted.has(key)) found.set(key, term.id);
+    }
+    return found;
+  }
+
+  async #searchTag(name: string): Promise<number | null> {
+    const search = tagSearch(name);
+    if (!search) return null;
     const key = textKey(name);
-    const match = data.map((t) => this.#term(t, status)).find((t) => textKey(t.name) === key);
-    return match?.id ?? null;
+    for (let page = 1; page <= MAX_TAG_SEARCH_PAGES; page++) {
+      const { status, headers, data } = await this.#send("GET", "/tags", {
+        search,
+        per_page: String(PER_PAGE),
+        page: String(page),
+        _fields: "id,name,slug",
+      });
+      if (!Array.isArray(data)) throw this.#unreadable("GET /tags", status, "GET");
+      const match = data.map((t) => this.#term(t, status)).find((t) => textKey(t.name) === key);
+      if (match) return match.id;
+      const total = Number(headers.get("x-wp-totalpages"));
+      if (data.length < PER_PAGE || (total > 0 && page >= total)) break;
+    }
+    return null;
   }
 
   #ownId(): Promise<number> {
@@ -306,27 +398,44 @@ export class RestWordPress implements WordPressClient {
     return this.#accountId;
   }
 
-  #payload(input: WordPressDraftPayload) {
+  #payload(input: WordPressDraftPayload, status: DraftStatus) {
     return {
       title: input.title,
       content: input.content,
       excerpt: input.excerpt,
-      status: "draft",
+      // Garde-fou à l'exécution : jamais un statut public, quoi qu'en dise l'appelant.
+      status: status === "pending" ? "pending" : "draft",
       ...(input.categories.length ? { categories: input.categories } : {}),
       ...(input.tags.length ? { tags: input.tags } : {}),
     };
   }
 
+  /** Après un 2xx d'écriture, jamais « rien n'a été créé » : l'identifiant reçu est rendu à l'appelant. */
   #post(reply: Pick<Reply, "status" | "data">, method: "GET" | "POST"): RemotePost {
+    const write = method === "POST";
     const parsed = postSchema.safeParse(reply.data);
-    if (!parsed.success) throw this.#unreadable(`${method} /posts`, reply.status, method);
+    if (!parsed.success) {
+      const id = write ? idOf(reply.data) : null;
+      this.#log(
+        `[wordpress] ${method} /posts → HTTP ${reply.status} : forme de réponse inattendue`,
+      );
+      throw unreadable(reply.status, method, id);
+    }
     const p = parsed.data;
     const status = POST_STATUSES.find((s) => s === p.status);
     if (!status) {
-      throw new WordPressError(
-        "wordpress_invalid",
-        `WordPress indique un statut inattendu (« ${excerpt(p.status, 40)} ») pour le contenu n° ${p.id} : KORA n'y touche pas.`,
-      );
+      const found = `statut inattendu (« ${this.#excerpt(p.status, 40)} »)`;
+      throw write
+        ? new WordPressError(
+            "wordpress_invalid",
+            `WordPress a enregistré le contenu n° ${p.id} avec un ${found} : KORA ne le modifie plus tant qu'il n'a pas un statut connu (brouillon, en attente de relecture). Vérifiez-le dans WordPress.`,
+            true,
+            String(p.id),
+          )
+        : new WordPressError(
+            "wordpress_invalid",
+            `WordPress indique un ${found} pour le contenu n° ${p.id} : KORA n'y touche pas.`,
+          );
     }
     const title =
       typeof p.title === "string"
@@ -337,11 +446,12 @@ export class RestWordPress implements WordPressClient {
     return {
       id: String(p.id),
       status,
-      title,
+      title: this.#redact(title),
       authorId: p.author ?? null,
       dateGmt: gmt(p.date_gmt),
       modifiedGmt: gmt(p.modified_gmt),
       link: p.link ?? null,
+      content: typeof p.content === "object" ? (p.content.raw ?? null) : null,
     };
   }
 
@@ -351,7 +461,7 @@ export class RestWordPress implements WordPressClient {
     return {
       id: term.data.id,
       slug: term.data.slug,
-      name: htmlToText(term.data.name),
+      name: this.#redact(htmlToText(term.data.name)),
       parent: term.data.parent ?? 0,
     };
   }
@@ -406,8 +516,9 @@ export class RestWordPress implements WordPressClient {
         redirect: "manual",
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
-      text = await res.text();
+      text = await this.#read(res, where, method);
     } catch (error) {
+      if (error instanceof WordPressError) throw error;
       const timeout = isTimeout(error);
       this.#log(`${where} : ${timeout ? "délai dépassé" : "échec réseau"} (${describe(error)})`);
       throw new WordPressError(
@@ -430,15 +541,51 @@ export class RestWordPress implements WordPressClient {
       if (!html && allow.includes(res.status)) {
         return { status: res.status, headers: res.headers, data: parseJson(text) };
       }
-      this.#log(`${where} → HTTP ${res.status} : ${excerpt(text) || "(corps vide)"}`);
+      this.#log(`${where} → HTTP ${res.status} : ${this.#excerpt(text) || "(corps vide)"}`);
       throw this.#failure(res.status, text, html, res.headers);
     }
     const data = html ? undefined : parseJson(text);
     if (data === undefined) {
-      this.#log(`${where} → HTTP ${res.status} illisible : ${excerpt(text) || "(corps vide)"}`);
+      this.#log(
+        `${where} → HTTP ${res.status} illisible : ${this.#excerpt(text) || "(corps vide)"}`,
+      );
       throw unreadable(res.status, method);
     }
     return { status: res.status, headers: res.headers, data };
+  }
+
+  /** Corps lu en flux, plafonné : un site compromis ou mal configuré ne doit pas épuiser la mémoire. */
+  async #read(res: Response, where: string, method: "GET" | "POST"): Promise<string> {
+    const tooLarge = () => {
+      this.#log(`${where} → HTTP ${res.status} : réponse de plus de 2 Mo, non lue`);
+      return new WordPressError(
+        "wordpress_invalid",
+        method === "POST"
+          ? "Réponse de WordPress trop volumineuse (plus de 2 Mo) après l'envoi : le contenu a peut-être été enregistré."
+          : "Réponse de WordPress trop volumineuse (plus de 2 Mo) : KORA ne la lit pas. Vérifiez WORDPRESS_URL et les extensions qui modifient l'API REST.",
+        method === "POST",
+      );
+    };
+    if (Number(res.headers.get("content-length") ?? "") > MAX_RESPONSE_BYTES) {
+      await res.body?.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    if (!res.body) return "";
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let size = 0;
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw tooLarge();
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
   }
 
   #unreadable(where: string, status: number, method: "GET" | "POST"): WordPressError {
@@ -448,8 +595,9 @@ export class RestWordPress implements WordPressClient {
 
   #failure(status: number, text: string, html: boolean, headers: Headers): WordPressError {
     const body = errorSchema.safeParse(html ? null : parseJson(text));
-    const message = body.success && body.data.message ? htmlToText(body.data.message) : "";
-    const detail = message ? ` : « ${this.#redact(excerpt(message, 200))} »` : "";
+    const message =
+      body.success && body.data.message ? htmlToText(this.#redact(body.data.message)) : "";
+    const detail = message ? ` : « ${this.#excerpt(message, 200)} »` : "";
     const blocked = `Le site a bloqué la requête de KORA (HTTP ${status}, page HTML) : un pare-feu ou une protection anti-robots (Cloudflare) filtre l'accès à l'API. Demandez d'autoriser KORA (User-Agent ${WORDPRESS_USER_AGENT}) sur /wp-json/.`;
     if (status === 401) {
       return new WordPressError(
@@ -507,10 +655,16 @@ export class RestWordPress implements WordPressClient {
     );
   }
 
+  /** Mot de passe et jeton Basic (avec ou sans espaces), et tout en-tête Basic. */
   #redact(text: string): string {
     let out = text;
-    for (const secret of this.#secrets) out = out.split(secret).join("[masqué]");
+    for (const secret of this.#secrets) out = out.replace(secret, "[masqué]");
     return out.replace(/Basic\s+[A-Za-z0-9+/=]{8,}/gi, "Basic [masqué]");
+  }
+
+  /** Masque AVANT de tronquer : un secret coupé par la limite ne serait plus reconnu. */
+  #excerpt(text: string, max = 300): string {
+    return excerpt(this.#redact(text), max);
   }
 }
 
@@ -537,19 +691,23 @@ export class UnconfiguredWordPress implements WordPressClient {
     throw notConfigured(this.missing, this.invalidUrl);
   }
 
-  async whoAmI(): Promise<WordPressAccount> {
+  async whoAmI(_options?: { maxAgeMs?: number }): Promise<WordPressAccount> {
     return this.fail();
   }
   async getPost(_remoteId: string): Promise<RemotePost | null> {
     return this.fail();
   }
-  async findOwnDrafts(_title: string, _since: string): Promise<RemotePost[]> {
+  async findOwnDrafts(_search: string, _since: string, _until: string): Promise<RemotePost[]> {
     return this.fail();
   }
   async createDraft(_input: WordPressDraftPayload): Promise<RemotePost> {
     return this.fail();
   }
-  async updateDraft(_remoteId: string, _input: WordPressDraftPayload): Promise<RemotePost> {
+  async updateDraft(
+    _remoteId: string,
+    _input: WordPressDraftPayload,
+    _status?: DraftStatus,
+  ): Promise<RemotePost> {
     return this.fail();
   }
   async listCategories(): Promise<WordPressCategory[]> {

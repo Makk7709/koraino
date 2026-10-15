@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { UNVERIFIED } from "@/server/adapters/text-model";
-import { decodeEntities, textKey, toWordPressHtml } from "@/server/wordpress/html";
+import {
+  articleMarker,
+  articleToken,
+  decodeEntities,
+  htmlToText,
+  neutralizeShortcodes,
+  textKey,
+  toWordPressHtml,
+} from "@/server/wordpress/html";
 
 describe("toWordPressHtml", () => {
   it("chapô en gras, paragraphes, retours simples et texte échappé", () => {
@@ -55,12 +63,26 @@ describe("toWordPressHtml", () => {
 
   it("garde les marqueurs « À vérifier » visibles et surlignés", () => {
     const html = toWordPressHtml(`Chapô ${UNVERIFIED}`, `- Chiffre ${UNVERIFIED}\n\nFin.`);
+    const mark = "<mark>&#91;À vérifier&#93;</mark>";
     expect(html).toBe(
       [
-        `<p><strong>Chapô <mark>${UNVERIFIED}</mark></strong></p>`,
-        `<ul><li>Chiffre <mark>${UNVERIFIED}</mark></li></ul>`,
+        `<p><strong>Chapô ${mark}</strong></p>`,
+        `<ul><li>Chiffre ${mark}</li></ul>`,
         "<p>Fin.</p>",
       ].join("\n"),
+    );
+    expect(htmlToText(html)).toContain(`Chapô ${UNVERIFIED} Chiffre ${UNVERIFIED}`);
+  });
+
+  it("neutralise les shortcodes (texte, liens, extrait) sans changer l'affichage", () => {
+    const chapo = '[gallery ids="1,2"] Annonce';
+    const body = "Voir [embed]https://exemple.fr/v[/embed] et https://exemple.fr/p?a[]=1&b=[x]";
+    const html = toWordPressHtml(chapo, body);
+    expect(html).not.toMatch(/[[\]]/);
+    expect(html).toContain('<a href="https://exemple.fr/p?a&#91;&#93;=1&amp;b=&#91;x&#93;">');
+    expect(decodeEntities(html.replace(/<[^>]*>/g, ""))).toBe(`${chapo}\n${body}`);
+    expect(neutralizeShortcodes("[caption]Légende[/caption]")).toBe(
+      "&#91;caption&#93;Légende&#91;/caption&#93;",
     );
   });
 
@@ -68,6 +90,14 @@ describe("toWordPressHtml", () => {
     expect(toWordPressHtml("  ", "Un\r\nDeux\r\n\r\n   \r\n\r\nTrois")).toBe(
       "<p>Un<br>Deux</p>\n<p>Trois</p>",
     );
+  });
+});
+
+describe("marqueur d'article", () => {
+  it("jeton sans espace, virgule, tiret ni accent ; commentaire HTML invisible", () => {
+    expect(articleToken("art_n1042")).toBe("kora:article=art_n1042");
+    expect(articleToken("-a--b c,é")).toBe("kora:article=%2Da%2D%2Db%20c%2C%C3%A9");
+    expect(articleMarker("art_n1042")).toBe("<!-- kora:article=art_n1042 -->");
   });
 });
 

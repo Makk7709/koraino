@@ -5,12 +5,18 @@ import type {
   ArticleDetail,
   AuditEvent,
   PublicationAttempt,
+  WordPressCheck,
 } from "@/lib/api/types";
 import { resetAdapters } from "@/server/adapters";
+import { setClock } from "@/server/clock";
+import { idempotencyKey } from "@/server/domain/workflow";
+import type { PublicationRecord } from "@/server/store/records";
 import type { Repository } from "@/server/store/repository";
-import { call, setup, teardown, USERS } from "./helpers";
+import { call, NOW, setup, teardown, USERS } from "./helpers";
 import {
   jsonResponse,
+  KORA_ACCOUNT,
+  leaksSecret,
   OTHER_ACCOUNT,
   useFakeWordPress,
   WP_SITE,
@@ -34,11 +40,13 @@ afterEach(() => {
 type Reply = PublicationAttempt & ApiErrorBody;
 
 const isWrite = (r: Recorded) => r.method === "POST";
+const isDraftSearch = (r: Recorded) =>
+  r.method === "GET" && r.url.pathname.endsWith("/posts") && r.url.searchParams.has("search");
 const editUrl = (id: string | number) => `${WP_SITE}/wp-admin/post.php?post=${id}&action=edit`;
 
-async function approvedArticle(): Promise<ArticleDetail> {
+async function approvedArticle(signalId = "sig_verkor"): Promise<ArticleDetail> {
   const created = await call<ArticleDetail>("POST", "/articles", {
-    body: { signalId: "sig_verkor" },
+    body: { signalId },
     user: EDITOR,
   });
   expect(created.status).toBe(201);
@@ -64,6 +72,14 @@ async function approveNewVersion(id: string, title = "Verkor et Renault : versio
   });
   expect(approved.body.status).toBe("approuve");
   return approved.body;
+}
+
+/** Deux articles distincts (signaux différents) au même titre. */
+async function sameTitlePair() {
+  const a = await approvedArticle();
+  const b = await approvedArticle("sig_wattpark");
+  await approveNewVersion(b.id, a.title);
+  return { a, b };
 }
 
 const publish = (id: string, user: string = VALIDATOR) =>
@@ -132,6 +148,29 @@ describe("envoi d'un brouillon WordPress réel", () => {
     expect(audit.body.map((e) => e.action)).toContain("publication.success");
   });
 
+  it("shortcodes neutralisés dans le contenu et l'extrait, titre laissé intact", async () => {
+    const art = await approvedArticle();
+    const edited = await call<ArticleDetail>("POST", `/articles/${art.id}/versions`, {
+      body: {
+        title: "[Exclusif] Verkor",
+        chapo: "[gallery ids=1] Chapô",
+        body: "Corps [À vérifier] [embed]https://exemple.fr/v[/embed]",
+        excerpt: "Extrait [contact-form-7 id=3]",
+      },
+      user: EDITOR,
+    });
+    await call("POST", `/articles/${art.id}/approve`, {
+      body: { channel: "wordpress", version: edited.body.currentVersion },
+      user: VALIDATOR,
+    });
+    expect((await publish(art.id)).status).toBe(201);
+    const body = wp.server.writes()[0]!.body!;
+    expect(body["title"]).toBe("[Exclusif] Verkor");
+    expect(body["excerpt"]).toBe("Extrait &#91;contact-form-7 id=3&#93;");
+    expect(String(body["content"])).not.toMatch(/[[\]]/);
+    expect(String(body["content"])).toContain("<mark>&#91;À vérifier&#93;</mark>");
+  });
+
   it("rejoue sans rappeler WordPress tant que le brouillon est le courant", async () => {
     const art = await approvedArticle();
     const first = await publish(art.id);
@@ -158,8 +197,7 @@ describe("envoi d'un brouillon WordPress réel", () => {
     expect(update!.body).toMatchObject({
       title: "Verkor et Renault : version relue",
       status: "draft",
-      content:
-        "<p><strong>Chapô relu.</strong></p>\n<p>Corps relu.</p>\n<ul><li>Point clé</li></ul>",
+      content: `<p><strong>Chapô relu.</strong></p>\n<p>Corps relu.</p>\n<ul><li>Point clé</li></ul>\n<!-- kora:article=${art.id} -->`,
     });
     expect(wp.server.posts.size).toBe(1);
     expect(wp.server.posts.get(100)!.title).toBe("Verkor et Renault : version relue");
@@ -228,6 +266,57 @@ describe("envoi d'un brouillon WordPress réel", () => {
       "/wp-json/wp/v2/posts",
       "/wp-json/wp/v2/posts",
     ]);
+  });
+
+  it("404 passager (API filtrée) : envoi refusé, ni « supprimé » ni doublon", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    await approveNewVersion(art.id);
+    wp.server.fail(
+      (r) => r.method === "GET" && r.url.pathname.endsWith("/posts/100"),
+      jsonResponse({ code: "rest_no_route", message: "Aucune route correspondante." }, 404),
+    );
+    const res = await publish(art.id);
+    expect(res.status).toBe(502);
+    expect(res.body.error.code).toBe("wordpress_invalid");
+    expect(errorAttempt(res).status).toBe("echec");
+    expect(wp.server.writes()).toHaveLength(1);
+    expect((await detail(art.id)).wordpress.status).toBe("brouillon");
+    const retry = await publish(art.id);
+    expect(retry.body).toMatchObject({ status: "succes", remoteId: "100" });
+    expect(wp.server.posts.size).toBe(1);
+  });
+
+  it("lien « supprimé » : l'ancien brouillon est relu, restauré il est mis à jour sans doublon", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const saved = { ...wp.server.posts.get(100)! };
+    wp.server.posts.delete(100);
+    const gone = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(gone.body.wordpress.status).toBe("supprime");
+    // Restauré depuis la corbeille (ou 404 passager à l'actualisation) : il existe toujours.
+    wp.server.posts.set(100, saved);
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ remoteId: "100", version: 2 });
+    expect(res.body.message).toContain("mis à jour (version 2)");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress.status).toBe("brouillon");
+  });
+
+  it("contenu en attente de relecture : la mise à jour le laisse en attente", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    wp.server.posts.get(100)!.status = "pending";
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(wp.server.writes()[1]!.body).toMatchObject({ status: "pending" });
+    expect(wp.server.posts.get(100)!.status).toBe("pending");
+    expect((await detail(art.id)).wordpress.status).toBe("en_attente");
   });
 
   it("brouillon devenu inaccessible (autre auteur) : jamais modifié, nouveau brouillon", async () => {
@@ -311,6 +400,154 @@ describe("envoi d'un brouillon WordPress réel", () => {
   });
 });
 
+describe("retouches faites dans WordPress depuis le dernier envoi", () => {
+  const REMOTE_MODIFIED =
+    "Le brouillon a été modifié dans WordPress depuis le dernier envoi de KORA. Reprenez ces retouches dans KORA, ou confirmez l'écrasement.";
+  const later = (minutes: number) =>
+    new Date(NOW.getTime() + minutes * 60_000).toISOString().slice(0, 19);
+  const retouch = (minutes = 5) =>
+    Object.assign(wp.server.posts.get(100)!, {
+      content: "<p>Texte retravaillé par la rédaction dans WordPress</p>",
+      modified_gmt: later(minutes),
+    });
+  const overwrite = (id: string, value: unknown = true) =>
+    call<Reply>("POST", `/articles/${id}/publish`, {
+      body: { channel: "wordpress", overwriteRemoteChanges: value },
+      user: VALIDATOR,
+    });
+
+  it("409 wordpress_remote_modified, rien n'est écrit ; l'écrasement confirmé passe", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    retouch();
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({
+      code: "wordpress_remote_modified",
+      message: REMOTE_MODIFIED,
+      details: { editUrl: editUrl(100), remoteModifiedAt: `${later(5)}.000Z` },
+    });
+    expect(errorAttempt(res)).toMatchObject({ status: "echec", code: "wordpress_remote_modified" });
+    expect(wp.server.writes()).toHaveLength(1);
+    expect(wp.server.posts.get(100)!.content).toContain("retravaillé");
+
+    expect((await overwrite(art.id, "oui")).status).toBe(400);
+    const confirmed = await overwrite(art.id);
+    expect(confirmed.status).toBe(201);
+    expect(confirmed.body.message).toContain("ont été remplacées (écrasement confirmé)");
+    expect(wp.server.posts.get(100)!.content).toContain("Chapô relu.");
+
+    // La date de référence suit l'écriture de KORA : la version suivante passe sans refus.
+    await approveNewVersion(art.id, "Verkor et Renault : troisième version");
+    expect((await publish(art.id)).status).toBe(201);
+  });
+
+  it("une actualisation ne blanchit pas une retouche : le renvoi reste refusé", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    retouch();
+    const refreshed = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.text).not.toContain("sentModifiedGmt");
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("wordpress_remote_modified");
+  });
+
+  it("lien antérieur à ce suivi (aucune date mémorisée) : pas de blocage", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const rec = (await repo.articles.get(art.id))!;
+    const { sentModifiedGmt: _sent, ...legacy } = rec.wordpress;
+    await repo.articles.update({ ...rec, wordpress: legacy });
+    retouch();
+    await approveNewVersion(art.id);
+    expect((await publish(art.id)).status).toBe(201);
+  });
+});
+
+describe("rôle du compte WordPress imposé par le serveur", () => {
+  const ROLE_MESSAGE =
+    "Le compte WordPress utilisé par KORA peut publier : par sécurité, KORA exige un compte de rôle Contributeur. Un administrateur doit changer le rôle du compte dans WordPress.";
+  const meCalls = () => wp.server.requests.filter((r) => r.url.pathname.endsWith("/users/me"));
+
+  it("compte capable de publier : 503 wordpress_role_too_high, aucune écriture", async () => {
+    const art = await approvedArticle();
+    wp.server.me.roles = ["editor"];
+    wp.server.me.capabilities["publish_posts"] = true;
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatchObject({
+      code: "wordpress_role_too_high",
+      message: ROLE_MESSAGE,
+    });
+    expect(errorAttempt(res)).toMatchObject({ status: "echec", code: "wordpress_role_too_high" });
+    expect(wp.server.writes()).toHaveLength(0);
+    expect(wp.server.requests.map((r) => r.url.pathname)).toEqual(["/wp-json/wp/v2/users/me"]);
+    expect((await detail(art.id)).wordpress.remoteId).toBeNull();
+  });
+
+  it("y compris pour reprendre un envoi interrompu : rien n'est recherché ni écrit", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    await publish(art.id);
+    wp.server.me.capabilities["publish_posts"] = true;
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000 + 1000));
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(wp.server.requests.some(isDraftSearch)).toBe(false);
+    expect(wp.server.writes()).toHaveLength(1);
+  });
+
+  it("droits gardés en mémoire 5 min au plus : un compte promu ensuite est refusé", async () => {
+    const art = await approvedArticle();
+    expect((await publish(art.id)).status).toBe(201);
+    await approveNewVersion(art.id);
+    expect((await publish(art.id)).status).toBe(201);
+    expect(meCalls()).toHaveLength(1);
+
+    wp.server.me.capabilities["publish_posts"] = true;
+    setClock(() => new Date(NOW.getTime() + 5 * 60_000 + 1000));
+    await approveNewVersion(art.id, "Verkor et Renault : troisième version");
+    const late = await publish(art.id);
+    expect(late.status).toBe(503);
+    expect(late.body.error.code).toBe("wordpress_role_too_high");
+    expect(meCalls()).toHaveLength(2);
+    expect(wp.server.writes()).toHaveLength(2);
+  });
+
+  it("le test de connexion relit les droits : refus immédiat, sans attendre", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    wp.server.me.capabilities["publish_posts"] = true;
+    const check = await call<WordPressCheck>("GET", "/wordpress/check", { user: USERS.admin });
+    expect(check.body).toMatchObject({ ok: true, canPublish: true });
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(503);
+    expect(wp.server.writes()).toHaveLength(1);
+  });
+
+  it("droits illisibles : envoi poursuivi, avertissement sans secret", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const art = await approvedArticle();
+    wp.server.fail(
+      (r) => r.url.pathname.endsWith("/users/me"),
+      jsonResponse({ id: KORA_ACCOUNT, name: "KORA Rédaction", roles: ["contributor"] }),
+    );
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    const lines = warn.mock.calls.map((c) => c.join(" "));
+    expect(lines.some((l) => l.includes("rôle Contributeur non vérifié"))).toBe(true);
+    expect(lines.some(leaksSecret)).toBe(false);
+    warn.mockRestore();
+  });
+});
+
 describe("reprise après un envoi interrompu", () => {
   it("création au résultat inconnu : le marqueur reste « vérification requise »", async () => {
     const art = await approvedArticle();
@@ -380,13 +617,15 @@ describe("reprise après un envoi interrompu", () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });
     await publish(art.id);
-    const twin = wp.server.addPost({ title: wp.server.posts.get(100)!.title });
+    // Second envoi interrompu du même article : même marqueur.
+    const lost = wp.server.posts.get(100)!;
+    const twin = wp.server.addPost({ title: lost.title, content: lost.content });
 
     const res = await publish(art.id);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("publication_verification_required");
     expect(res.body.error.message).toBe(
-      "Plusieurs brouillons identiques existent sur WordPress : supprimez les doublons puis renvoyez.",
+      "Plusieurs brouillons de cet article existent sur WordPress après des envois interrompus : supprimez les doublons dans WordPress puis renvoyez.",
     );
     const { candidates } = res.body.error.details as {
       candidates: { id: string; title: string; date: string | null; editUrl: string }[];
@@ -403,12 +642,241 @@ describe("reprise après un envoi interrompu", () => {
     expect(wp.server.posts.size).toBe(1);
   });
 
+  it("même titre, autre article envoyé avant l'interruption : son brouillon n'est ni repris ni modifié", async () => {
+    const { a, b } = await sameTitlePair();
+    expect((await publish(b.id)).body.remoteId).toBe("100");
+    const before = { ...wp.server.posts.get(100)! };
+    wp.server.fail(isWrite, "network");
+    expect(errorAttempt(await publish(a.id)).status).toBe("verification_requise");
+
+    const res = await publish(a.id);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ remoteId: "101", version: 1 });
+    expect(res.body.message).toContain("créé (version 1)");
+    expect(wp.server.posts.get(100)).toEqual(before);
+    expect(wp.server.writes().map((r) => r.url.pathname)).not.toContain("/wp-json/wp/v2/posts/100");
+    expect((await detail(a.id)).wordpress.remoteId).toBe("101");
+    expect((await detail(b.id)).wordpress.remoteId).toBe("100");
+    const search = wp.server.requests.find(isDraftSearch)!;
+    expect(search.url.searchParams.get("search")).toBe(`kora:article=${a.id}`);
+  });
+
+  it("même titre, autre article créé après l'interruption : son brouillon n'est pas repris", async () => {
+    const { a, b } = await sameTitlePair();
+    wp.server.fail(isWrite, "network");
+    await publish(a.id);
+    expect((await publish(b.id)).body.remoteId).toBe("100");
+    const before = { ...wp.server.posts.get(100)! };
+
+    const res = await publish(a.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)).toEqual(before);
+    expect((await detail(b.id)).wordpress.remoteId).toBe("100");
+  });
+
+  it("marqueur recopié dans le brouillon d'un autre article : écarté, nouveau brouillon", async () => {
+    const { a, b } = await sameTitlePair();
+    wp.server.fail(isWrite, "network");
+    const lost = await publish(a.id);
+    await publish(b.id);
+    // Contenu de A recopié dans le brouillon de B (éditeur de code de WordPress).
+    wp.server.posts.get(100)!.content += `\n<!-- kora:article=${a.id} -->`;
+
+    const res = await publish(a.id);
+    expect(res.body.remoteId).toBe("101");
+    const marker = (await attemptsOf(a.id)).find((p) => p.id === errorAttempt(lost).id);
+    expect(marker).toMatchObject({ status: "echec", code: "wordpress_absence_confirmed" });
+    expect(marker!.message).toContain("déjà lié à un autre article");
+  });
+
+  it("création interrompue sur un autre site ou sans site connu : close sans recherche", async () => {
+    const art = await approvedArticle();
+    const interrupted = (id: string, site?: string | null): PublicationRecord => ({
+      id,
+      idempotencyKey: idempotencyKey(art.id, 1, "wordpress"),
+      articleId: art.id,
+      linkedinPostId: null,
+      newsletterId: null,
+      channel: "wordpress",
+      version: 1,
+      status: "verification_requise",
+      code: "wordpress_confirmation_pending",
+      message: "Création du brouillon WordPress envoyée, confirmation en attente.",
+      attempts: 1,
+      remoteId: null,
+      mode: "brouillon_distant",
+      at: NOW.toISOString(),
+      by: "Claire Dubois",
+      byUserId: null,
+      ...(site === undefined ? {} : { site }),
+    });
+    await repo.publications.insert(interrupted("pub_preprod", "https://preprod.example.test"));
+    await repo.publications.insert(interrupted("pub_ancien"));
+    // Reprenable s'il était recherché : il ne doit pas l'être.
+    wp.server.addPost({ title: art.title, content: `<p>x</p>\n<!-- kora:article=${art.id} -->` });
+
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.requests.some(isDraftSearch)).toBe(false);
+    const attempts = await call<PublicationAttempt[]>("GET", `/publications?articleId=${art.id}`);
+    expect(attempts.text).not.toMatch(/"site"/);
+    const preprod = attempts.body.find((p) => p.id === "pub_preprod")!;
+    expect(preprod).toMatchObject({ status: "echec", code: "wordpress_recovery_skipped" });
+    expect(preprod.message).toContain("autre site WordPress (https://preprod.example.test)");
+    const legacy = attempts.body.find((p) => p.id === "pub_ancien")!;
+    expect(legacy).toMatchObject({ status: "echec", code: "wordpress_recovery_skipped" });
+    expect(legacy.message).toContain("Vérifiez dans WordPress qu'aucun doublon n'existe.");
+  });
+
+  it("contenu brut illisible : rien n'est repris, nouveau brouillon", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    const lost = await publish(art.id);
+    const post = wp.server.posts.get(100)!;
+    const content = post.content;
+    // Extension qui retire `content.raw` des réponses : seul le rendu reste.
+    wp.server.fail(
+      isDraftSearch,
+      jsonResponse([
+        {
+          id: 100,
+          status: "draft",
+          author: KORA_ACCOUNT,
+          modified_gmt: post.modified_gmt,
+          title: { raw: post.title },
+          content: { rendered: content },
+        },
+      ]),
+    );
+
+    const res = await publish(art.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)!.content).toBe(content);
+    const marker = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(lost).id);
+    expect(marker!.message).toContain("contenu illisible");
+  });
+
+  it("brouillon retouché après la fenêtre de reprise : non repris, la retouche reste", async () => {
+    const art = await approvedArticle();
+    wp.server.fail(isWrite, "timeout", { afterApply: true });
+    await publish(art.id);
+    const later = new Date(NOW.getTime() + 60 * 60_000);
+    setClock(() => later);
+    const post = wp.server.posts.get(100)!;
+    post.content += "\n<p>Retouche de la rédaction</p>";
+    post.modified_gmt = later.toISOString().slice(0, 19);
+
+    const res = await publish(art.id);
+    expect(res.body.remoteId).toBe("101");
+    expect(wp.server.posts.get(100)!.content).toContain("Retouche de la rédaction");
+  });
+
+  it("création enregistrée au statut inattendu : liée, relue avant tout renvoi, jamais de doublon", async () => {
+    const art = await approvedArticle();
+    wp.server.createStatus = "pitch";
+    const first = await publish(art.id);
+    wp.server.createStatus = null;
+    expect(first.status).toBe(502);
+    expect(first.body.error.message).not.toContain("Aucun brouillon n'a été créé");
+    expect(first.body.error.message).toContain("Le brouillon n° 100 est lié à l'article");
+    expect(errorAttempt(first)).toMatchObject({ status: "verification_requise", remoteId: "100" });
+    expect((await detail(art.id)).wordpress).toMatchObject({
+      remoteId: "100",
+      status: "brouillon",
+    });
+
+    // Statut toujours inconnu : relu, refusé, rien n'est écrit.
+    const blocked = await publish(art.id);
+    expect(blocked.status).toBe(502);
+    expect(blocked.body.error.message).toContain("statut inattendu");
+    expect(wp.server.writes()).toHaveLength(1);
+
+    // Remis en brouillon dans WordPress : la création est confirmée, puis mise à jour.
+    wp.server.posts.get(100)!.status = "draft";
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    const created = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(first).id);
+    expect(created).toMatchObject({ status: "succes", remoteId: "100" });
+    expect(created!.message).toContain("Brouillon WordPress n° 100 confirmé");
+  });
+
+  it("création au statut inattendu puis supprimée dans WordPress : échec constaté, nouveau brouillon", async () => {
+    const art = await approvedArticle();
+    wp.server.createStatus = "pitch";
+    const first = await publish(art.id);
+    wp.server.createStatus = null;
+    wp.server.posts.delete(100);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("101");
+    const created = (await attemptsOf(art.id)).find((p) => p.id === errorAttempt(first).id);
+    expect(created).toMatchObject({ status: "echec", code: "wordpress_absence_confirmed" });
+  });
+
+  it("règlement de l'article en échec : le marqueur subsiste, le renvoi reprend le brouillon", async () => {
+    const art = await approvedArticle();
+    const failing = vi
+      .spyOn(repo.articles, "update")
+      .mockRejectedValueOnce(new Error("base momentanément indisponible"));
+    const silent = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await publish(art.id);
+    failing.mockRestore();
+    silent.mockRestore();
+    expect(res.status).toBe(500);
+    expect(wp.server.posts.size).toBe(1);
+    const attempts = await attemptsOf(art.id);
+    expect(attempts.map((p) => p.status)).toEqual(["verification_requise"]);
+
+    const retry = await publish(art.id);
+    expect(retry.status).toBe(201);
+    expect(retry.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress.remoteId).toBe("100");
+  });
+
+  it("lien effacé par une écriture concurrente : la dernière tentative réussie sert de lien", async () => {
+    const art = await approvedArticle();
+    await publish(art.id);
+    const wipe = async () => {
+      const rec = (await repo.articles.get(art.id))!;
+      await repo.articles.update({
+        ...rec,
+        wordpress: { remoteId: null, status: "aucun", lastSyncAt: null },
+      });
+    };
+    await wipe();
+    const replay = await publish(art.id);
+    expect(replay.status).toBe(200);
+    expect(replay.body.remoteId).toBe("100");
+    expect(wp.server.writes()).toHaveLength(1);
+
+    const refreshed = await call<ArticleDetail>("POST", `/articles/${art.id}/wordpress/refresh`, {
+      user: VALIDATOR,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.wordpress).toMatchObject({ remoteId: "100", status: "brouillon" });
+
+    await wipe();
+    await approveNewVersion(art.id);
+    const res = await publish(art.id);
+    expect(res.status).toBe(201);
+    expect(res.body.remoteId).toBe("100");
+    expect(wp.server.posts.size).toBe(1);
+    expect((await detail(art.id)).wordpress).toMatchObject({
+      remoteId: "100",
+      status: "brouillon",
+    });
+  });
+
   it("une interruption sur la v1 n'entraîne pas de doublon lors de l'envoi de la v2", async () => {
     const art = await approvedArticle();
     wp.server.fail(isWrite, "timeout", { afterApply: true });
     await publish(art.id);
-    // La v2 garde le même titre : le brouillon perdu de la v1 est retrouvé et mis à jour.
-    await approveNewVersion(art.id, art.title);
+    // Titre changé : le brouillon perdu de la v1 est retrouvé par le marqueur de l'article.
+    await approveNewVersion(art.id);
     const res = await publish(art.id);
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ remoteId: "100", version: 2 });

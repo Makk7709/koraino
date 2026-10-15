@@ -54,16 +54,16 @@ const roles = z
   .transform((list) => [...new Set(list)]);
 
 /**
- * Slug WordPress (les caractères accentués y figurent encodés en minuscules : `%c3%a9`) ;
- * chaîne vide, null ou absent = aucune catégorie.
+ * Slug WordPress (les caractères accentués y figurent encodés en minuscules : `%c3%a9` ; le
+ * tiret bas est conservé par WordPress) ; chaîne vide, null ou absent = aucune catégorie.
  */
 const optionalSlug = z
   .string()
   .trim()
   .max(200, "Slug WordPress trop long (200 caractères au plus)")
   .refine(
-    (v) => v === "" || /^(?:[a-z0-9-]|%[0-9a-f]{2})+$/.test(v),
-    "Slug WordPress attendu : minuscules, chiffres et tirets (caractères accentués encodés %xx)",
+    (v) => v === "" || /^(?:[a-z0-9_-]|%[0-9a-f]{2})+$/.test(v),
+    "Slug WordPress attendu : minuscules, chiffres, tirets et tirets bas (caractères accentués encodés %xx)",
   )
   .nullable()
   .optional()
@@ -148,7 +148,10 @@ export const schemas = {
   reject: z.object({
     reason: z.string().trim().min(3, "Le motif de rejet est obligatoire").max(1000),
   }),
-  publish: z.object({ channel: z.enum(CHANNELS) }),
+  publish: z.object({
+    channel: z.enum(CHANNELS),
+    overwriteRemoteChanges: z.boolean().optional(),
+  }),
   factCheck: z.object({
     status: z.enum(["etaye", "non_corrobore"]),
     note: z.string().trim().max(1000).nullable().optional(),

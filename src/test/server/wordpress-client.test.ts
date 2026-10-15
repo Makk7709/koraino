@@ -10,6 +10,7 @@ import {
   KORA_ACCOUNT,
   leaksSecret,
   OTHER_ACCOUNT,
+  WP_PASSWORD,
   WP_PASSWORD_COMPACT,
   WP_SITE,
   WP_TOKEN,
@@ -56,6 +57,19 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(req!.headers.get("user-agent")).toBe(WORDPRESS_USER_AGENT);
     expect(req!.redirect).toBe("manual");
     expect(req!.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("compte en mémoire : servi si assez récent, relu sinon (et toujours sans maxAgeMs)", async () => {
+    const { client, server } = fakeWordPress();
+    await client.whoAmI();
+    server.me.capabilities["publish_posts"] = true;
+    expect((await client.whoAmI({ maxAgeMs: 60_000 })).canPublish).toBe(false);
+    expect(server.requests).toHaveLength(1);
+    setClock(() => new Date(NOW.getTime() + 60_001));
+    expect((await client.whoAmI({ maxAgeMs: 60_000 })).canPublish).toBe(true);
+    server.me.capabilities["publish_posts"] = false;
+    expect((await client.whoAmI()).canPublish).toBe(false);
+    expect(server.requests).toHaveLength(3);
   });
 
   it("crée et met à jour toujours en brouillon, sans liste vide", async () => {
@@ -124,23 +138,58 @@ describe("RestWordPress : requêtes envoyées", () => {
     expect(tags).toEqual({ ids: [21, 22, 23], missing: ["Batterie"] });
   });
 
-  it("retrouve ses brouillons par titre exact et date, en excluant ceux des autres", async () => {
+  it("étiquettes au-delà de la première page : slug exact, puis recherche paginée bornée", async () => {
     const { client, server } = fakeWordPress();
-    const title = "Verkor & Renault : -2 % sur les coûts";
-    const old = new Date(NOW.getTime() - 3_600_000).toISOString().slice(0, 19);
-    const mine = server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts" });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", author: OTHER_ACCOUNT });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts (2)" });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", modified_gmt: old });
-    server.addPost({ title: "Verkor &amp; Renault : -2 % sur les coûts", status: "publish" });
-    const since = new Date(NOW.getTime() - 120_000).toISOString();
-    const found = await client.findOwnDrafts(title, since);
+    // La recherche WordPress est un « contient » trié par nom : 150 étiquettes passent avant.
+    for (let i = 0; i < 150; i++) {
+      server.tags.push({ id: 3000 + i, name: `Aia ${i}`, slug: `aia-${i}` });
+      server.tags.push({ id: 4000 + i, name: `Blyon ${i}`, slug: `blyon-${i}` });
+    }
+    server.tags.push({ id: 31, name: "IA", slug: "ia" });
+    // Slug différent du calcul (« lyon-2 ») : retrouvée par la recherche, en page 2.
+    server.tags.push({ id: 32, name: "Lyon", slug: "lyon-2" });
+    const tags = await client.findTags(["IA", "Lyon", "Inconnue"]);
+    expect(tags).toEqual({ ids: [31, 32], missing: ["Inconnue"] });
+
+    const lookups = server.requests.map((r) => r.url.searchParams);
+    expect(lookups[0]!.get("slug")).toBe("ia,lyon,inconnue");
+    const lyon = lookups.filter((q) => q.get("search") === "Lyon").map((q) => q.get("page"));
+    expect(lyon).toEqual(["1", "2"]);
+    expect(lookups.filter((q) => q.get("search") === "IA")).toHaveLength(0);
+  });
+
+  it("recherche d'étiquette limitée à 3 pages", async () => {
+    const { client, server } = fakeWordPress();
+    for (let i = 0; i < 400; i++) {
+      server.tags.push({ id: 5000 + i, name: `Alpha nova ${i}`, slug: `alpha-nova-${i}` });
+    }
+    server.tags.push({ id: 33, name: "Nova", slug: "nova-x" });
+    expect(await client.findTags(["Nova"])).toEqual({ ids: [], missing: ["Nova"] });
+    const pages = server.requests.filter((r) => r.url.searchParams.get("search") === "Nova");
+    expect(pages.map((r) => r.url.searchParams.get("page"))).toEqual(["1", "2", "3"]);
+  });
+
+  it("retrouve ses brouillons par jeton, dans la fenêtre de dates, en excluant ceux des autres", async () => {
+    const { client, server } = fakeWordPress();
+    const token = "kora:article=art_n1";
+    const content = `<p>Texte</p>\n<!-- ${token} -->`;
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000).toISOString();
+    // Dates `*_gmt` de WordPress : sans fuseau.
+    const wpAt = (minutes: number) => at(minutes).slice(0, 19);
+    const mine = server.addPost({ content });
+    server.addPost({ content, author: OTHER_ACCOUNT });
+    server.addPost({ content: "<p>Sans jeton</p>" });
+    server.addPost({ content, modified_gmt: wpAt(-60) });
+    server.addPost({ content, modified_gmt: wpAt(30) });
+    server.addPost({ content, status: "publish" });
+    const found = await client.findOwnDrafts(token, at(-2), at(10));
     expect(found.map((p) => p.id)).toEqual([String(mine.id)]);
+    expect(found[0]!.content).toBe(content);
     const search = server.requests.find((r) => r.url.pathname.endsWith("/posts"))!.url.searchParams;
     expect(search.get("author")).toBe(String(KORA_ACCOUNT));
     expect(search.get("status")).toBe("draft,pending");
-    // « -2 » serait une exclusion pour WordPress et « & » est stocké encodé.
-    expect(search.get("search")).toBe("Verkor Renault sur les coûts");
+    expect(search.get("context")).toBe("edit");
+    expect(search.get("search")).toBe(token);
   });
 
   it("contenu publié : illisible en édition pour un Contributeur, relu en lecture publique", async () => {
@@ -153,6 +202,79 @@ describe("RestWordPress : requêtes envoyées", () => {
     const contexts = server.requests.map((r) => r.url.searchParams.get("context"));
     expect(contexts).toEqual(["edit", null]);
     expect(await client.getPost("999")).toBeNull();
+  });
+
+  it("absent seulement sur 410 ou 404 rest_post_invalid_id ; tout autre 404 est une erreur", async () => {
+    const { client, server } = fakeWordPress();
+    const post = server.addPost();
+    const id = String(post.id);
+    server.fail(() => true, jsonResponse({ code: "rest_no_route", message: "Aucune route." }, 404));
+    const filtered = await failure(client.getPost(id));
+    expect(filtered.code).toBe("wordpress_invalid");
+    expect(filtered.message).toContain(
+      "sans indiquer qu'il a été supprimé (HTTP 404 rest_no_route)",
+    );
+    server.fail(() => true, new Response("", { status: 404 }));
+    expect((await failure(client.getPost(id))).code).toBe("wordpress_invalid");
+    server.fail(() => true, jsonResponse({ code: "rest_gone" }, 410));
+    expect(await client.getPost(id)).toBeNull();
+    expect(await client.getPost("999")).toBeNull();
+    expect(await client.getPost(id)).toMatchObject({ id, status: "draft" });
+  });
+
+  it("écriture 2xx au statut inconnu ou incomplète : l'identifiant enregistré est rendu", async () => {
+    const { client, server } = fakeWordPress();
+    server.createStatus = "pitch";
+    const custom = await failure(client.createDraft(draft));
+    expect(custom).toMatchObject({
+      code: "wordpress_invalid",
+      verifyBeforeRetry: true,
+      remoteId: "100",
+    });
+    expect(custom.message).toContain("a enregistré le contenu n° 100 avec un statut inattendu");
+    // En lecture, rien n'a été écrit : ni identifiant ni vérification.
+    const read = await failure(client.getPost("100"));
+    expect(read).toMatchObject({ verifyBeforeRetry: false, remoteId: null });
+
+    server.fail(isWrite, jsonResponse({ id: 205, status: 7 }, 201));
+    const partial = await failure(client.createDraft(draft));
+    expect(partial).toMatchObject({ verifyBeforeRetry: true, remoteId: "205" });
+    expect(partial.message).toContain("le contenu n° 205 a pourtant été enregistré");
+  });
+
+  it("mise à jour d'un contenu en attente de relecture : le statut pending est conservé", async () => {
+    const { client, server } = fakeWordPress();
+    const post = server.addPost({ status: "pending" });
+    const updated = await client.updateDraft(String(post.id), draft, "pending");
+    expect(updated.status).toBe("pending");
+    expect(server.writes()[0]!.body).toMatchObject({ status: "pending" });
+    // Garde-fou : un statut public passé malgré le typage n'est jamais envoyé.
+    await client.updateDraft(String(post.id), draft, "publish" as "pending");
+    expect(server.writes()[1]!.body).toMatchObject({ status: "draft" });
+  });
+
+  it("réponse de plus de 2 Mo : refusée sans être lue en entier", async () => {
+    const { client, server, logs } = fakeWordPress();
+    // Flux sans fin ni Content-Length : seule une lecture plafonnée s'arrête.
+    const endless = new ReadableStream<Uint8Array>({
+      pull: (controller) => controller.enqueue(new Uint8Array(64 * 1024).fill(32)),
+    });
+    server.fail(
+      () => true,
+      new Response(endless, { headers: { "content-type": "application/json" } }),
+    );
+    const read = await failure(client.listCategories());
+    expect(read).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: false });
+    expect(read.message).toContain("trop volumineuse (plus de 2 Mo)");
+
+    server.fail(
+      isWrite,
+      new Response("{}", { status: 201, headers: { "content-length": String(50 * 1024 * 1024) } }),
+    );
+    const write = await failure(client.createDraft(draft));
+    // Après un envoi, WordPress a peut-être enregistré le contenu : vérification avant renvoi.
+    expect(write).toMatchObject({ code: "wordpress_invalid", verifyBeforeRetry: true });
+    expect(logs.filter((l) => l.includes("plus de 2 Mo"))).toHaveLength(2);
   });
 
   it("brouillon d'un autre compte devenu illisible : wordpress_forbidden", async () => {
@@ -288,5 +410,39 @@ describe("RestWordPress : secret", () => {
     expect(messages.join(" ")).toContain("[masqué]");
     expect(JSON.stringify(client)).not.toContain(WP_TOKEN);
     expect(String(Object.values(client))).not.toContain(WP_TOKEN);
+  });
+
+  it("secret recopié à cheval sur les limites de 200 (message) et 300 (journal) caractères", async () => {
+    const { client, server, logs } = fakeWordPress();
+    // Le secret commence quelques caractères avant la limite : tronquer d'abord en laisserait un morceau.
+    const straddle = (secret: string, limit: number, prefix = "") =>
+      `${prefix}${"x".repeat(limit - 12 - prefix.length)}${secret} fin`;
+    // Partie du jeton Basic qui encode le mot de passe (« kora-redaction: » = 20 caractères base64).
+    const tokenSecret = WP_TOKEN.slice(20);
+    const fragments = (s: string) =>
+      Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
+    const forbidden = [...fragments(WP_PASSWORD_COMPACT), ...fragments(tokenSecret)];
+    const faults = [
+      jsonResponse({ code: "x", message: straddle(WP_PASSWORD_COMPACT, 200) }, 400),
+      jsonResponse({ code: "x", message: straddle(WP_PASSWORD, 200) }, 403),
+      htmlResponse(500, straddle(WP_PASSWORD_COMPACT, 300, "<html><pre>PHP_AUTH_PW=")),
+      new Response(straddle(WP_PASSWORD, 300, "PHP_AUTH_PW="), { status: 502 }),
+      // Jeton sans préfixe « Basic » : c'est sa partie « mot de passe » qui chevauche la limite.
+      new Response(straddle(WP_TOKEN, 300 - 20, "HTTP_AUTHORIZATION="), { status: 500 }),
+    ];
+    const messages: string[] = [];
+    for (const fault of faults) {
+      server.fail(() => true, fault);
+      messages.push((await failure(client.createDraft(draft))).message);
+    }
+    for (const text of [...messages, ...logs]) {
+      expect(leaksSecret(text), text).toBe(false);
+      expect(
+        forbidden.find((f) => text.includes(f)),
+        text,
+      ).toBeUndefined();
+    }
+    expect(messages.slice(0, 2).every((m) => m.includes("[masqué]"))).toBe(true);
+    expect(logs.filter((l) => l.includes("[masqué]")).length).toBeGreaterThanOrEqual(faults.length);
   });
 });

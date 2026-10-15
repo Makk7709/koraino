@@ -857,6 +857,8 @@ Pour WordPress, l'encadré nomme aussi les refus propres au site :
 
 - « Contenu déjà en ligne ou programmé : la modification se fait dans WordPress » : KORA ne modifie jamais un contenu publié ou programmé. « Ouvrir dans WordPress » permet de faire la correction sur le site.
 - « Plusieurs brouillons identiques sur WordPress » : un envoi précédent a été interrompu et plusieurs brouillons correspondent. L'encadré liste les « Brouillons candidats » (titre, numéro, date, lien d'édition) : supprimez les doublons dans WordPress, puis renvoyez.
+- « Le brouillon a été modifié dans WordPress depuis le dernier envoi de KORA » : reprenez ces retouches dans KORA puis renvoyez, ou confirmez l'écrasement pour remplacer le brouillon par la version de KORA.
+- « Le compte WordPress utilisé par KORA peut publier » : KORA n'envoie plus rien tant qu'un administrateur n'a pas donné à ce compte le rôle Contributeur dans WordPress.
 - « WordPress n'est pas configuré », « Identifiants WordPress refusés », « Droit manquant pour le compte WordPress » : un administrateur vérifie la connexion dans Paramètres, onglet [WordPress](#wordpress).
 - « Site WordPress injoignable », « Trop de requêtes vers WordPress », « Accès bloqué par la protection du site » : réessayez plus tard ; si le problème persiste, signalez-le à l'administrateur du site.
 

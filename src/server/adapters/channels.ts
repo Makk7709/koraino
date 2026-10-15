@@ -18,6 +18,8 @@ export interface RemotePost {
   dateGmt: string | null;
   modifiedGmt: string | null;
   link: string | null;
+  /** Contenu brut (`content.raw`, contexte d'édition) ; null s'il n'est pas lisible. */
+  content: string | null;
 }
 
 export interface WordPressAccount {
@@ -28,8 +30,11 @@ export interface WordPressAccount {
   canPublish: boolean | null;
 }
 
+/** Statuts non publics qu'un Contributeur peut poser : une création est toujours `draft`. */
+export type DraftStatus = "draft" | "pending";
+
 /**
- * Contenu d'un brouillon. Le statut n'en fait pas partie : le client envoie toujours `draft`.
+ * Contenu d'un brouillon. Le statut n'en fait pas partie (voir `DraftStatus`).
  * Une liste de catégories ou d'étiquettes vide n'est pas envoyée (WordPress garde sa valeur).
  */
 export interface WordPressDraftPayload {
@@ -56,13 +61,22 @@ export interface WordPressClient {
   ownsRemote(remoteId: string, site: string | null | undefined): boolean;
   /** Lien d'édition dans l'administration WordPress (null en simulation). */
   editUrl(remoteId: string): string | null;
-  whoAmI(): Promise<WordPressAccount>;
+  /** `maxAgeMs` : une réponse en mémoire plus récente est acceptée ; sinon le site est relu. */
+  whoAmI(options?: { maxAgeMs?: number }): Promise<WordPressAccount>;
   /** null si le contenu n'existe pas (ou plus). */
   getPost(remoteId: string): Promise<RemotePost | null>;
-  /** Brouillons et contenus en attente du compte KORA au titre exactement égal, modifiés depuis `since`. */
-  findOwnDrafts(title: string, since: string): Promise<RemotePost[]>;
+  /**
+   * Brouillons et contenus en attente du compte KORA dont le contenu contient `search`, modifiés
+   * pour la dernière fois entre `since` et `until`. L'appelant vérifie le contenu brut.
+   */
+  findOwnDrafts(search: string, since: string, until: string): Promise<RemotePost[]>;
   createDraft(input: WordPressDraftPayload): Promise<RemotePost>;
-  updateDraft(remoteId: string, input: WordPressDraftPayload): Promise<RemotePost>;
+  /** `status` : celui lu juste avant (un contenu en attente de relecture y reste). */
+  updateDraft(
+    remoteId: string,
+    input: WordPressDraftPayload,
+    status?: DraftStatus,
+  ): Promise<RemotePost>;
   /** Toutes les catégories du site (toutes les pages), noms décodés. */
   listCategories(): Promise<WordPressCategory[]>;
   /** Étiquettes existantes de même nom ; les autres sont rendues dans `missing`. */
@@ -91,7 +105,7 @@ const SIMULATED_ACCOUNT: WordPressAccount = {
 
 const SIMULATED_ID = /^wp-\d+$/;
 
-interface SimulatedPost extends RemotePost {
+interface SimulatedPost extends Omit<RemotePost, "content"> {
   input: WordPressDraftPayload | null;
 }
 
@@ -117,7 +131,7 @@ export class SimulatedWordPress implements WordPressClient {
     return null;
   }
 
-  async whoAmI() {
+  async whoAmI(_options?: { maxAgeMs?: number }) {
     return { ...SIMULATED_ACCOUNT, roles: [...(SIMULATED_ACCOUNT.roles ?? [])] };
   }
 
@@ -126,17 +140,20 @@ export class SimulatedWordPress implements WordPressClient {
     return post ? this.view(post) : null;
   }
 
-  async findOwnDrafts(title: string, since: string) {
-    const key = textKey(title);
+  async findOwnDrafts(search: string, since: string, until: string) {
     const from = Date.parse(since);
+    const to = Date.parse(until);
     return [...this.posts.values()]
-      .filter(
-        (p) =>
+      .filter((p) => {
+        const at = Date.parse(p.modifiedGmt ?? "");
+        return (
           (p.status === "draft" || p.status === "pending") &&
           p.authorId === SIMULATED_ACCOUNT.id &&
-          textKey(p.title) === key &&
-          Date.parse(p.modifiedGmt ?? "") >= from,
-      )
+          (p.input?.content.includes(search) ?? false) &&
+          at >= from &&
+          at <= to
+        );
+      })
       .map((p) => this.view(p));
   }
 
@@ -158,7 +175,7 @@ export class SimulatedWordPress implements WordPressClient {
     return this.view(post);
   }
 
-  async updateDraft(remoteId: string, input: WordPressDraftPayload) {
+  async updateDraft(remoteId: string, input: WordPressDraftPayload, status: DraftStatus = "draft") {
     const post = this.lookup(remoteId);
     if (!post) {
       throw new WordPressError(
@@ -167,7 +184,7 @@ export class SimulatedWordPress implements WordPressClient {
       );
     }
     Object.assign(post, {
-      status: "draft",
+      status: status === "pending" ? "pending" : "draft",
       title: input.title,
       modifiedGmt: now().toISOString(),
       input,
@@ -223,8 +240,8 @@ export class SimulatedWordPress implements WordPressClient {
     return post;
   }
 
-  private view({ input: _input, ...post }: SimulatedPost): RemotePost {
-    return { ...post };
+  private view({ input, ...post }: SimulatedPost): RemotePost {
+    return { ...post, content: input?.content ?? null };
   }
 }
 
