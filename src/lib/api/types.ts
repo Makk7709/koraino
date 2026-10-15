@@ -276,12 +276,7 @@ export interface Article {
  * corbeille ou supprimé sur le site (un nouvel envoi recrée alors un brouillon).
  */
 export type WordPressRemoteStatus =
-  | "aucun"
-  | "brouillon"
-  | "en_attente"
-  | "programme"
-  | "publie"
-  | "supprime";
+  "aucun" | "brouillon" | "en_attente" | "programme" | "publie" | "supprime";
 
 export interface ArticleDetail extends Article {
   versions: ArticleVersion[];
