@@ -13,6 +13,7 @@ import { SignalFiltersBar, type SignalFilters } from "@/components/signals/Signa
 import { SignalTable } from "@/components/signals/SignalTable";
 import { StatusActions } from "@/components/signals/StatusActions";
 import {
+  byNewsDate,
   compact,
   isCategory,
   isSignalStatus,
@@ -316,11 +317,11 @@ function usePrioritySignals(
   );
   const items = useMemo(() => {
     if (!fresh.data || !todo.data) return undefined;
-    const recent = (a: Signal, b: Signal) =>
-      Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id);
     return [...fresh.data.items, ...todo.data.items]
       .filter((s) => s.score.total >= PRIORITY_MIN_SCORE)
-      .sort(sort === "score" ? (a, b) => b.score.total - a.score.total || recent(a, b) : recent);
+      .sort(
+        sort === "score" ? (a, b) => b.score.total - a.score.total || byNewsDate(a, b) : byNewsDate,
+      );
   }, [fresh.data, todo.data, sort]);
   return {
     items,

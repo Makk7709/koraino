@@ -32,6 +32,7 @@ import { HrefLink } from "./links";
 import { ReasonDialog } from "./ReasonDialog";
 import { ScoreInfoTooltip } from "./ScoreInfoTooltip";
 import { signalDate, tagTone } from "./signal-utils";
+import { SignalSources } from "./SignalSources";
 
 const ANGLE_TONES: Tone[] = ["purple", "blue", "purple", "blue"];
 const UNKNOWN_BRAND = { initials: "?", bg: "oklch(0.3 0.05 230)", fg: "oklch(0.95 0.02 200)" };
@@ -191,6 +192,8 @@ export function SignalDetailView({
           </div>
         </div>
       </div>
+
+      <SignalSources key={signal.id} signal={signal} />
 
       <SignalActionBar signal={signal} />
     </section>

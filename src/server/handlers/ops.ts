@@ -254,9 +254,11 @@ async function buildTable(ctx: Ctx, entity: ExportEntity): Promise<Table> {
           "eventDate",
           "matchConfidence",
           "isSyndicated",
+          "via",
         ],
         rows: (await repo.observations.list()).map((o) => ({
           ...o,
+          via: o.via ?? "",
           outlet: o.outlet.name,
           outletDomain: o.outlet.domain,
         })),

@@ -145,8 +145,12 @@ export const listSignals: Handler = async (ctx) => {
     }
     return true;
   });
+  // Même date que celle affichée (publication, sinon événement), puis la collecte.
+  const newsTime = (s: SignalRecord) => Date.parse(s.publishedAt ?? s.eventDate ?? s.collectedAt);
   const byRecent = (a: SignalRecord, b: SignalRecord) =>
-    Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id);
+    newsTime(b) - newsTime(a) ||
+    Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
+    b.id.localeCompare(a.id);
   filtered.sort(
     sort === "score" ? (a, b) => b.score.total - a.score.total || byRecent(a, b) : byRecent,
   );

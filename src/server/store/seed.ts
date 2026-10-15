@@ -885,7 +885,7 @@ export function buildSeed(now: Date): SeedData {
           excerpt:
             "ARaymond présente une nouvelle solution de fixation conçue pour réduire l'impact environnemental des véhicules.",
           sourceId: null,
-          publishedOffsetMin: 260,
+          publishedOffsetMin: 290,
         },
       ],
     },
