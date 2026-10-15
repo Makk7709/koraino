@@ -41,6 +41,10 @@ import type {
   InvitationResult,
   UserInput,
   UserPatch,
+  WordPressCategory,
+  WordPressCheck,
+  WordPressSettings,
+  WordPressStatus,
 } from "./types";
 import { getAccessToken, handleUnauthenticated } from "@/lib/auth/token";
 
@@ -207,6 +211,9 @@ export const api = {
     apiFetch<ArticleDetail>(`/articles/${id}/reject`, json("POST", { reason })),
   publishArticle: (id: string, input: PublishInput) =>
     apiFetch<PublicationAttempt>(`/articles/${id}/publish`, json("POST", input)),
+  /** Relit l'état du brouillon sur WordPress (brouillon, en attente, programmé, publié, supprimé). */
+  refreshArticleWordPress: (id: string) =>
+    apiFetch<ArticleDetail>(`/articles/${id}/wordpress/refresh`, json("POST")),
   /** Arbitrage humain d'un fait du dossier (lève une contradiction bloquante). */
   resolveFactCheck: (
     id: string,
@@ -258,6 +265,13 @@ export const api = {
   completeLinkedInConnection: (input: LinkedInConnectComplete) =>
     apiFetch<{ ok: boolean }>("/me/linkedin/complete", json("POST", input)),
   disconnectLinkedIn: () => apiFetch<{ ok: boolean }>("/me/linkedin/disconnect", json("POST")),
+
+  /* WordPress : configuration et correspondance des catégories */
+  wordpressStatus: () => apiFetch<WordPressStatus>("/wordpress"),
+  wordpressCheck: () => apiFetch<WordPressCheck>("/wordpress/check"),
+  wordpressCategories: () => apiFetch<WordPressCategory[]>("/wordpress/categories"),
+  saveWordPressSettings: (input: WordPressSettings) =>
+    apiFetch<WordPressStatus>("/wordpress/settings", json("PUT", input)),
 
   /* Newsletter (WF5) */
   newsletters: () => apiFetch<NewsletterEdition[]>("/newsletters"),

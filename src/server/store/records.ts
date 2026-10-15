@@ -19,6 +19,7 @@ import type {
   Signal,
   Source,
   User as UserDto,
+  WordPressRemoteStatus,
 } from "@/lib/api/types";
 
 /**
@@ -59,7 +60,26 @@ export type SignalRecord = Omit<Signal, "evidence" | "inNewsletter">;
 
 export type GridRecord = ScoringGrid & { id: string };
 
-export type ArticleRecord = Article & {
+/** Lien vers le contenu WordPress ; `editUrl` est calculé à la lecture, jamais stocké. */
+export interface WordPressLink {
+  remoteId: string | null;
+  status: WordPressRemoteStatus;
+  lastSyncAt: string | null;
+  /**
+   * Site qui a produit `remoteId` (interne, jamais exposé) : null ou absent pour un identifiant
+   * simulé ou antérieur à l'intégration réelle.
+   */
+  site?: string | null;
+  /**
+   * `modified_gmt` renvoyé par WordPress après le dernier ENVOI de KORA (interne, jamais exposé) ;
+   * absent pour un lien antérieur à ce suivi. Une actualisation ne le change pas : sinon une
+   * retouche faite dans WordPress serait « blanchie » et le renvoi suivant l'écraserait sans alerte.
+   */
+  sentModifiedGmt?: string | null;
+}
+
+export type ArticleRecord = Omit<Article, "wordpress"> & {
+  wordpress: WordPressLink;
   versions: ArticleVersion[];
   publishedAt: string | null;
   createdBy: string;
@@ -123,7 +143,18 @@ export interface Settings {
   notifiedAlerts: string[];
   /** Volume de fichiers client hors imports (Go). */
   storageBaseGb: number;
+  /**
+   * Ancien emplacement de la correspondance des catégories WordPress, désormais rangée à part
+   * (`Repository.getWordPressSettings`) : lu en secours tant qu'elle n'y figure pas, jamais réécrit.
+   */
+  wordpress?: unknown;
 }
+
+/**
+ * Tentative stockée. `site` (interne, jamais exposé) : site WordPress visé ; absent avant ce
+ * suivi. Une reprise après interruption n'a lieu que sur ce site.
+ */
+export type PublicationRecord = PublicationAttempt & { site?: string | null };
 
 export type { AuditEvent, CollectionRun, EditorialExample, Notification, PublicationAttempt };
 /** Nom sous lequel `repository.ts` type la collection `users`. */

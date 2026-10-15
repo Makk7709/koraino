@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
 import type { Settings } from "./records";
 import { buildSeed } from "./seed";
+import { WORDPRESS_SETTINGS, wordpressSettingsOf } from "./settings";
 
 /**
  * Dépôt persistant (base PostgreSQL du projet) : une ligne par enregistrement dans
@@ -171,12 +173,57 @@ export class DbRepository implements Repository {
     return data.data as unknown as Settings;
   }
 
+  /**
+   * L'ancien `wordpress` est retiré de la ligne écrite. Il n'est recopié dans l'enregistrement
+   * dédié que par insertion (jamais par-dessus une correspondance déjà enregistrée), et avant
+   * d'être retiré : un échec laisse l'ancienne ligne intacte.
+   */
   async saveSettings(settings: Settings) {
-    const { error } = await (await db()).from("kora_settings").upsert({
+    const { wordpress: legacy, ...rest } = settings;
+    const client = await db();
+    if (legacy !== undefined) {
+      const { error } = await client.from("kora_records").insert({
+        ...WORDPRESS_SETTINGS,
+        data: wordpressSettingsOf(legacy) as never,
+      });
+      if (error && error.code !== UNIQUE_VIOLATION) throw new Error(error.message);
+    }
+    const { error } = await client.from("kora_settings").upsert({
       workspace_id: WORKSPACE,
-      data: settings as never,
+      data: rest as never,
       updated_at: new Date().toISOString(),
     });
+    if (error) throw new Error(error.message);
+  }
+
+  async getWordPressSettings() {
+    const client = await db();
+    const { data, error } = await client
+      .from("kora_records")
+      .select("data")
+      .eq("collection", WORDPRESS_SETTINGS.collection)
+      .eq("id", WORDPRESS_SETTINGS.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) return wordpressSettingsOf(data.data);
+    const legacy = await client
+      .from("kora_settings")
+      .select("data")
+      .eq("workspace_id", WORKSPACE)
+      .maybeSingle();
+    if (legacy.error) throw new Error(legacy.error.message);
+    return wordpressSettingsOf((legacy.data?.data as Settings | undefined)?.wordpress);
+  }
+
+  async saveWordPressSettings(settings: WordPressSettings) {
+    const { error } = await (await db()).from("kora_records").upsert(
+      {
+        ...WORDPRESS_SETTINGS,
+        data: settings as never,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "collection,id" },
+    );
     if (error) throw new Error(error.message);
   }
 

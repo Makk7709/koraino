@@ -12,6 +12,8 @@ import type {
   SignalDetail,
   Source,
 } from "@/lib/api/types";
+import { adapters } from "../adapters";
+import type { WordPressClient } from "../adapters/channels";
 import { computeEvidence } from "../domain/evidence";
 import type {
   ArticleRecord,
@@ -20,6 +22,7 @@ import type {
   LinkedInPostRecord,
   NewsletterRecord,
   ObservationRecord,
+  PublicationRecord,
   RuleProposalRecord,
   RuleRecord,
   SignalRecord,
@@ -153,9 +156,25 @@ export async function signalDetail(
 /* Studio                                                              */
 /* ------------------------------------------------------------------ */
 
-export function toArticle(rec: ArticleRecord): Article {
-  const { versions: _v, publishedAt: _p, createdBy: _c, ...dto } = rec;
-  return dto;
+/** `wordpress.site` reste interne ; le lien d'édition n'existe que pour un contenu du site configuré. */
+export function toArticle(
+  rec: ArticleRecord,
+  wordpress: WordPressClient = adapters().wordpress,
+): Article {
+  const { versions: _v, publishedAt: _p, createdBy: _c, wordpress: link, ...dto } = rec;
+  const editUrl =
+    link.remoteId && wordpress.ownsRemote(link.remoteId, link.site)
+      ? wordpress.editUrl(link.remoteId)
+      : null;
+  return {
+    ...dto,
+    wordpress: {
+      remoteId: link.remoteId,
+      status: link.status,
+      lastSyncAt: link.lastSyncAt,
+      editUrl,
+    },
+  };
 }
 
 export async function articleDetail(
@@ -178,7 +197,8 @@ export async function articleDetail(
     observations: observations.filter((o) => wanted.has(o.id)),
     publications: publications
       .filter((p) => p.articleId === rec.id)
-      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+      .map(toPublication),
   };
 }
 
@@ -214,6 +234,8 @@ export function toProposal(rec: RuleProposalRecord): RuleProposal {
   return dto;
 }
 
-export function toPublication(rec: PublicationAttempt): PublicationAttempt {
-  return { ...rec, newsletterId: rec.newsletterId ?? null };
+/** `site` reste interne. */
+export function toPublication(rec: PublicationRecord): PublicationAttempt {
+  const { site: _s, ...dto } = rec;
+  return { ...dto, newsletterId: rec.newsletterId ?? null };
 }

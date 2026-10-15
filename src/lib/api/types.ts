@@ -262,12 +262,21 @@ export interface Article {
   approvals: Approval[];
   wordpress: {
     remoteId: string | null;
-    status: "aucun" | "brouillon" | "programme" | "publie";
+    status: WordPressRemoteStatus;
     lastSyncAt: string | null;
+    /** Lien d'édition dans l'administration WordPress, calculé à la lecture (jamais stocké). */
+    editUrl?: string | null;
   };
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * État du contenu côté WordPress : `en_attente` = soumis à relecture, `supprime` = mis à la
+ * corbeille ou supprimé sur le site (un nouvel envoi recrée alors un brouillon).
+ */
+export type WordPressRemoteStatus =
+  "aucun" | "brouillon" | "en_attente" | "programme" | "publie" | "supprime";
 
 export interface ArticleDetail extends Article {
   versions: ArticleVersion[];
@@ -356,6 +365,48 @@ export interface LinkedInConnection {
   memberId?: string | null;
   reconnectRequired?: boolean;
   error?: string | null;
+}
+
+/* ------------------------------------------------------------------ */
+/* WordPress : brouillons distants sur le site configuré (§4.3)        */
+/* ------------------------------------------------------------------ */
+
+/** `reel` : site configuré ; `simule` : tests et démonstration locale ; `non_configure` : envoi impossible. */
+export type WordPressMode = "reel" | "simule" | "non_configure";
+
+export interface WordPressCategory {
+  id: number;
+  slug: string;
+  name: string;
+  parent: number;
+}
+
+export interface WordPressSettings {
+  /** Catégorie KORA (libellé, ex. « Levée de fonds ») → slug de la catégorie WordPress. */
+  categoryMap: Record<string, string>;
+  /** Slug utilisé quand aucune catégorie de la version n'a de correspondance. */
+  defaultCategory: string | null;
+}
+
+/** Réponse de GET /wordpress. */
+export interface WordPressStatus {
+  mode: WordPressMode;
+  /** Origine du site configuré, null hors mode réel. */
+  site: string | null;
+  /** Noms des variables d'environnement manquantes (jamais leurs valeurs). */
+  missing: string[];
+  settings: WordPressSettings;
+  /** Libellés des catégories KORA proposés à la correspondance. */
+  koraCategories: string[];
+}
+
+/** Réponse de GET /wordpress/check (administrateurs). */
+export interface WordPressCheck {
+  ok: boolean;
+  account: { id: number; name: string; roles: string[] | null } | null;
+  /** Le compte peut publier lui-même : rôle trop élevé pour le pilote (Contributeur attendu). */
+  canPublish: boolean | null;
+  error: { code: string; message: string } | null;
 }
 
 /** Réponse de POST /me/linkedin/connect : `state` est à rendre tel quel à /me/linkedin/complete. */
@@ -688,6 +739,11 @@ export interface ApproveInput {
 
 export interface PublishInput {
   channel: Channel;
+  /**
+   * WordPress seulement : remplacer un brouillon modifié dans WordPress depuis le dernier envoi
+   * (après un refus 409 `wordpress_remote_modified`). Sans effet pour les autres canaux.
+   */
+  overwriteRemoteChanges?: boolean;
 }
 
 /** Corps optionnel de POST /linkedin/:id/publish : verdict humain sur une publication non confirmée. */

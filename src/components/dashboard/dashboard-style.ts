@@ -23,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@/components/kora/labels";
-import type { DashboardGroup, KpiCard } from "@/lib/api/types";
+import type { Dashboard, DashboardGroup, KpiCard } from "@/lib/api/types";
 
 /** Clés `icon` renvoyées par l'API → icônes lucide (fallback : étiquette). */
 const GROUP_ICONS: Record<string, LucideIcon> = {
@@ -132,6 +132,23 @@ export const KPI_ORDER: KpiCard["key"][] = [
   "wordpress_drafts",
   "linkedin_to_validate",
 ];
+
+/**
+ * Pastille de la carte « Brouillon WordPress ». Le serveur n'y remonte que des articles dont
+ * le brouillon est déjà sur WordPress : `ready` signifie « version approuvée envoyée », la
+ * suite se passe dans WordPress (jamais « Prêt à publier »).
+ */
+export function wordpressDraftBadge(
+  draft: Pick<NonNullable<Dashboard["latestWordpressDraft"]>, "ready">,
+): {
+  label: string;
+  tone: Tone;
+  hint: string | null;
+} {
+  return draft.ready
+    ? { label: "Brouillon envoyé", tone: "blue", hint: "mise en ligne dans WordPress" }
+    : { label: "En préparation", tone: "amber", hint: null };
+}
 
 /** Couleurs hexadécimales des tons (graphiques recharts). */
 export const TONE_HEX: Record<Tone, string> = {

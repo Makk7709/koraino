@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "./client";
-import type { LinkedInConnectComplete, SignalListQuery, UserInput, UserPatch } from "./types";
+import type {
+  LinkedInConnectComplete,
+  SignalListQuery,
+  UserInput,
+  UserPatch,
+  WordPressSettings,
+} from "./types";
 
 /** Clés React Query. Toute mutation invalide la racine `["kora"]` concernée. */
 export const qk = {
@@ -23,6 +29,10 @@ export const qk = {
   publications: (q?: object) => ["kora", "publications", q ?? {}] as const,
   linkedin: ["kora", "linkedin"] as const,
   linkedinConnection: ["kora", "linkedinConnection"] as const,
+  wordpress: ["kora", "wordpress"] as const,
+  /** Hors de la racine `["kora"]` : ces requêtes appellent le site et ne partent qu'au clic. */
+  wordpressCheck: ["wordpress-site", "check"] as const,
+  wordpressCategories: ["wordpress-site", "categories"] as const,
   newsletters: ["kora", "newsletters"] as const,
   newsletter: (id: string) => ["kora", "newsletter", id] as const,
   dna: ["kora", "dna"] as const,
@@ -122,6 +132,38 @@ export const useLinkedInComplete = () =>
 export const useLinkedInUnlink = () =>
   useKoraMutation(() => api.disconnectLinkedIn(), {
     success: "Compte LinkedIn déconnecté.",
+  });
+export const useWordPressStatus = () =>
+  useQuery({ queryKey: qk.wordpress, queryFn: api.wordpressStatus });
+/** Appelle réellement le site : à n'activer que sur demande (bouton « Tester la connexion »). */
+export const useWordPressCheck = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.wordpressCheck,
+    queryFn: api.wordpressCheck,
+    enabled,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+export const useWordPressCategories = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.wordpressCategories,
+    queryFn: api.wordpressCategories,
+    enabled,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+export const useSaveWordPressSettings = () =>
+  useKoraMutation((input: WordPressSettings) => api.saveWordPressSettings(input), {
+    success: "Correspondance des catégories enregistrée.",
+    invalidate: qk.wordpress,
+  });
+export const useRefreshArticleWordPress = () =>
+  useKoraMutation((articleId: string) => api.refreshArticleWordPress(articleId), {
+    success: "Statut WordPress actualisé.",
   });
 export const useNewsletters = () =>
   useQuery({ queryKey: qk.newsletters, queryFn: api.newsletters });

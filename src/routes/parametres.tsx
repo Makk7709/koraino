@@ -7,12 +7,14 @@ import { ExportsTab } from "@/components/parametres/ExportsTab";
 import { QuotasTab } from "@/components/parametres/QuotasTab";
 import { ScoringGridTab } from "@/components/parametres/ScoringGridTab";
 import { UsersRolesTab } from "@/components/parametres/UsersRolesTab";
+import { WordPressTab } from "@/components/parametres/WordPressTab";
 import { Notice, usePermissions } from "@/components/veille/kit";
 
 const TABS = [
   { value: "grille", label: "Grille de score" },
   { value: "dna", label: "Editorial DNA" },
   { value: "utilisateurs", label: "Utilisateurs & rôles" },
+  { value: "wordpress", label: "WordPress" },
   { value: "quotas", label: "Quotas & budget" },
   { value: "exports", label: "Exports & réversibilité" },
   { value: "audit", label: "Journal d'audit" },
@@ -27,7 +29,10 @@ export const Route = createFileRoute("/parametres")({
   head: () => ({
     meta: [
       { title: "Paramètres — Inovallée Newsroom IA" },
-      { name: "description", content: "Grille de score, Editorial DNA, rôles, quotas et exports." },
+      {
+        name: "description",
+        content: "Grille de score, Editorial DNA, rôles, WordPress, quotas et exports.",
+      },
     ],
   }),
   component: ParametresPage,
@@ -43,7 +48,7 @@ function ParametresPage() {
     <div className="space-y-4">
       <PageTitle
         title="Paramètres"
-        subtitle="Pilotage & conformité · grille de score, référentiel éditorial, rôles, quotas, exports et journal"
+        subtitle="Pilotage & conformité · grille de score, référentiel éditorial, rôles, WordPress, quotas, exports et journal"
       />
       <UnderlineTabs
         tabs={[...TABS]}
@@ -60,6 +65,7 @@ function ParametresPage() {
       {tab === "grille" && <ScoringGridTab readOnly={readOnly} />}
       {tab === "dna" && <EditorialDnaTab readOnly={readOnly} />}
       {tab === "utilisateurs" && <UsersRolesTab />}
+      {tab === "wordpress" && <WordPressTab />}
       {tab === "quotas" && <QuotasTab />}
       {tab === "exports" && <ExportsTab />}
       {tab === "audit" && <AuditTab />}

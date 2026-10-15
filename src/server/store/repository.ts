@@ -1,3 +1,4 @@
+import type { WordPressSettings } from "@/lib/api/types";
 import type {
   ArticleRecord,
   AuditEvent,
@@ -10,7 +11,7 @@ import type {
   NewsletterRecord,
   Notification,
   ObservationRecord,
-  PublicationAttempt,
+  PublicationRecord,
   RuleProposalRecord,
   RuleRecord,
   Settings,
@@ -43,7 +44,7 @@ export interface Repository {
   signals: Collection<SignalRecord>;
   grids: Collection<GridRecord>;
   articles: Collection<ArticleRecord>;
-  publications: Collection<PublicationAttempt>;
+  publications: Collection<PublicationRecord>;
   imports: Collection<ImportRecord>;
   linkedin: Collection<LinkedInPostRecord>;
   newsletters: Collection<NewsletterRecord>;
@@ -54,7 +55,19 @@ export interface Repository {
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;
   getSettings(): Promise<Settings>;
+  /**
+   * Remplace les réglages partagés. Un ancien `wordpress` présent dans `settings` n'y est pas
+   * réécrit : il n'est recopié à son nouvel emplacement que si celui-ci est encore vide.
+   */
   saveSettings(settings: Settings): Promise<void>;
+  /**
+   * Correspondance des catégories WordPress, rangée hors des réglages partagés pour qu'aucune
+   * écriture de `saveSettings` ne l'écrase. Jamais enregistrée à cet emplacement : l'ancien
+   * `settings.wordpress` est lu en secours.
+   */
+  getWordPressSettings(): Promise<WordPressSettings>;
+  /** Remplace la correspondance ; les écritures concurrentes sont sérialisées par l'appelant. */
+  saveWordPressSettings(settings: WordPressSettings): Promise<void>;
   /** Identifiant unique préfixé (ex. `sig_n1042`). */
   nextId(prefix: string): string;
   /**

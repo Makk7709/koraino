@@ -20,6 +20,7 @@ import { audit, notify } from "../services/journal";
 import { assertQuota, paidCall } from "../services/usage";
 import { articleDetail, toArticle, toPublication } from "../services/view";
 import { parse, schemas } from "../validation";
+import { publishWordPress, replayableSuccess, settleSignal } from "../wordpress/publish";
 
 async function getArticleOr404(ctx: Ctx, id: string): Promise<ArticleRecord> {
   const a = await ctx.repo.articles.get(id);
@@ -50,7 +51,7 @@ export const listArticles: Handler = async (ctx) => {
     .filter((a) => !status || status === "tous" || a.status === status)
     .filter((a) => !origin || origin === "tous" || a.origin === origin)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || b.id.localeCompare(a.id));
-  return json(list.map(toArticle));
+  return json(list.map((a) => toArticle(a)));
 };
 
 export const getArticle: Handler = async (ctx) =>
@@ -421,13 +422,17 @@ export const resolveFactCheck: Handler = async (ctx) => {
 export const publishArticle: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getArticleOr404(ctx, ctx.params["id"]!);
-  const { channel } = parse(schemas.publish, ctx.body);
+  const { channel, overwriteRemoteChanges } = parse(schemas.publish, ctx.body);
   const version = rec.currentVersion;
   const key = idempotencyKey(rec.id, version, channel);
   const at = ctx.now.toISOString();
   const attempts = await ctx.repo.publications.list();
 
-  const done = attempts.find((p) => p.idempotencyKey === key && p.status === "succes");
+  // WordPress : rejeu seulement si le brouillon de cet envoi est toujours celui de l'article.
+  const done =
+    channel === "wordpress"
+      ? replayableSuccess(adapters().wordpress, attempts, key, rec)
+      : attempts.find((p) => p.idempotencyKey === key && p.status === "succes");
   if (done) {
     await audit(
       ctx,
@@ -488,70 +493,31 @@ export const publishArticle: Handler = async (ctx) => {
     throw unprocessable(check.code, check.message, { attempt: toPublication(attempt) });
   }
 
-  const current = rec.versions.find((v) => v.n === version)!;
-  let attempt: PublicationAttempt;
-  let next: ArticleRecord = { ...rec, updatedAt: at };
   if (channel === "wordpress") {
-    const wp = adapters().wordpress;
-    const remote = wp.upsertDraft({
-      idempotencyKey: key,
-      remoteId: rec.wordpress.remoteId ?? wp.findDraftByKey(key),
-      title: current.title,
-      content: `${current.chapo}\n\n${current.body}`,
-      excerpt: current.excerpt,
-      categories: current.categories,
-      tags: current.tags,
-    });
-    attempt = {
-      id: ctx.repo.nextId("pub"),
-      idempotencyKey: key,
-      articleId: rec.id,
-      linkedinPostId: null,
-      newsletterId: null,
-      channel,
-      version,
-      status: "succes",
-      code: null,
-      message: `Brouillon WordPress ${remote.remoteId} ${rec.wordpress.remoteId ? "mis à jour" : "créé"} (version ${version}). Aucune publication publique : la mise en ligne reste manuelle.`,
-      attempts: 1,
-      remoteId: remote.remoteId,
-      mode: "brouillon_distant",
-      at,
-      by: ctx.user.name,
-      byUserId: ctx.user.id,
-    };
-    next = {
-      ...next,
-      wordpress: { remoteId: remote.remoteId, status: "brouillon", lastSyncAt: at },
-    };
-  } else {
-    attempt = {
-      id: ctx.repo.nextId("pub"),
-      idempotencyKey: key,
-      articleId: rec.id,
-      linkedinPostId: null,
-      newsletterId: null,
-      channel,
-      version,
-      status: "succes",
-      code: null,
-      message: `Export ${channelLabel(channel)} prêt (version ${version}) : diffusion manuelle.`,
-      attempts: 1,
-      remoteId: null,
-      mode: "export",
-      at,
-      by: ctx.user.name,
-      byUserId: ctx.user.id,
-    };
+    return publishWordPress(ctx, rec, { overwriteRemoteChanges: overwriteRemoteChanges === true });
   }
+
+  const attempt: PublicationAttempt = {
+    id: ctx.repo.nextId("pub"),
+    idempotencyKey: key,
+    articleId: rec.id,
+    linkedinPostId: null,
+    newsletterId: null,
+    channel,
+    version,
+    status: "succes",
+    code: null,
+    message: `Export ${channelLabel(channel)} prêt (version ${version}) : diffusion manuelle.`,
+    attempts: 1,
+    remoteId: null,
+    mode: "export",
+    at,
+    by: ctx.user.name,
+    byUserId: ctx.user.id,
+  };
   await ctx.repo.publications.insert(attempt);
-  await ctx.repo.articles.update(next);
-  if (rec.signalId) {
-    const signal = await ctx.repo.signals.get(rec.signalId);
-    if (signal && signal.status !== "traite" && signal.status !== "rejete") {
-      await ctx.repo.signals.update({ ...signal, status: "traite", updatedAt: at });
-    }
-  }
+  await ctx.repo.articles.update({ ...rec, updatedAt: at });
+  await settleSignal(ctx, rec.signalId, at);
   await audit(
     ctx,
     "publication.success",
@@ -561,8 +527,7 @@ export const publishArticle: Handler = async (ctx) => {
   );
   await notify(ctx.repo, ctx.now, {
     kind: "publication",
-    title:
-      channel === "wordpress" ? "Brouillon WordPress prêt" : `Export ${channelLabel(channel)} prêt`,
+    title: `Export ${channelLabel(channel)} prêt`,
     body: `${rec.title} (version ${version})`,
     link: `/articles?id=${rec.id}`,
   });

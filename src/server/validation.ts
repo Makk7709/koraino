@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { badRequest } from "./http";
+import { CATEGORY_LABEL } from "./store/catalog";
 
 export const THEMES = [
   "deeptech_quantique",
@@ -51,6 +52,23 @@ const roles = z
   .min(1, "Au moins un rôle est requis")
   .max(ROLES.length)
   .transform((list) => [...new Set(list)]);
+
+/**
+ * Slug WordPress (les caractères accentués y figurent encodés en minuscules : `%c3%a9` ; le
+ * tiret bas est conservé par WordPress) ; chaîne vide, null ou absent = aucune catégorie.
+ */
+const optionalSlug = z
+  .string()
+  .trim()
+  .max(200, "Slug WordPress trop long (200 caractères au plus)")
+  .refine(
+    (v) => v === "" || /^(?:[a-z0-9_-]|%[0-9a-f]{2})+$/.test(v),
+    "Slug WordPress attendu : minuscules, chiffres, tirets et tirets bas (caractères accentués encodés %xx)",
+  )
+  .nullable()
+  .optional()
+  .transform((v) => v || null);
+const KORA_CATEGORY_LABELS = Object.values(CATEGORY_LABEL);
 
 export const schemas = {
   switchUser: z.object({ userId: text(64) }),
@@ -130,7 +148,10 @@ export const schemas = {
   reject: z.object({
     reason: z.string().trim().min(3, "Le motif de rejet est obligatoire").max(1000),
   }),
-  publish: z.object({ channel: z.enum(CHANNELS) }),
+  publish: z.object({
+    channel: z.enum(CHANNELS),
+    overwriteRemoteChanges: z.boolean().optional(),
+  }),
   factCheck: z.object({
     status: z.enum(["etaye", "non_corrobore"]),
     note: z.string().trim().max(1000).nullable().optional(),
@@ -178,10 +199,29 @@ export const schemas = {
   createRule: z.object({ kind: z.enum(RULE_KINDS), text: text(500) }),
   updateRule: z.object({ text: text(500).optional(), active: z.boolean().optional() }),
   ruleDecision: z.object({ decision: z.enum(["acceptee", "refusee"]) }),
+  /** Clés : libellés des catégories KORA (casse indifférente) ; valeurs : slugs WordPress. */
+  wordpressSettings: z.object({
+    categoryMap: z.record(z.string(), optionalSlug).transform((map, ctx) => {
+      const out: Record<string, string> = {};
+      for (const [key, slug] of Object.entries(map)) {
+        const wanted = key.trim().toLocaleLowerCase("fr");
+        const label = KORA_CATEGORY_LABELS.find((l) => l.toLocaleLowerCase("fr") === wanted);
+        if (!label) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `Catégorie KORA inconnue : « ${key} »`,
+          });
+        } else if (slug) out[label] = slug;
+      }
+      return out;
+    }),
+    defaultCategory: optionalSlug,
+  }),
 };
 
 /** Valide un corps de requête ; 400 `validation_error` avec le détail des champs sinon. */
-export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
+export function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, input: unknown): T {
   const result = schema.safeParse(input ?? {});
   if (result.success) return result.data;
   const issues = result.error.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
