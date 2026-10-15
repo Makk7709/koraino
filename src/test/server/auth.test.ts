@@ -190,7 +190,7 @@ describe("mode supabase : session obligatoire", () => {
     expect(head.status).toBe(200);
   });
 
-  it("export de newsletter : téléchargement par lien, mais jamais déclenché depuis un autre site", async () => {
+  it("export de newsletter : téléchargement par lien sans effet, consignation par requête authentifiée", async () => {
     const { token } = await linkAccount(fake, USERS.admin);
     const edition = await call<NewsletterEdition>("GET", "/newsletters/nl_current", {
       headers: bearer(token),
@@ -215,7 +215,20 @@ describe("mode supabase : session obligatoire", () => {
       headers: { cookie, "sec-fetch-site": "same-origin" },
     });
     expect(viaLink.status).toBe(200);
-    expect((await repo.newsletters.get("nl_current"))?.status).toBe("exportee");
+    expect((await repo.newsletters.get("nl_current"))?.status).toBe("approuvee");
+    expect(await repo.publications.list()).toHaveLength(publications);
+
+    expectUnauthenticated(
+      await call("POST", "/newsletters/nl_current/export", {
+        headers: { cookie, "sec-fetch-site": "same-origin" },
+      }),
+      "consignation par cookie",
+    );
+    const recorded = await call<NewsletterEdition>("POST", "/newsletters/nl_current/export", {
+      headers: bearer(token),
+    });
+    expect(recorded.body.status).toBe("exportee");
+    expect(await repo.publications.list()).toHaveLength(publications + 1);
   });
 
   it("réserve POST /me à la démonstration (403 demo_only)", async () => {

@@ -163,6 +163,7 @@ const ROUTES: RouteDef[] = [
     handler: dist.exportNewsletter,
     download: true,
   },
+  { method: "POST", pattern: "/newsletters/:id/export", handler: dist.recordNewsletterExport },
 
   { method: "GET", pattern: "/editorial-dna", handler: dist.getEditorialDna },
   { method: "POST", pattern: "/editorial-dna/rules", handler: dist.createRule },
