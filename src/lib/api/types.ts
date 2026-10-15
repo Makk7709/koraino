@@ -82,7 +82,7 @@ export interface CollectionEnrichment {
   status: "ok" | "non_configure" | "erreur";
   /** Résultats renvoyés par Perplexity. */
   received: number;
-  /** Résultats qui citent l'entreprise. */
+  /** Résultats retenus : datés, hors site de l'entreprise, qui la citent. */
   matched: number;
   /** Nouvelles observations issues de Perplexity. */
   added: number;

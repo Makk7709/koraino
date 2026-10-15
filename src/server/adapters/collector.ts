@@ -27,8 +27,14 @@ export interface RawItem {
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */
 export type EnrichmentOutcome = Omit<CollectionEnrichment, "added">;
 
+/** Incident sans échec de la collecte (ex. Google News indisponible, Perplexity a répondu). */
+export interface CollectWarning {
+  code: string;
+  reason: string;
+}
+
 export type CollectResult =
-  | { ok: true; items: RawItem[]; enrichment?: EnrichmentOutcome }
+  | { ok: true; items: RawItem[]; enrichment?: EnrichmentOutcome; warning?: CollectWarning }
   | { ok: false; code: string; reason: string; transient: boolean };
 
 /** Âge maximal (jours) d'une publication datée retenue par la collecte réelle. */
@@ -241,32 +247,38 @@ interface PerplexityResult {
   url?: string;
   snippet?: string;
   date?: string | null;
-  last_updated?: string | null;
 }
 
-/** Résultats Perplexity qui citent l'entreprise, au format des éléments collectés. */
+/**
+ * Résultats Perplexity retenus, au format des éléments collectés : publications datées, hors
+ * site de l'entreprise (couvert par ses propres sources), qui la citent. Les pages sans date
+ * de publication (annuaires, pages produit) ne sont pas des actualités.
+ */
 export function mapPerplexityResults(
   results: PerplexityResult[],
   company: CompanyRecord,
 ): RawItem[] {
   const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
-  return results
-    .filter((r) => r.url && r.title)
-    .filter((r) => names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n)))
-    .map((r) => {
-      const host = hostOf(r.url!);
-      const raw = r.date || r.last_updated;
-      const d = raw ? new Date(raw) : null;
-      return {
-        url: r.url!,
-        title: r.title!,
+  const ownSite = (host: string) =>
+    !!company.domain && (host === company.domain || host.endsWith(`.${company.domain}`));
+  return results.flatMap((r) => {
+    if (!r.url || !r.title) return [];
+    const host = hostOf(r.url);
+    const d = r.date ? new Date(r.date) : null;
+    if (!host || ownSite(host) || !d || Number.isNaN(d.getTime())) return [];
+    if (!names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n))) return [];
+    return [
+      {
+        url: r.url,
+        title: r.title,
         html: `<article><h1>${r.title}</h1><p>${r.snippet ?? ""}</p></article>`,
         outlet: { name: host, domain: host, brand: brandFor(host) },
-        publishedAt: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
+        publishedAt: d.toISOString(),
         eventDate: null,
         via: "perplexity" as const,
-      };
-    });
+      },
+    ];
+  });
 }
 
 function titleKey(title: string): string {
@@ -294,7 +306,7 @@ export function mergeEnrichment(items: RawItem[], extra: RawItem[]): RawItem[] {
 
 /**
  * Recherche Perplexity (via la passerelle) : résultats web du dernier mois sur l'entreprise.
- * Un échec n'interrompt pas la collecte Google News ; il est consigné dans l'exécution.
+ * Ne lève jamais : un échec n'interrompt pas la collecte Google News, il est consigné.
  */
 export async function perplexitySearch(
   company: CompanyRecord,
@@ -371,54 +383,72 @@ export class RealCollector implements Collector {
     const fallback: Outlet = company
       ? { name: company.name, domain: company.domain, brand: company.brand }
       : { name: hostOf(url), domain: hostOf(url), brand: brandFor(hostOf(url)) };
+    const search = useGoogle && company ? perplexitySearch(company, this.env) : null;
+
+    let items: RawItem[];
+    let warning: CollectWarning | undefined;
     try {
-      let text = await this.fetchText(url);
-      if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
-        const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
-        const href = alt?.match(/href="([^"]+)"/i)?.[1];
-        if (!href) return { ok: true, items: [] };
-        text = await this.fetchText(new URL(href, url).toString());
-      }
+      const feed = await this.readFeed(url, fallback);
       const via: ObservationVia = useGoogle ? "google_news" : "flux";
-      let items: RawItem[] = parseFeed(text, fallback).map((i) => ({ ...i, via }));
-      let enrichment: EnrichmentOutcome | undefined;
-      if (useGoogle && company) {
-        const extra = await perplexitySearch(company, this.env);
-        enrichment = extra.outcome;
-        items = mergeEnrichment(items, extra.items);
-      }
-      if (company && !useGoogle) {
-        // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
-        // sauf si le flux est celui de l'entreprise elle-même.
-        const own = hostOf(url).endsWith(company.domain);
-        if (!own) {
-          const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
-          items = items.filter((i) =>
-            names.some((n) => `${i.title} ${i.html}`.toLowerCase().includes(n)),
-          );
-        }
-      }
-      const cutoff = input.now.getTime() - FRESHNESS_DAYS * 86_400_000;
-      // Certains flux (agendas d'événements) mettent la date de l'événement à venir
-      // à la place de la date de publication : une date future n'est pas fiable.
-      const future = input.now.getTime() + 86_400_000;
-      items = items.map((i) =>
-        i.publishedAt && new Date(i.publishedAt).getTime() > future
-          ? { ...i, publishedAt: null }
-          : i,
-      );
-      items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
-      items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
-      return enrichment ? { ok: true, items, enrichment } : { ok: true, items };
+      items = (feed ?? []).map((i) => ({ ...i, via }));
     } catch (e) {
       const err = e as Error & { code?: string };
-      return {
-        ok: false,
+      const failure = {
+        ok: false as const,
         code: err.code ?? "NETWORK",
         reason: err.message || "Erreur réseau",
         transient: err.code !== "HTTP_403" && err.code !== "HTTP_404",
       };
+      // Google News indisponible : la recherche Perplexity suffit à mener la collecte.
+      if (!search || (await search).outcome.status !== "ok") return failure;
+      items = [];
+      warning = { code: failure.code, reason: `Google News : ${failure.reason}` };
     }
+
+    let enrichment: EnrichmentOutcome | undefined;
+    if (search) {
+      const extra = await search;
+      enrichment = extra.outcome;
+      items = mergeEnrichment(items, extra.items);
+    }
+    if (company && !useGoogle) {
+      // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
+      // sauf si le flux est celui de l'entreprise elle-même.
+      const own = hostOf(url).endsWith(company.domain);
+      if (!own) {
+        const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+        items = items.filter((i) =>
+          names.some((n) => `${i.title} ${i.html}`.toLowerCase().includes(n)),
+        );
+      }
+    }
+    const cutoff = input.now.getTime() - FRESHNESS_DAYS * 86_400_000;
+    // Certains flux (agendas d'événements) mettent la date de l'événement à venir
+    // à la place de la date de publication : une date future n'est pas fiable.
+    const future = input.now.getTime() + 86_400_000;
+    items = items.map((i) =>
+      i.publishedAt && new Date(i.publishedAt).getTime() > future ? { ...i, publishedAt: null } : i,
+    );
+    items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
+    items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
+    return {
+      ok: true,
+      items,
+      ...(enrichment ? { enrichment } : {}),
+      ...(warning ? { warning } : {}),
+    };
+  }
+
+  /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun (aucune actualité). */
+  private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
+    let text = await this.fetchText(url);
+    if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
+      const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
+      const href = alt?.match(/href="([^"]+)"/i)?.[1];
+      if (!href) return null;
+      text = await this.fetchText(new URL(href, url).toString());
+    }
+    return parseFeed(text, fallback);
   }
 
   private async fetchText(url: string): Promise<string> {
