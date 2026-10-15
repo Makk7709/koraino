@@ -201,7 +201,9 @@ export async function paidCall<T>(
   } finally {
     await releaseReservation(repo, call.estimate);
   }
-  await checkAlerts(repo, now);
+  await checkAlerts(repo, now).catch((e: unknown) => {
+    console.error("[budget] alertes non vérifiées (revérifiées au prochain appel payant)", e);
+  });
   return result;
 }
 

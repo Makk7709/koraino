@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { HumanImport } from "@/lib/api/types";
+import type { CollectionRun, HumanImport } from "@/lib/api/types";
 import { COSTS, monthTotals } from "@/server/domain/budget";
 import { monthKey } from "@/server/domain/dates";
 import { getRepository } from "@/server/store/memory";
@@ -139,4 +139,14 @@ describe("deux demandes simultanées : une seule création", () => {
     expect(statuses(res)).toEqual([201, 402]);
     expect((await repo.getSettings()).reservedEur).toBe(0);
   });
+
+  it("budget occupé trop longtemps : seule l'exécution de la source échoue, sans la marquer en erreur", async () => {
+    const repo = await getRepository();
+    const source = (await repo.sources.list()).find((s) => s.access === "ok")!;
+    await repo.acquireLock("budget", 60_000);
+    const res = await call<CollectionRun>("POST", `/sources/${source.id}/collect`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "echec", errorCode: "budget_busy" });
+    expect((await repo.sources.get(source.id))!.access).toBe("ok");
+  }, 10_000);
 });

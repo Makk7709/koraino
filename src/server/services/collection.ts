@@ -235,6 +235,8 @@ async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<Co
 /**
  * Exécute la collecte d'une source (WF1). Le coût estimé est réservé avant l'appel :
  * si le budget est épuisé, l'exécution est consignée « bloque_quota » et l'erreur 402 propagée.
+ * Budget momentanément occupé (`budget_busy`) : seule cette exécution échoue, la source reste
+ * dans son état et la collecte globale continue.
  */
 async function runSource(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
@@ -308,8 +310,17 @@ async function runSource(
       },
     );
   } catch (e) {
-    if (!(e instanceof HttpError) || e.status !== 402) throw e;
-    return recordRun(ctx, blockedRun(base, now));
+    if (!(e instanceof HttpError)) throw e;
+    if (e.status === 402) return recordRun(ctx, blockedRun(base, now));
+    if (e.code !== "budget_busy") throw e;
+    return recordRun(ctx, {
+      ...base,
+      finishedAt: now.toISOString(),
+      status: "echec",
+      newObservations: 0,
+      errorCode: e.code,
+      errorMessage: e.message,
+    });
   }
 
   const { result, attempts } = outcome;
