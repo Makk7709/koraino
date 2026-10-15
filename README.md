@@ -11,7 +11,7 @@ La chaîne de travail va du registre à la diffusion : **registre → collecte �
 | Écran | Rôle |
 |---|---|
 | Dashboard | Indicateurs, activité éditoriale, actualités détectées, calendrier. |
-| Veille | Sources de chaque entreprise ; lancement de la collecte (flux RSS/Atom et Google News). |
+| Veille | Sources de chaque entreprise ; lancement de la collecte (flux RSS/Atom, Google News, Perplexity) et historique des collectes. |
 | Signaux | Articles regroupés par événement, score éditorial sur 10, indicateur documentaire. |
 | Articles | Dossier factuel, brouillons sourcés, import, versions et approbations. |
 | LinkedIn | Variantes de posts ; publication sur le compte LinkedIn de la personne qui publie si elle l'a relié, sinon export. |
@@ -19,7 +19,17 @@ La chaîne de travail va du registre à la diffusion : **registre → collecte �
 | Entreprises | Registre des entreprises suivies (150 au maximum). |
 | Paramètres | Grille de score, référentiel éditorial, utilisateurs et rôles, quotas et budget, exports, journal d'audit. |
 
-La collecte est réelle et déclenchée à la main. WordPress est encore simulé. Les textes sont produits par des gabarits, puis réécrits par OpenAI si une clé est configurée.
+Les brouillons sont envoyés à WordPress par l'API REST du site ; cet envoi reste simulé en mode démonstration et sous Vitest. Les textes sont produits par des gabarits, puis réécrits par OpenAI si une clé est configurée.
+
+## Collecte
+
+La collecte est réelle et se lance à la main (« Lancer la collecte » sur la page Veille, ou la relance d'une source) : aucune collecte n'est planifiée.
+
+- Chaque entreprise reçoit à sa création une source presse « Google News — nom ». On peut lui ajouter des flux RSS/Atom et des pages d'actualités.
+- Les recherches presse sont enrichies par Perplexity, appelé par la passerelle de connexion de la plateforme d'hébergement. Seuls sont gardés les résultats datés, hors du site de l'entreprise, qui la citent. Si Google News échoue, les résultats Perplexity sont quand même enregistrés et la collecte signale l'échec.
+- Seules les publications datées de moins de 30 jours sont gardées. Chaque source apporte au plus 3 nouvelles publications par collecte.
+- Une seule collecte à la fois : une seconde demande reçoit « Une collecte est déjà en cours ».
+- La provenance de chaque publication (flux, Google News, Perplexity) est visible dans la fiche du signal et dans l'export des observations.
 
 ## Stack
 
@@ -77,7 +87,9 @@ Les variables publiques sont dans `.env` (versionné). Les secrets sont lus côt
 | `SUPABASE_SERVICE_ROLE_KEY` | Accès serveur à la base. **Secret.** |
 | `KORA_PUBLIC_URL` | Adresse publique de l'application, utilisée dans les liens d'invitation et le retour OAuth LinkedIn. |
 | `KORA_ADMIN_EMAILS` | Adresse(s) autorisée(s) à devenir le premier administrateur, séparées par des virgules. |
-| `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY` | Accès à la passerelle de connexion LinkedIn (OAuth et publication au nom de l'utilisateur). **Secrets.** |
+| `LOVABLE_API_KEY` | Accès à la passerelle de connexion de la plateforme d'hébergement, utilisée pour LinkedIn et Perplexity. **Secret.** |
+| `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY` | Connecteur LinkedIn de la passerelle (OAuth et publication au nom de l'utilisateur). **Secret.** |
+| `PERPLEXITY_API_KEY` | Facultative. Clé de la connexion Perplexity de la passerelle, pour enrichir les recherches presse. Sans elle, la collecte se fait avec Google News seul et l'historique des collectes indique « Non configuré ». **Secret.** |
 | `APP_USER_CONNECTION_KEY_SECRET` | Chiffrement des connexions LinkedIn stockées en base. **Secret, à ne jamais changer** : les connexions existantes deviendraient illisibles. |
 | `AI_API_KEY` | Facultative. Clé OpenAI pour réécrire les textes générés. **Secret.** |
 | `WORDPRESS_URL` | Adresse du site WordPress (`https://`, avec le sous-dossier d'installation éventuel). Les brouillons y sont envoyés par l'API REST. |

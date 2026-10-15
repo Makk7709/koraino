@@ -186,6 +186,12 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
       "composition",
     );
 
+    const early = await call<ApiErrorBody>("POST", "/newsletters/nl_current/export", {
+      user: VALIDATOR,
+    });
+    expect(early.status).toBe(409);
+    expect(early.body.error.code).toBe("approval_missing");
+
     await call("POST", "/newsletters/nl_current/approve", {
       body: { version: 8 },
       user: VALIDATOR,
@@ -196,9 +202,18 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
     expect(exported.headers.get("content-disposition")).toMatch(/newsletter-.*-v8\.txt/);
     expect(exported.text).not.toMatch(/aperçu/i);
     expect((await call<NewsletterEdition>("GET", "/newsletters/nl_current")).body.status).toBe(
-      "exportee",
+      "approuvee",
     );
-    await call("GET", "/newsletters/nl_current/export?format=html", { user: VALIDATOR });
+
+    const byEditor = await call<ApiErrorBody>("POST", "/newsletters/nl_current/export", {
+      user: EDITOR,
+    });
+    expect(byEditor.status).toBe(403);
+    const recorded = await call<NewsletterEdition>("POST", "/newsletters/nl_current/export", {
+      user: VALIDATOR,
+    });
+    expect(recorded.body.status).toBe("exportee");
+    await call("POST", "/newsletters/nl_current/export", { user: VALIDATOR });
     const attempts = await call<PublicationAttempt[]>("GET", "/publications?channel=newsletter");
     expect(attempts.body.filter((p) => p.newsletterId === "nl_current")).toHaveLength(1);
 

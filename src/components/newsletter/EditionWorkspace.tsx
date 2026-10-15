@@ -97,13 +97,18 @@ export function EditionWorkspace({
   const canEdit = perms.canWrite && !locked;
   const exportsQuery = usePublications({ channel: "newsletter" });
   const exports = (exportsQuery.data ?? []).filter((p) => p.newsletterId === edition.id);
-  const onExported = () =>
-    window.setTimeout(() => void qc.invalidateQueries({ queryKey: ["kora"] }), 1200);
-
   const setEdition = (e: NewsletterEdition) =>
     qc.setQueryData<NewsletterEdition[]>(qk.newsletters, (old) =>
       old?.map((x) => (x.id === e.id ? e : x)),
     );
+
+  const recordExport = useKoraMutation(() => api.recordNewsletterExport(edition.id), {
+    onSuccess: setEdition,
+  });
+  const onExported = () => {
+    if (approved && !locked && perms.canValidate && !recordExport.isPending)
+      recordExport.mutate(undefined);
+  };
 
   const save = useKoraMutation(
     () =>

@@ -10,7 +10,7 @@ import { LINKEDIN_CONNECTOR_ID } from "./connectors";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
 import { renderNewsletterHtml, renderNewsletterText } from "../domain/newsletter";
-import { assertCan, can } from "../domain/permissions";
+import { assertCan } from "../domain/permissions";
 import { isoDay } from "../domain/dates";
 import { truncate } from "../domain/text";
 import {
@@ -29,8 +29,14 @@ import {
   notFound,
   unprocessable,
 } from "../http";
-import type { LinkedInPostRecord, NewsletterRecord } from "../store/records";
+import type {
+  ArticleRecord,
+  LinkedInPostRecord,
+  NewsletterRecord,
+  SignalRecord,
+} from "../store/records";
 import { audit, notify } from "../services/journal";
+import { GENERATION_LOCK_TTL_MS, WRITE_LOCK_TTL_MS, withLock } from "../services/locks";
 import {
   addItem,
   createEdition,
@@ -81,6 +87,26 @@ export const createLinkedIn: Handler = async (ctx) => {
   const signalId = input.signalId ?? article?.signalId ?? null;
   const signal = signalId ? await ctx.repo.signals.get(signalId) : undefined;
   if (input.signalId && !signal) throw notFound("Signal introuvable.");
+  return withLock(
+    ctx.repo,
+    `linkedin-create:${article ? article.id : signal!.id}`,
+    {
+      ttlMs: GENERATION_LOCK_TTL_MS,
+      busy: () =>
+        conflict(
+          "generation_in_progress",
+          "Un post LinkedIn est déjà en cours de génération pour ce contenu : patientez quelques secondes.",
+        ),
+    },
+    () => generateLinkedIn(ctx, article, signal),
+  );
+};
+
+async function generateLinkedIn(
+  ctx: Ctx,
+  article: ArticleRecord | undefined,
+  signal: SignalRecord | undefined,
+): Promise<Response> {
   const existing = (await ctx.repo.linkedin.list()).find(
     (p) =>
       p.status !== "exporte" &&
@@ -143,7 +169,7 @@ export const createLinkedIn: Handler = async (ctx) => {
     `${variants.length} variante(s) générée(s) — ${title}`,
   );
   return json(toLinkedIn(rec), { status: 201 });
-};
+}
 
 export const updateLinkedIn: Handler = async (ctx) => {
   assertCan(ctx.user, "linkedin.write");
@@ -736,53 +762,67 @@ export const approveNewsletter: Handler = async (ctx) => {
   return json(toNewsletter(next));
 };
 
+const isApproved = (rec: NewsletterRecord) =>
+  !!rec.approval?.valid && rec.approval.version === rec.version;
+
 /**
- * Export HTML ou texte, toujours disponible (aperçu signalé si non approuvé).
- * Avec une approbation valide et le droit de diffusion, l'export est consigné (idempotent).
+ * Consigne l'export de la version approuvée (idempotent) : tentative de publication, statut
+ * « exportée », audit. Requête d'écriture distincte du téléchargement, qui reste sans effet.
  */
+export const recordNewsletterExport: Handler = async (ctx) => {
+  assertCan(ctx.user, "publish");
+  const rec = await getEditionOr404(ctx);
+  if (!isApproved(rec)) {
+    throw conflict(
+      "approval_missing",
+      `La version ${rec.version} doit être approuvée avant d'être exportée.`,
+    );
+  }
+  const key = idempotencyKey(rec.id, rec.version, "newsletter");
+  const exists = (await ctx.repo.publications.list()).some(
+    (p) => p.idempotencyKey === key && p.status === "succes",
+  );
+  if (exists) return json(toNewsletter(rec));
+  const at = ctx.now.toISOString();
+  const attempt: PublicationAttempt = {
+    id: ctx.repo.nextId("pub"),
+    idempotencyKey: key,
+    articleId: null,
+    linkedinPostId: null,
+    newsletterId: rec.id,
+    channel: "newsletter",
+    version: rec.version,
+    status: "succes",
+    code: null,
+    message:
+      "Édition exportée (HTML et texte) : l'envoi reste manuel, KORA n'envoie jamais la newsletter.",
+    attempts: 1,
+    remoteId: null,
+    mode: "export",
+    at,
+    by: ctx.user.name,
+    byUserId: ctx.user.id,
+  };
+  await ctx.repo.publications.insert(attempt);
+  const next: NewsletterRecord = { ...rec, status: "exportee", updatedAt: at };
+  await ctx.repo.newsletters.update(next);
+  await audit(
+    ctx,
+    "publication.success",
+    "publication",
+    attempt.id,
+    `Newsletter « ${rec.title} » exportée (version ${rec.version})`,
+  );
+  return json(toNewsletter(next));
+};
+
+/** Téléchargement HTML ou texte, sans effet (aperçu signalé si la version n'est pas approuvée). */
 export const exportNewsletter: Handler = async (ctx) => {
   const rec = await getEditionOr404(ctx);
   const format = ctx.query.get("format") ?? "html";
   if (format !== "html" && format !== "txt")
     throw badRequest("invalid_format", "Format attendu : html ou txt.");
-  const approved = !!rec.approval?.valid && rec.approval.version === rec.version;
-  if (approved && can(ctx.user, "publish")) {
-    const key = idempotencyKey(rec.id, rec.version, "newsletter");
-    const exists = (await ctx.repo.publications.list()).some(
-      (p) => p.idempotencyKey === key && p.status === "succes",
-    );
-    if (!exists) {
-      const at = ctx.now.toISOString();
-      const attempt: PublicationAttempt = {
-        id: ctx.repo.nextId("pub"),
-        idempotencyKey: key,
-        articleId: null,
-        linkedinPostId: null,
-        newsletterId: rec.id,
-        channel: "newsletter",
-        version: rec.version,
-        status: "succes",
-        code: null,
-        message:
-          "Édition exportée (HTML et texte) : l'envoi reste manuel, KORA n'envoie jamais la newsletter.",
-        attempts: 1,
-        remoteId: null,
-        mode: "export",
-        at,
-        by: ctx.user.name,
-        byUserId: ctx.user.id,
-      };
-      await ctx.repo.publications.insert(attempt);
-      await ctx.repo.newsletters.update({ ...rec, status: "exportee", updatedAt: at });
-      await audit(
-        ctx,
-        "publication.success",
-        "publication",
-        attempt.id,
-        `Newsletter « ${rec.title} » exportée (version ${rec.version})`,
-      );
-    }
-  }
+  const approved = isApproved(rec);
   const dto = toNewsletter(rec);
   const name = `newsletter-${isoDay(new Date(rec.weekOf))}-v${rec.version}`;
   return format === "html"
@@ -874,11 +914,23 @@ export const updateRule: Handler = async (ctx) => {
 };
 
 /** Décision humaine sur une proposition WF6 : rien n'est appliqué sans acceptation explicite. */
-export const decideRuleProposal: Handler = async (ctx) => {
+export const decideRuleProposal: Handler = (ctx) => {
   assertCan(ctx.user, "rule.write");
+  const { decision } = parse(schemas.ruleDecision, ctx.body);
+  return withLock(
+    ctx.repo,
+    `rule-proposal:${ctx.params["id"]}`,
+    {
+      ttlMs: WRITE_LOCK_TTL_MS,
+      busy: () => conflict("already_decided", "Cette proposition est déjà en cours de traitement."),
+    },
+    () => decideProposal(ctx, decision),
+  );
+};
+
+async function decideProposal(ctx: Ctx, decision: "acceptee" | "refusee"): Promise<Response> {
   const rec = await ctx.repo.ruleProposals.get(ctx.params["id"]!);
   if (!rec) throw notFound("Proposition introuvable.");
-  const { decision } = parse(schemas.ruleDecision, ctx.body);
   if (rec.status !== "proposee")
     throw conflict("already_decided", "Cette proposition a déjà été traitée.");
   const at = ctx.now.toISOString();
@@ -936,4 +988,4 @@ export const decideRuleProposal: Handler = async (ctx) => {
   );
   const { signature: _s, ...dto } = next;
   return json(dto);
-};
+}

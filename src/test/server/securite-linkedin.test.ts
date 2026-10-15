@@ -409,7 +409,7 @@ describe("F4 — résolution réservée à l'auteur de la tentative ou à un adm
         })
       ).status,
     ).toBe(200);
-    await call("GET", "/newsletters/nl_current/export?format=txt", { user: VALIDATOR });
+    await call("POST", "/newsletters/nl_current/export", { user: VALIDATOR });
     const exports = await call<PublicationAttempt[]>("GET", "/publications?channel=newsletter");
     expect(exports.body.find((p) => p.newsletterId === "nl_current")).toMatchObject({
       byUserId: VALIDATOR,

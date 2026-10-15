@@ -23,12 +23,13 @@ import type {
   SourceRecord,
 } from "../store/records";
 import { notify } from "./journal";
+import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
 import { paidCall } from "./usage";
 
 /** Nombre maximal d'essais par exécution (§6 : tentatives bornées). */
 export const MAX_ATTEMPTS = 3;
-/** Nombre maximal de publications retenues par source et par exécution. */
+/** Nombre maximal de nouvelles publications retenues par source et par exécution. */
 const MAX_ITEMS = 3;
 
 /** État chargé une fois par lot de collecte. */
@@ -51,6 +52,12 @@ async function loadState(ctx: Pick<Ctx, "repo">): Promise<CollectState> {
     signals,
     knownUrls: new Set(observations.map((o) => canonicalUrl(o.url))),
   };
+}
+
+/** Publication déjà connue (ou URL refusée) : elle n'occupe pas de place dans la limite par exécution. */
+function isKnown(state: CollectState, item: RawItem): boolean {
+  const check = validateSourceUrl(item.url);
+  return !check.ok || state.knownUrls.has(canonicalUrl(check.url.toString()));
 }
 
 function knownEvents(state: CollectState, companyId: string | null) {
@@ -228,6 +235,8 @@ async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<Co
 /**
  * Exécute la collecte d'une source (WF1). Le coût estimé est réservé avant l'appel :
  * si le budget est épuisé, l'exécution est consignée « bloque_quota » et l'erreur 402 propagée.
+ * Budget momentanément occupé (`budget_busy`) : seule cette exécution échoue, la source reste
+ * dans son état et la collecte globale continue.
  */
 async function runSource(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
@@ -276,28 +285,42 @@ async function runSource(
         }
         return { result, attempts: attempt };
       },
-      ({ result }) => [
-        {
-          kind: "search_query",
-          costEur: COSTS.search,
-          units: 1,
-          label: `Collecte ${source.label}`,
-        },
-        ...(result.ok && result.items.length
-          ? [
-              {
-                kind: "observation" as const,
-                costEur: Math.min(result.items.length, MAX_ITEMS) * COSTS.observation,
-                units: Math.min(result.items.length, MAX_ITEMS),
-                label: `Observations ${source.label}`,
-              },
-            ]
-          : []),
-      ],
+      ({ result }) => {
+        const units = result.ok
+          ? Math.min(result.items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS)
+          : 0;
+        return [
+          {
+            kind: "search_query",
+            costEur: COSTS.search,
+            units: 1,
+            label: `Collecte ${source.label}`,
+          },
+          ...(units
+            ? [
+                {
+                  kind: "observation" as const,
+                  costEur: units * COSTS.observation,
+                  units,
+                  label: `Observations ${source.label}`,
+                },
+              ]
+            : []),
+        ];
+      },
     );
   } catch (e) {
-    if (!(e instanceof HttpError) || e.status !== 402) throw e;
-    return recordRun(ctx, blockedRun(base, now));
+    if (!(e instanceof HttpError)) throw e;
+    if (e.status === 402) return recordRun(ctx, blockedRun(base, now));
+    if (e.code !== "budget_busy") throw e;
+    return recordRun(ctx, {
+      ...base,
+      finishedAt: now.toISOString(),
+      status: "echec",
+      newObservations: 0,
+      errorCode: e.code,
+      errorMessage: e.message,
+    });
   }
 
   const { result, attempts } = outcome;
@@ -333,7 +356,8 @@ async function runSource(
 
   let created = 0;
   let fromEnrichment = 0;
-  for (const item of result.items.slice(0, MAX_ITEMS)) {
+  for (const item of result.items) {
+    if (created >= MAX_ITEMS) break;
     if (await ingest(ctx, state, current, item)) {
       created += 1;
       if (item.via === "perplexity") fromEnrichment += 1;
@@ -374,6 +398,30 @@ function blockedRun(
   };
 }
 
+const COLLECT_LOCK = "collecte";
+/** Couvre une collecte complète (une soixantaine de sources, chacune bornée à ~35 s par essai). */
+const COLLECT_LOCK_TTL_MS = 15 * 60_000;
+
+/**
+ * Une seule collecte à la fois : deux collectes simultanées (deux onglets, deux personnes)
+ * partiraient du même état et enregistreraient deux fois les mêmes publications.
+ */
+function exclusive<T>(ctx: Pick<Ctx, "repo">, fn: () => Promise<T>): Promise<T> {
+  return withLock(
+    ctx.repo,
+    COLLECT_LOCK,
+    {
+      ttlMs: COLLECT_LOCK_TTL_MS,
+      busy: () =>
+        conflict(
+          "collection_in_progress",
+          "Une collecte est déjà en cours : réessayez dans quelques minutes.",
+        ),
+    },
+    fn,
+  );
+}
+
 /** Collecte d'une source ; 402 `budget_exhausted` si le plafond est atteint (exécution consignée). */
 export async function collectOne(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
@@ -385,7 +433,7 @@ export async function collectOne(
       "Cette source est désactivée : réactivez-la avant de lancer une collecte.",
     );
   }
-  const run = await runSource(ctx, await loadState(ctx), source);
+  const run = await exclusive(ctx, async () => runSource(ctx, await loadState(ctx), source));
   if (run.status === "bloque_quota") {
     throw budgetExhausted(
       "Budget API atteint : la collecte est suspendue jusqu'au mois prochain ou à une hausse du plafond.",
@@ -398,27 +446,29 @@ export async function collectOne(
 export async function collectAll(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
 ): Promise<CollectionRun[]> {
-  const state = await loadState(ctx);
-  const sources = (await ctx.repo.sources.list()).filter((s) => s.access !== "desactivee");
-  const runs: CollectionRun[] = [];
-  let blocked = false;
-  for (const source of sources) {
-    const run = blocked
-      ? await recordRun(
-          ctx,
-          blockedRun(
-            {
-              id: ctx.repo.nextId("run"),
-              sourceId: source.id,
-              companyId: source.companyId,
-              startedAt: ctx.now.toISOString(),
-            },
-            ctx.now,
-          ),
-        )
-      : await runSource(ctx, state, source);
-    if (run.status === "bloque_quota") blocked = true;
-    runs.push(run);
-  }
-  return runs;
+  return exclusive(ctx, async () => {
+    const state = await loadState(ctx);
+    const sources = (await ctx.repo.sources.list()).filter((s) => s.access !== "desactivee");
+    const runs: CollectionRun[] = [];
+    let blocked = false;
+    for (const source of sources) {
+      const run = blocked
+        ? await recordRun(
+            ctx,
+            blockedRun(
+              {
+                id: ctx.repo.nextId("run"),
+                sourceId: source.id,
+                companyId: source.companyId,
+                startedAt: ctx.now.toISOString(),
+              },
+              ctx.now,
+            ),
+          )
+        : await runSource(ctx, state, source);
+      if (run.status === "bloque_quota") blocked = true;
+      runs.push(run);
+    }
+    return runs;
+  });
 }

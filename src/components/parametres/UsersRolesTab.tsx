@@ -40,22 +40,22 @@ const RIGHTS = [
   {
     key: "redaction",
     label: "Rédaction",
-    hint: "Brouillons, imports humains, posts LinkedIn, newsletters.",
+    hint: "Registre, sources et collecte ; signaux, brouillons, imports humains, posts LinkedIn, newsletters.",
   },
   {
     key: "validation",
     label: "Validation",
-    hint: "Approbation par canal et version, rejet motivé.",
+    hint: "Approbation par canal et version, rejet motivé, publication et export.",
   },
   {
     key: "administration",
     label: "Administration",
-    hint: "Registre, sources, grille de score, référentiel, comptes et quotas.",
+    hint: "Suppression d'entreprise, grille de score, référentiel éditorial, comptes, réglages WordPress.",
   },
 ] as const;
 
 const MATRIX: Record<Role, Record<(typeof RIGHTS)[number]["key"], boolean>> = {
-  admin: { lecture: true, redaction: false, validation: false, administration: true },
+  admin: { lecture: true, redaction: true, validation: true, administration: true },
   redacteur: { lecture: true, redaction: true, validation: false, administration: false },
   validateur: { lecture: true, redaction: false, validation: true, administration: false },
   lecteur: { lecture: true, redaction: false, validation: false, administration: false },

@@ -1,5 +1,5 @@
 import type { ArticleVersion } from "@/lib/api/types";
-import type { Handler } from "../context";
+import type { Ctx, Handler } from "../context";
 import { matchCompany, MATCH_THRESHOLD } from "../domain/clustering";
 import {
   applyAccepted,
@@ -16,6 +16,7 @@ import { truncate } from "../domain/text";
 import { badRequest, conflict, HttpError, json, notFound } from "../http";
 import type { ArticleRecord, ImportRecord } from "../store/records";
 import { audit } from "../services/journal";
+import { WRITE_LOCK_TTL_MS, withLock } from "../services/locks";
 import { assertQuota } from "../services/usage";
 import { articleDetail, toImport } from "../services/view";
 import { parse, schemas } from "../validation";
@@ -168,8 +169,20 @@ export const decideProposal: Handler = async (ctx) => {
 };
 
 /** Conversion : texte extrait + propositions acceptées uniquement ; l'auteur nommé est conservé. */
-export const convertImport: Handler = async (ctx) => {
+export const convertImport: Handler = (ctx) => {
   assertCan(ctx.user, "import.write");
+  return withLock(
+    ctx.repo,
+    `import-convert:${ctx.params["id"]}`,
+    {
+      ttlMs: WRITE_LOCK_TTL_MS,
+      busy: () => conflict("conversion_in_progress", "Cet import est déjà en cours de conversion."),
+    },
+    () => convert(ctx),
+  );
+};
+
+async function convert(ctx: Ctx): Promise<Response> {
   const rec = await getImportOr404(ctx);
   if (rec.articleId) {
     throw conflict("already_converted", "Cet import a déjà été converti en article.", {
@@ -226,4 +239,4 @@ export const convertImport: Handler = async (ctx) => {
     `Converti en article ${article.id} — auteur conservé : ${rec.author} — ${accepted} proposition(s) appliquée(s)`,
   );
   return json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
-};
+}

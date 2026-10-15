@@ -292,6 +292,8 @@ export const api = {
     apiFetch<NewsletterEdition>(`/newsletters/${id}/items/${itemId}`, json("DELETE")),
   approveNewsletter: (id: string, version: number) =>
     apiFetch<NewsletterEdition>(`/newsletters/${id}/approve`, json("POST", { version })),
+  recordNewsletterExport: (id: string) =>
+    apiFetch<NewsletterEdition>(`/newsletters/${id}/export`, json("POST")),
   setNewsletterIncludeNext: (signalId: string, include: boolean) =>
     apiFetch<Signal>(`/signals/${signalId}`, json("PATCH", { inNewsletter: include })),
 
