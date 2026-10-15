@@ -262,6 +262,14 @@ export class RealCollector implements Collector {
         }
       }
       const cutoff = input.now.getTime() - 180 * 86_400_000;
+      // Certains flux (agendas d'événements) mettent la date de l'événement à venir
+      // à la place de la date de publication : une date future n'est pas fiable.
+      const future = input.now.getTime() + 86_400_000;
+      items = items.map((i) =>
+        i.publishedAt && new Date(i.publishedAt).getTime() > future
+          ? { ...i, publishedAt: null }
+          : i,
+      );
       items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
       items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
       return { ok: true, items };
