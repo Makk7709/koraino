@@ -55,7 +55,7 @@ const RIGHTS = [
 ] as const;
 
 const MATRIX: Record<Role, Record<(typeof RIGHTS)[number]["key"], boolean>> = {
-  admin: { lecture: true, redaction: false, validation: false, administration: true },
+  admin: { lecture: true, redaction: true, validation: true, administration: true },
   redacteur: { lecture: true, redaction: true, validation: false, administration: false },
   validateur: { lecture: true, redaction: false, validation: true, administration: false },
   lecteur: { lecture: true, redaction: false, validation: false, administration: false },
