@@ -77,11 +77,11 @@ const GOOGLE: FeedItem[] = [
   },
 ];
 
-/** Répond au flux Google News et, si fourni, à la passerelle Perplexity. */
-function stubFetch(perplexity?: () => Response) {
+/** Répond au flux Google News (ou à une erreur Google) et, si fourni, à la passerelle Perplexity. */
+function stubFetch(perplexity?: () => Response, google = () => new Response(rss(GOOGLE))) {
   const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url.startsWith("https://news.google.com/")) return new Response(rss(GOOGLE));
+    if (url.startsWith("https://news.google.com/")) return google();
     if (url.includes("/perplexity/search") && perplexity) return perplexity();
     return new Response("introuvable", { status: 404 });
   });
@@ -89,17 +89,24 @@ function stubFetch(perplexity?: () => Response) {
   return fetchMock;
 }
 
+function collectRaw(env: Record<string, string | undefined>) {
+  return new RealCollector(env).collect({ source, company, attempt: 1, now: NOW, knownEvents: [] });
+}
+
 async function collect(env: Record<string, string | undefined>) {
-  const result = await new RealCollector(env).collect({
-    source,
-    company,
-    attempt: 1,
-    now: NOW,
-    knownEvents: [],
-  });
+  const result = await collectRaw(env);
   if (!result.ok) throw new Error(result.reason);
   return result;
 }
+
+const daysAgo = (n: number) => new Date(NOW.getTime() - n * DAY).toISOString().slice(0, 10);
+
+const MUNICH = {
+  title: "Kalray ouvre un bureau à Munich",
+  url: "https://www.placegrenet.fr/kalray-munich",
+  snippet: "La société grenobloise s'étend en Allemagne.",
+  date: daysAgo(3),
+};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -130,7 +137,7 @@ describe("collecte réelle : fraîcheur", () => {
 });
 
 describe("collecte réelle : enrichissement Perplexity", () => {
-  it("ajoute les résultats qui citent l'entreprise, sans doublon avec Google News", async () => {
+  it("ajoute les actualités datées qui citent l'entreprise, sans doublon avec Google News", async () => {
     const fetchMock = stubFetch(() =>
       Response.json({
         results: [
@@ -138,20 +145,26 @@ describe("collecte réelle : enrichissement Perplexity", () => {
             title: "Kalray présente ses résultats semestriels | Les Echos",
             url: "https://www.lesechos.fr/kalray-resultats",
             snippet: "Kalray publie ses comptes.",
-            date: new Date(NOW.getTime() - 20 * DAY).toISOString().slice(0, 10),
+            date: daysAgo(20),
+          },
+          MUNICH,
+          {
+            title: "Kalray Labs : notre vision du calcul",
+            url: "https://www.kalray.eu/labs",
+            snippet: "Page de présentation de Kalray.",
+            date: daysAgo(2),
           },
           {
-            title: "Kalray ouvre un bureau à Munich",
-            url: "https://www.placegrenet.fr/kalray-munich",
-            snippet: "La société grenobloise s'étend en Allemagne.",
+            title: "Kalray - fiche entreprise",
+            url: "https://www.annuaire-entreprises.fr/kalray",
+            snippet: "Kalray, SIREN, dirigeants, chiffre d'affaires.",
             date: null,
-            last_updated: new Date(NOW.getTime() - 3 * DAY).toISOString().slice(0, 10),
           },
           {
             title: "Le marché des processeurs en 2026",
             url: "https://example.com/processeurs",
             snippet: "Panorama du secteur.",
-            date: null,
+            date: daysAgo(1),
           },
         ],
       }),
@@ -161,15 +174,13 @@ describe("collecte réelle : enrichissement Perplexity", () => {
     expect(result.enrichment).toEqual({
       provider: "perplexity",
       status: "ok",
-      received: 3,
+      received: 5,
       matched: 2,
       message: null,
     });
     const fromPerplexity = result.items.filter((i) => i.via === "perplexity");
-    expect(fromPerplexity.map((i) => i.url)).toEqual(["https://www.placegrenet.fr/kalray-munich"]);
-    expect(fromPerplexity[0]!.publishedAt).toBe(
-      new Date(new Date(NOW.getTime() - 3 * DAY).toISOString().slice(0, 10)).toISOString(),
-    );
+    expect(fromPerplexity.map((i) => i.url)).toEqual([MUNICH.url]);
+    expect(fromPerplexity[0]!.publishedAt).toBe(new Date(daysAgo(3)).toISOString());
     expect(result.items.map((i) => i.title)).toEqual([
       "Kalray signe avec Openchip",
       "Kalray ouvre un bureau à Munich",
@@ -183,6 +194,21 @@ describe("collecte réelle : enrichissement Perplexity", () => {
     expect(JSON.parse(String(init!.body))).toMatchObject({
       search_recency_filter: "month",
     });
+  });
+
+  it("mène la collecte avec Perplexity quand Google News est indisponible", async () => {
+    const unavailable = () => new Response("indisponible", { status: 503 });
+    stubFetch(() => Response.json({ results: [MUNICH] }), unavailable);
+    const result = await collect(KEYS);
+    expect(result.items.map((i) => i.url)).toEqual([MUNICH.url]);
+    expect(result.warning).toEqual({
+      code: "HTTP_503",
+      reason: "Google News : Réponse HTTP 503",
+    });
+
+    stubFetch(undefined, unavailable);
+    const failed = await collectRaw({});
+    expect(failed).toMatchObject({ ok: false, code: "HTTP_503", transient: true });
   });
 
   it("consigne l'erreur de la passerelle sans exposer les secrets", async () => {
@@ -231,13 +257,18 @@ describe("collecte : traçabilité et tri", () => {
       ok: true,
       items,
       enrichment: { provider: "perplexity", status: "ok", received: 4, matched: 1, message: null },
+      warning: { code: "HTTP_503", reason: "Google News : Réponse HTTP 503" },
     });
-    const run = await call<CollectionRun>("POST", `/sources/${(await pasqalSource()).id}/collect`);
+    const src = await pasqalSource();
+    const run = await call<CollectionRun>("POST", `/sources/${src.id}/collect`);
     expect(run.body).toMatchObject({
       status: "succes",
       newObservations: 1,
+      errorCode: "HTTP_503",
+      errorMessage: "Google News : Réponse HTTP 503",
       enrichment: { status: "ok", received: 4, matched: 1, added: 1 },
     });
+    expect((await pasqalSource()).access).toBe("ok");
 
     const list = await call<Paginated<Signal>>("GET", "/signals?q=laboratoire&status=tous");
     const detail = await call<SignalDetail>("GET", `/signals/${list.body.items[0]!.id}`);

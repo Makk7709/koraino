@@ -354,8 +354,8 @@ async function runSource(
     finishedAt: now.toISOString(),
     status: created > 0 ? "succes" : "succes_sans_actualite",
     newObservations: created,
-    errorCode: null,
-    errorMessage: null,
+    errorCode: result.warning?.code ?? null,
+    errorMessage: result.warning?.reason ?? null,
     ...(result.enrichment ? { enrichment: { ...result.enrichment, added: fromEnrichment } } : {}),
   });
 }
