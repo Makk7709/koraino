@@ -306,6 +306,56 @@ async function leaveUnconfirmed(publisher: ReturnType<typeof controlledPublisher
   return (res.body.error.details as { attempt: PublicationAttempt }).attempt;
 }
 
+describe("publication LinkedIn : après un export", () => {
+  it("une version exportée se publie une fois le compte relié, puis plus jamais deux fois", async () => {
+    const outcomes: PublishResult[] = [
+      { kind: "not_connected" },
+      { kind: "published", remoteId: "urn:li:share:7101" },
+    ];
+    const publisher = vi.fn<Publisher>(async () => outcomes.shift()!);
+    setLinkedInUserPublisherForTests(publisher);
+    await approvePost();
+
+    const exported = await publish();
+    expect(exported.status).toBe(201);
+    expect(exported.body).toMatchObject({ status: "succes", mode: "export" });
+
+    const published = await publish();
+    expect(published.status).toBe(201);
+    expect(published.body).toMatchObject({
+      status: "succes",
+      mode: "publication",
+      remoteId: "urn:li:share:7101",
+    });
+    const replay = await publish(ADMIN);
+    expect(replay.status).toBe(200);
+    expect(replay.body.id).toBe(published.body.id);
+    expect(publisher).toHaveBeenCalledTimes(2);
+
+    expect((await attemptsFor()).map((a) => [a.mode, a.status])).toEqual([
+      ["export", "succes"],
+      ["publication", "succes"],
+    ]);
+    const posts = await call<LinkedInPost[]>("GET", "/linkedin");
+    expect(posts.body.find((p) => p.id === POST_ID)!.status).toBe("publie");
+  });
+
+  it("toujours sans compte relié : le même export, sans tentative de plus", async () => {
+    setLinkedInUserPublisherForTests(async () => ({ kind: "not_connected" }));
+    const post = await approvePost();
+
+    const first = await publish();
+    const again = await publish();
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(200);
+    expect(again.body.id).toBe(first.body.id);
+    expect(await attemptsFor()).toEqual([
+      expect.objectContaining({ id: first.body.id, status: "succes", mode: "export" }),
+    ]);
+    expect(await repo.acquireLock(lockKeyOf(post), 1_000)).not.toBeNull();
+  });
+});
+
 describe("publication LinkedIn : confirmation du résultat", () => {
   it("enregistre la tentative à vérifier avant l'appel puis la convertit en succès", async () => {
     const publisher = controlledPublisher();

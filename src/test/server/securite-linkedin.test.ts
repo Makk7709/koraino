@@ -241,6 +241,18 @@ describe("F3 — page publique de retour OAuth", () => {
       "window.opener.postMessage(message, window.location.origin)",
     );
   });
+
+  it("sans accès hors ligne : échec explicite, pas de succès sans code", async () => {
+    const res = await handler({
+      request: new Request(
+        "https://kora.example/api/oauth/linkedin/return?success=true&offline_access_allowed=false&connector_id=linkedin",
+      ),
+    });
+    const html = await res.text();
+    expect(html).toContain('"success":false');
+    expect(html).toContain('"error":"offline_access_disabled"');
+    expect(html).toContain("error: result.error ?? null");
+  });
 });
 
 /* ------------------------------------------------------------------ */
