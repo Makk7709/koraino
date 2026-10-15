@@ -481,8 +481,9 @@ L'écran LinkedIn (« Posts et variantes préparés à partir d'articles approuv
 
 Le bandeau placé sous le titre indique l'état de votre propre compte ; chacun relie le sien, quel que soit son rôle.
 
-- « Aucun compte LinkedIn relié : la publication reste un export manuel. Connectez votre compte pour publier directement. » Cliquez sur « Connecter mon compte LinkedIn ». Une fenêtre LinkedIn s'ouvre : connectez-vous et acceptez que KORA lise votre profil et publie en votre nom. La fenêtre se ferme seule et le bandeau affiche « Compte LinkedIn connecté », suivi de votre nom, « — les publications partiront de ce compte. » Si rien ne s'ouvre, autorisez les fenêtres surgissantes pour KORA dans votre navigateur. Une fenêtre fermée trop tôt affiche « Fenêtre LinkedIn fermée avant la fin de la connexion. ».
+- « Aucun compte LinkedIn relié : la publication reste un export manuel. Connectez votre compte pour publier directement. » Cliquez sur « Connecter mon compte LinkedIn ». Une fenêtre LinkedIn s'ouvre : connectez-vous et acceptez que KORA lise votre profil et publie en votre nom. La fenêtre se ferme seule et le bandeau affiche « Compte LinkedIn connecté », suivi de votre nom, « — les publications partiront de ce compte. » Si votre navigateur bloque la fenêtre, un message vous demande d'autoriser les fenêtres surgissantes pour KORA. Une fenêtre fermée trop tôt affiche « Fenêtre LinkedIn fermée avant la fin de la connexion. », un refus sur LinkedIn « Connexion LinkedIn annulée : l'autorisation n'a pas été accordée. ». Si le message indique qu'aucune clé de connexion n'a été délivrée, le réglage vient de la plateforme : prévenez un administrateur.
 - « Votre accès LinkedIn doit être renouvelé. Reconnectez votre compte pour publier à nouveau. » Cliquez sur « Reconnecter LinkedIn » et refaites le consentement.
+- « Votre compte LinkedIn est relié, mais LinkedIn ne répond pas pour le moment : réessayez dans quelques minutes. » Votre connexion est conservée ; « Réessayer » vérifie de nouveau. Une publication lancée entre-temps part de votre compte et peut échouer si LinkedIn ne répond toujours pas.
 - « Déconnecter » retire à KORA l'accès à votre compte (« Compte LinkedIn déconnecté. ») ; vos publications suivantes redeviennent des exports.
 
 Votre connexion ne sert qu'à vous : un collègue qui publie le fait depuis son propre compte, ou par export s'il n'en a pas relié. La suppression de votre compte KORA retire aussi votre connexion LinkedIn.
@@ -492,7 +493,7 @@ Votre connexion ne sert qu'à vous : un collègue qui publie le fait depuis son 
 Les onglets « À valider » (par défaut), « Brouillons », « Approuvés », « Exportés / publiés » et « Tous » filtrent la liste de gauche. Le détail du post sélectionné présente :
 
 - l'en-tête : statut, nombre de variantes, variante retenue, et l'encadré de version (« Version approuvée » ou « Non approuvée ») ; le lien « Article source » ouvre l'article ;
-- les boutons « Soumettre à validation », « Approuver la version N » et « Publier sur LinkedIn » (votre compte est relié) ou « Exporter » (il ne l'est pas) ; celui qui correspond à l'étape suivante est mis en avant ;
+- les boutons « Soumettre à validation », « Approuver la version N » et « Publier sur LinkedIn » (votre compte est relié, même si LinkedIn ne répond pas ou demande une reconnexion) ou « Exporter » (il ne l'est pas) ; celui qui correspond à l'étape suivante est mis en avant ;
 - « Variantes » : les propositions de KORA (« Variante A », « Variante B »…), dont une porte « Retenue » ;
 - « Texte de la variante … » et « Hashtags », avec le compteur de caractères ;
 - « Aperçu LinkedIn », qui montre le post tel qu'il apparaîtra ;
@@ -524,7 +525,7 @@ stateDiagram-v2
    - Votre compte est relié : « Publier sur LinkedIn » publie la variante retenue et ses hashtags sur votre profil. Le message « Post publié sur LinkedIn » s'affiche, le résultat affiché sous les boutons donne le lien du post, et le post passe « Publié » : il n'est plus modifiable.
    - Il ne l'est pas : « Exporter » consigne l'export et fait passer le post « Exporté ». Les boutons « Télécharger l'export » (fichier texte) et « Copier le texte » apparaissent alors ; publiez le texte à la main sur LinkedIn.
 
-Un double clic, ou un collègue qui clique en même temps, ne publie pas deux fois : la seconde demande affiche « Publication déjà en cours » et l'écran se met à jour quelques secondes plus tard. Une version déjà exportée ne peut plus être publiée par KORA, même après avoir relié votre compte : enregistrez une nouvelle version, faites-la approuver, puis publiez. Si LinkedIn refuse (autorisation expirée, texte refusé, trop de publications rapprochées), le motif s'affiche sous « Envoi bloqué par l'API » ; corrigez la cause, par exemple avec « Reconnecter LinkedIn », puis cliquez de nouveau.
+Un double clic, ou un collègue qui clique en même temps, ne publie pas deux fois : la seconde demande affiche « Publication déjà en cours » et l'écran se met à jour quelques secondes plus tard. Une version déjà exportée peut encore être publiée : reliez votre compte, puis cliquez sur « Publier sur LinkedIn ». Si LinkedIn refuse (autorisation expirée, texte refusé, trop de publications rapprochées), le motif s'affiche sous « Envoi bloqué par l'API » ; corrigez la cause, par exemple avec « Reconnecter LinkedIn », puis cliquez de nouveau.
 
 Une modification après approbation crée une nouvelle version, invalide l'approbation et renvoie le post « À valider » : le bandeau « Toute modification invalidera l'approbation » vous prévient. Un fichier téléchargé alors que la version n'est pas approuvée commence par la mention « [APERÇU — version non approuvée, ne pas publier] ».
 

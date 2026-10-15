@@ -55,6 +55,7 @@ import {
   SectionTitle,
   TagInput,
 } from "@/components/articles/ui";
+import { hasLinkedAccount } from "./connection";
 import { LinkedInPreview } from "./LinkedInPreview";
 import { LINKEDIN_MAX_CHARS, fullText, hashtag, selectedVariant, variantLetter } from "./text";
 import { resolutionBlockedReason } from "./resolution";
@@ -145,7 +146,7 @@ export function PostDetail({
   const { draft, dirty, setText, setHashtags, reset } = usePostDraft(post);
   const attemptsQuery = usePublications({ channel: "linkedin" });
   const attempts = (attemptsQuery.data ?? []).filter((a) => a.linkedinPostId === post.id);
-  const connected = !!useLinkedInConnection().data?.connected;
+  const connected = hasLinkedAccount(useLinkedInConnection().data);
   const setPost = (p: LinkedInPost) =>
     qc.setQueryData<LinkedInPost[]>(qk.linkedin, (old) => old?.map((x) => (x.id === p.id ? p : x)));
 

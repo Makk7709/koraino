@@ -17,9 +17,10 @@ export const Route = createFileRoute("/api/oauth/linkedin/return")({
         const offlineAccessAllowed = url.searchParams.get("offline_access_allowed");
         const error = url.searchParams.get("error");
 
+        // Sans accès hors ligne, la passerelle ne délivre aucune clé : KORA ne pourrait pas publier.
         const result =
           success && offlineAccessAllowed === "false"
-            ? { success: true, connectorId, code: null }
+            ? { success: false, connectorId, error: "offline_access_disabled" }
             : success && code
               ? { success: true, connectorId, code }
               : {
@@ -48,7 +49,8 @@ export const Route = createFileRoute("/api/oauth/linkedin/return")({
     const message = {
       type,
       connectorId: result.connectorId,
-      code: result.code ?? null
+      code: result.code ?? null,
+      error: result.error ?? null
     };
     if (window.opener && window.opener !== window) {
       window.opener.postMessage(message, window.location.origin);

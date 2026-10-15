@@ -320,6 +320,13 @@ const CONFIRMATION_PENDING = "linkedin_confirmation_pending";
 const findUnconfirmed = (attempts: PublicationAttempt[], key: string) =>
   attempts.find((p) => p.idempotencyKey === key && p.status === "verification_requise");
 
+/** Un export ne clôt pas la version : elle reste publiable depuis un compte relié ensuite. */
+const findSuccess = (
+  attempts: PublicationAttempt[],
+  key: string,
+  mode: PublicationAttempt["mode"],
+) => attempts.find((p) => p.idempotencyKey === key && p.status === "succes" && p.mode === mode);
+
 const verificationRequired = (pending: PublicationAttempt) =>
   conflict(
     "publication_verification_required",
@@ -365,7 +372,8 @@ async function settlePost(
 }
 
 /**
- * Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent).
+ * Diffusion LinkedIn : publication réelle via le compte relié, sinon export (idempotent ; une
+ * version exportée reste publiable une fois le compte relié).
  * Un verrou par post et version sérialise les demandes simultanées (double clic, onglets) ;
  * une tentative `verification_requise` posée avant l'appel bloque toute republication tant
  * qu'un humain n'a pas indiqué si le post est bien sur LinkedIn (`resolution`).
@@ -377,7 +385,7 @@ export const publishLinkedIn: Handler = async (ctx) => {
   const key = idempotencyKey(rec.id, rec.version, "linkedin");
   const at = ctx.now.toISOString();
   const attempts = await ctx.repo.publications.list();
-  const done = attempts.find((p) => p.idempotencyKey === key && p.status === "succes");
+  const done = findSuccess(attempts, key, "publication");
   if (done) return json(toPublication(done));
   const unconfirmed = findUnconfirmed(attempts, key);
   // Un marqueur sans résultat peut appartenir à une publication en vol : le verrou tranche.
@@ -447,8 +455,9 @@ export const publishLinkedIn: Handler = async (ctx) => {
   try {
     // Une demande concurrente a pu aboutir (ou échouer) entre la première lecture et le verrou.
     const fresh = await ctx.repo.publications.list();
-    const settled = fresh.find((p) => p.idempotencyKey === key && p.status === "succes");
+    const settled = findSuccess(fresh, key, "publication");
     if (settled) return json(toPublication(settled));
+    const exported = findSuccess(fresh, key, "export");
     const pending = findUnconfirmed(fresh, key);
     if (pending && !resolution) throw verificationRequired(pending);
     if (!pending && resolution) throw nothingToResolve();
@@ -578,7 +587,11 @@ export const publishLinkedIn: Handler = async (ctx) => {
       throw unprocessable(code, result.message, { attempt: toPublication(attempt) });
     }
 
-    // Compte non relié : comportement historique, export manuel (idempotent).
+    // Compte non relié : export manuel, une seule fois par version.
+    if (exported) {
+      await ctx.repo.publications.remove(marker.id);
+      return json(toPublication(exported));
+    }
     const attempt: PublicationAttempt = {
       ...marker,
       status: "succes",
