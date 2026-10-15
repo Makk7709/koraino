@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CollectionRun, Paginated, Signal, SignalDetail, Source } from "@/lib/api/types";
+import type {
+  ApiErrorBody,
+  CollectionRun,
+  Paginated,
+  Signal,
+  SignalDetail,
+  Source,
+} from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
 import {
   FRESHNESS_DAYS,
@@ -7,6 +14,7 @@ import {
   type CollectResult,
   type RawItem,
 } from "@/server/adapters/collector";
+import { getRepository } from "@/server/store/memory";
 import type { CompanyRecord, SourceRecord } from "@/server/store/records";
 import { call, NOW, setup, teardown } from "./helpers";
 
@@ -304,5 +312,102 @@ describe("collecte : traçabilité et tri", () => {
       Date.parse(s.publishedAt ?? s.eventDate ?? s.collectedAt),
     );
     expect([...times].sort((a, b) => b - a)).toEqual(times);
+  });
+
+  it("retient jusqu'à 3 publications nouvelles par exécution, les connues ne comptant pas", async () => {
+    const topics = [
+      "recrute 40 ingénieurs",
+      "ouvre un site à Lyon",
+      "signe avec Airbus",
+      "dépose un brevet",
+      "rejoint un consortium",
+    ];
+    const items: RawItem[] = topics.map((t, n) => ({
+      url: `https://www.placegrenet.fr/pasqal-${n}`,
+      title: `Pasqal ${t}`,
+      html: `<p>Pasqal ${t} pour accompagner sa croissance.</p>`,
+      outlet: outlet("Place Gre'net", "placegrenet.fr"),
+      publishedAt: new Date(NOW.getTime() - (n + 1) * DAY).toISOString(),
+      eventDate: null,
+    }));
+    stubCollector({ ok: true, items });
+    const src = await pasqalSource();
+    const observationUnits = async () =>
+      (await (await getRepository()).usage.list())
+        .filter((u) => u.kind === "observation" && u.label === `Observations ${src.label}`)
+        .reduce((sum, u) => sum + u.units, 0);
+    const before = await observationUnits();
+
+    const runs = [];
+    for (let i = 0; i < 3; i++) {
+      runs.push((await call<CollectionRun>("POST", `/sources/${src.id}/collect`)).body);
+    }
+    expect(runs.map((r) => [r.status, r.newObservations])).toEqual([
+      ["succes", 3],
+      ["succes", 2],
+      ["succes_sans_actualite", 0],
+    ]);
+    expect((await observationUnits()) - before).toBe(5);
+  });
+
+  it("refuse une collecte pendant qu'une autre est en cours", async () => {
+    const repo = await getRepository();
+    const token = await repo.acquireLock("collecte", 60_000);
+    const busy = await call<ApiErrorBody>("POST", "/collect");
+    expect(busy.status).toBe(409);
+    expect(busy.body.error.code).toBe("collection_in_progress");
+    const one = await call<ApiErrorBody>("POST", `/sources/${(await pasqalSource()).id}/collect`);
+    expect(one.status).toBe(409);
+
+    await repo.releaseLock("collecte", token!);
+    stubCollector({ ok: true, items: [] });
+    expect((await call("POST", `/sources/${(await pasqalSource()).id}/collect`)).status).toBe(200);
+    expect(await repo.acquireLock("collecte", 60_000)).not.toBeNull();
+  });
+});
+
+describe("collecte réelle : flux des entreprises", () => {
+  const ownFeed = { ...source, type: "rss", url: "https://www.kalray.eu/feed/" } as SourceRecord;
+  const ownSite = {
+    ...source,
+    type: "site_officiel",
+    url: "https://www.kalray.eu/",
+  } as SourceRecord;
+
+  function stubPage(body: string) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+  }
+
+  it("écarte les éléments sans date et ceux datés dans le futur (agendas)", async () => {
+    const date = (d: number) => new Date(NOW.getTime() - d * DAY).toUTCString();
+    stubPage(`<rss><channel>
+      <item><title>Kalray publie ses résultats</title><link>https://www.kalray.eu/a</link><pubDate>${date(2)}</pubDate></item>
+      <item><title>Kalray : qui sommes-nous</title><link>https://www.kalray.eu/b</link></item>
+      <item><title>Séminaire Kalray de mars</title><link>https://www.kalray.eu/c</link><pubDate>${date(-40)}</pubDate></item>
+    </channel></rss>`);
+    const result = await new RealCollector({}).collect({
+      source: ownFeed,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+    expect(result.ok && result.items.map((i) => i.url)).toEqual(["https://www.kalray.eu/a"]);
+  });
+
+  it("signale une page qui n'annonce aucun flux", async () => {
+    stubPage("<html><head><title>Kalray</title></head><body>Bienvenue</body></html>");
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+    expect(result).toMatchObject({ ok: true, items: [], warning: { code: "NO_FEED" } });
+    expect(result.ok && result.enrichment).toBeUndefined();
   });
 });

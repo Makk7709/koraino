@@ -40,6 +40,9 @@ export type CollectResult =
 /** Âge maximal (jours) d'une publication datée retenue par la collecte réelle. */
 export const FRESHNESS_DAYS = 30;
 
+const NO_FEED_REASON =
+  "Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités.";
+
 export interface CollectInput {
   source: SourceRecord;
   company: CompanyRecord | null;
@@ -391,6 +394,7 @@ export class RealCollector implements Collector {
       const feed = await this.readFeed(url, fallback);
       const via: ObservationVia = useGoogle ? "google_news" : "flux";
       items = (feed ?? []).map((i) => ({ ...i, via }));
+      if (!feed) warning = { code: "NO_FEED", reason: NO_FEED_REASON };
     } catch (e) {
       const err = e as Error & { code?: string };
       const failure = {
@@ -423,14 +427,14 @@ export class RealCollector implements Collector {
       }
     }
     const cutoff = input.now.getTime() - FRESHNESS_DAYS * 86_400_000;
-    // Certains flux (agendas d'événements) mettent la date de l'événement à venir
-    // à la place de la date de publication : une date future n'est pas fiable.
+    // Sans date de publication, la fraîcheur n'est pas vérifiable. Certains flux (agendas
+    // d'événements) mettent la date de l'événement à venir à sa place : une date future non plus.
     const future = input.now.getTime() + 86_400_000;
-    items = items.map((i) =>
-      i.publishedAt && new Date(i.publishedAt).getTime() > future ? { ...i, publishedAt: null } : i,
-    );
-    items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
-    items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
+    items = items.filter((i) => {
+      const t = i.publishedAt ? new Date(i.publishedAt).getTime() : NaN;
+      return t >= cutoff && t <= future;
+    });
+    items.sort((a, b) => b.publishedAt!.localeCompare(a.publishedAt!));
     return {
       ok: true,
       items,
@@ -439,7 +443,7 @@ export class RealCollector implements Collector {
     };
   }
 
-  /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun (aucune actualité). */
+  /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun. */
   private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
     let text = await this.fetchText(url);
     if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
