@@ -76,6 +76,19 @@ export interface Source {
 
 export type CollectionRunStatus = "succes" | "succes_sans_actualite" | "echec" | "bloque_quota";
 
+/** Recherche complémentaire (Perplexity) menée pendant une exécution de collecte. */
+export interface CollectionEnrichment {
+  provider: "perplexity";
+  status: "ok" | "non_configure" | "erreur";
+  /** Résultats renvoyés par Perplexity. */
+  received: number;
+  /** Résultats qui citent l'entreprise. */
+  matched: number;
+  /** Nouvelles observations issues de Perplexity. */
+  added: number;
+  message: string | null;
+}
+
 export interface CollectionRun {
   id: string;
   sourceId: string;
@@ -86,6 +99,8 @@ export interface CollectionRun {
   newObservations: number;
   errorCode: string | null;
   errorMessage: string | null;
+  /** Absent sur les exécutions antérieures ou sans recherche complémentaire. */
+  enrichment?: CollectionEnrichment | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -130,7 +145,12 @@ export interface Observation {
   matchConfidence: number;
   /** Reprise d'un même communiqué : ne compte pas comme corroboration indépendante. */
   isSyndicated: boolean;
+  /** Canal de découverte ; absent sur les observations antérieures ou simulées. */
+  via?: ObservationVia;
 }
+
+/** Flux de la source, Google News ou recherche Perplexity. */
+export type ObservationVia = "flux" | "google_news" | "perplexity";
 
 export type SignalStatus = "nouveau" | "a_traiter" | "en_revue" | "surveille" | "traite" | "rejete";
 

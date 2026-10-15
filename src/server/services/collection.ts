@@ -101,6 +101,7 @@ async function ingest(
     eventDate: item.eventDate,
     matchConfidence: match.confidence,
     isSyndicated: false,
+    ...(item.via ? { via: item.via } : {}),
   };
   state.knownUrls.add(key);
 
@@ -331,8 +332,12 @@ async function runSource(
   }
 
   let created = 0;
+  let fromEnrichment = 0;
   for (const item of result.items.slice(0, MAX_ITEMS)) {
-    if (await ingest(ctx, state, current, item)) created += 1;
+    if (await ingest(ctx, state, current, item)) {
+      created += 1;
+      if (item.via === "perplexity") fromEnrichment += 1;
+    }
   }
   await repo.sources.update({
     ...current,
@@ -351,6 +356,7 @@ async function runSource(
     newObservations: created,
     errorCode: null,
     errorMessage: null,
+    ...(result.enrichment ? { enrichment: { ...result.enrichment, added: fromEnrichment } } : {}),
   });
 }
 

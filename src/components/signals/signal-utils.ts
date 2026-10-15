@@ -1,5 +1,12 @@
 import { CATEGORY, SIGNAL_STATUS, THEME, type Tone } from "@/components/kora/labels";
-import type { Category, Signal, SignalListQuery, SignalStatus, Theme } from "@/lib/api/types";
+import type {
+  Category,
+  ObservationVia,
+  Signal,
+  SignalListQuery,
+  SignalStatus,
+  Theme,
+} from "@/lib/api/types";
 
 export const SIGNAL_STATUSES = Object.keys(SIGNAL_STATUS) as SignalStatus[];
 export const THEMES = Object.keys(THEME) as Theme[];
@@ -13,6 +20,20 @@ export const isCategory = (v: unknown): v is Category => typeof v === "string" &
 /** Date affichée d'un signal : publication, sinon date de l'événement ; null = « Date inconnue ». */
 export function signalDate(s: Pick<Signal, "publishedAt" | "eventDate">): string | null {
   return s.publishedAt ?? s.eventDate;
+}
+
+export const VIA_LABEL: Record<ObservationVia, string> = {
+  flux: "flux de la source",
+  google_news: "Google News",
+  perplexity: "Perplexity",
+};
+
+/** Ordre « récent » : date affichée, sinon date de collecte ; identique au tri serveur. */
+export function byNewsDate(a: Signal, b: Signal): number {
+  const t = (s: Signal) => Date.parse(signalDate(s) ?? s.collectedAt);
+  return (
+    t(b) - t(a) || Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)
+  );
 }
 
 /** Ton d'un tag éditorial : celui de la catégorie ou de la thématique homonyme, bleu sinon. */

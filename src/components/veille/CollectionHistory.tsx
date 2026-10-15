@@ -83,7 +83,7 @@ export function CollectionHistory({
           onRetry={onRetry}
         />
       ) : isPending ? (
-        <TableSkeleton rows={8} cols={5} />
+        <TableSkeleton rows={8} cols={6} />
       ) : (
         <>
           <DataTable>
@@ -93,12 +93,13 @@ export function CollectionHistory({
                 <Th>Source</Th>
                 <Th>Statut</Th>
                 <Th className="text-right">Nouvelles observations</Th>
+                <Th>Perplexity</Th>
                 <Th>Code d&apos;erreur</Th>
               </tr>
             </thead>
             <tbody>
               {paged.slice.length === 0 && (
-                <EmptyRow colSpan={5}>Aucune collecte ne correspond à ces filtres.</EmptyRow>
+                <EmptyRow colSpan={6}>Aucune collecte ne correspond à ces filtres.</EmptyRow>
               )}
               {paged.slice.map((r) => {
                 const source = sources.get(r.sourceId);
@@ -144,6 +145,9 @@ export function CollectionHistory({
                         {r.newObservations > 0 ? `+${r.newObservations}` : "0"}
                       </span>
                     </Td>
+                    <Td className="max-w-[220px]">
+                      <EnrichmentCell enrichment={r.enrichment} />
+                    </Td>
                     <Td className="max-w-[300px]">
                       {r.errorCode ? (
                         <div className="flex min-w-0 items-center gap-2">
@@ -170,5 +174,30 @@ export function CollectionHistory({
         </>
       )}
     </KoraCard>
+  );
+}
+
+/** Bilan de la recherche Perplexity d'une exécution ; « — » si elle n'a pas eu lieu. */
+function EnrichmentCell({ enrichment }: { enrichment: CollectionRun["enrichment"] }) {
+  if (!enrichment) return <span className="text-[12px] text-muted-foreground">—</span>;
+  if (enrichment.status !== "ok") {
+    const failed = enrichment.status === "erreur";
+    return (
+      <div className="flex min-w-0 items-center gap-2" title={enrichment.message ?? ""}>
+        <Pill tone={failed ? "rose" : "gray"} size="sm" className="font-semibold">
+          {failed ? "Erreur" : "Non configuré"}
+        </Pill>
+        <span className="truncate text-[12px] text-kora-ink-soft">{enrichment.message}</span>
+      </div>
+    );
+  }
+  return (
+    <p className="text-[12px] text-kora-ink-soft tabular-nums">
+      {enrichment.received} résultat{enrichment.received > 1 ? "s" : ""} · {enrichment.matched}{" "}
+      pertinent{enrichment.matched > 1 ? "s" : ""}
+      {enrichment.added > 0 && (
+        <span className="font-semibold text-kora-green"> · +{enrichment.added}</span>
+      )}
+    </p>
   );
 }

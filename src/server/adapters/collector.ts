@@ -1,4 +1,4 @@
-import type { Category, Outlet } from "@/lib/api/types";
+import type { Category, CollectionEnrichment, ObservationVia, Outlet } from "@/lib/api/types";
 import { slugify } from "../domain/text";
 import {
   CITIES,
@@ -21,10 +21,18 @@ export interface RawItem {
   outlet: Outlet;
   publishedAt: string | null;
   eventDate: string | null;
+  via?: ObservationVia;
 }
 
+/** Bilan de la recherche complémentaire, avant le décompte des observations créées. */
+export type EnrichmentOutcome = Omit<CollectionEnrichment, "added">;
+
 export type CollectResult =
-  { ok: true; items: RawItem[] } | { ok: false; code: string; reason: string; transient: boolean };
+  | { ok: true; items: RawItem[]; enrichment?: EnrichmentOutcome }
+  | { ok: false; code: string; reason: string; transient: boolean };
+
+/** Âge maximal (jours) d'une publication datée retenue par la collecte réelle. */
+export const FRESHNESS_DAYS = 30;
 
 export interface CollectInput {
   source: SourceRecord;
@@ -175,8 +183,16 @@ function tag(block: string, name: string): string | null {
 }
 
 function brandFor(name: string): Outlet["brand"] {
-  const letters = name.replace(/[^A-Za-zÀ-ÿ ]/g, "").split(/\s+/).filter(Boolean);
-  const initials = (letters.map((w) => w[0]).join("").slice(0, 2) || "?").toUpperCase();
+  const letters = name
+    .replace(/[^A-Za-zÀ-ÿ ]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const initials = (
+    letters
+      .map((w) => w[0])
+      .join("")
+      .slice(0, 2) || "?"
+  ).toUpperCase();
   return { initials, bg: "oklch(0.92 0.02 250)", fg: "oklch(0.3 0.05 250)" };
 }
 
@@ -220,14 +236,87 @@ export function parseFeed(xml: string, fallbackOutlet: Outlet): RawItem[] {
   return items;
 }
 
+interface PerplexityResult {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  date?: string | null;
+  last_updated?: string | null;
+}
+
+/** Résultats Perplexity qui citent l'entreprise, au format des éléments collectés. */
+export function mapPerplexityResults(
+  results: PerplexityResult[],
+  company: CompanyRecord,
+): RawItem[] {
+  const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+  return results
+    .filter((r) => r.url && r.title)
+    .filter((r) => names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n)))
+    .map((r) => {
+      const host = hostOf(r.url!);
+      const raw = r.date || r.last_updated;
+      const d = raw ? new Date(raw) : null;
+      return {
+        url: r.url!,
+        title: r.title!,
+        html: `<article><h1>${r.title}</h1><p>${r.snippet ?? ""}</p></article>`,
+        outlet: { name: host, domain: host, brand: brandFor(host) },
+        publishedAt: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
+        eventDate: null,
+        via: "perplexity" as const,
+      };
+    });
+}
+
+function titleKey(title: string): string {
+  return title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 /**
- * Recherche Perplexity (via la passerelle) : résultats web récents sur l'entreprise.
- * Silencieuse en cas d'absence de clé ou d'erreur : la collecte Google News continue.
+ * Ajoute en tête les résultats complémentaires absents des éléments déjà collectés. Google News
+ * renvoie des liens de redirection : un même article se reconnaît aussi à son titre.
  */
-async function perplexitySearch(company: CompanyRecord): Promise<RawItem[]> {
-  const lovableKey = process.env["LOVABLE_API_KEY"];
-  const pplxKey = process.env["PERPLEXITY_API_KEY"];
-  if (!lovableKey || !pplxKey || process.env["VITEST"]) return [];
+export function mergeEnrichment(items: RawItem[], extra: RawItem[]): RawItem[] {
+  const urls = new Set(items.map((i) => i.url));
+  const titles = items.map((i) => titleKey(i.title));
+  const sameStory = (key: string) =>
+    titles.some(
+      (t) => Math.min(t.length, key.length) >= 25 && (t.startsWith(key) || key.startsWith(t)),
+    );
+  return [...extra.filter((i) => !urls.has(i.url) && !sameStory(titleKey(i.title))), ...items];
+}
+
+/**
+ * Recherche Perplexity (via la passerelle) : résultats web du dernier mois sur l'entreprise.
+ * Un échec n'interrompt pas la collecte Google News ; il est consigné dans l'exécution.
+ */
+export async function perplexitySearch(
+  company: CompanyRecord,
+  env: Record<string, string | undefined>,
+): Promise<{ items: RawItem[]; outcome: EnrichmentOutcome }> {
+  const outcome = (
+    status: EnrichmentOutcome["status"],
+    message: string | null,
+    received = 0,
+    items: RawItem[] = [],
+  ) => ({
+    items,
+    outcome: { provider: "perplexity" as const, status, received, matched: items.length, message },
+  });
+  const lovableKey = env["LOVABLE_API_KEY"];
+  const pplxKey = env["PERPLEXITY_API_KEY"];
+  if (!lovableKey || !pplxKey) {
+    const missing = [!lovableKey && "LOVABLE_API_KEY", !pplxKey && "PERPLEXITY_API_KEY"].filter(
+      Boolean,
+    );
+    return outcome("non_configure", `Secret manquant : ${missing.join(", ")}`);
+  }
   try {
     const res = await fetch("https://connector-gateway.lovable.dev/perplexity/search", {
       method: "POST",
@@ -244,31 +333,20 @@ async function perplexitySearch(company: CompanyRecord): Promise<RawItem[]> {
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) {
-      console.error(`Perplexity search failed [${res.status}]: ${await res.text()}`);
-      return [];
+      const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
+      console.error(`Perplexity search failed [${res.status}]: ${body}`);
+      return outcome("erreur", `HTTP ${res.status}${body ? ` : ${body}` : ""}`);
     }
-    const data = (await res.json()) as {
-      results?: { title?: string; url?: string; snippet?: string; date?: string }[];
-    };
-    const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
-    return (data.results ?? [])
-      .filter((r) => r.url && r.title)
-      .filter((r) => names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n)))
-      .map((r) => {
-        const host = hostOf(r.url!);
-        const d = r.date ? new Date(r.date) : null;
-        return {
-          url: r.url!,
-          title: r.title!,
-          html: `<article><h1>${r.title}</h1><p>${r.snippet ?? ""}</p></article>`,
-          outlet: { name: host, domain: host, brand: brandFor(host) },
-          publishedAt: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
-          eventDate: null,
-        };
-      });
+    const data = (await res.json()) as { results?: PerplexityResult[] };
+    const results = data.results ?? [];
+    return outcome("ok", null, results.length, mapPerplexityResults(results, company));
   } catch (e) {
     console.error("Perplexity search error", e);
-    return [];
+    const err = e as Error;
+    return outcome(
+      "erreur",
+      err.name === "TimeoutError" ? "Délai de réponse dépassé" : err.message,
+    );
   }
 }
 
@@ -278,6 +356,8 @@ async function perplexitySearch(company: CompanyRecord): Promise<RawItem[]> {
  */
 export class RealCollector implements Collector {
   readonly name = "collecteur-rss-google-v1";
+
+  constructor(private readonly env: Record<string, string | undefined> = process.env) {}
 
   async collect(input: CollectInput): Promise<CollectResult> {
     const { source, company } = input;
@@ -294,18 +374,18 @@ export class RealCollector implements Collector {
     try {
       let text = await this.fetchText(url);
       if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
-        const alt = text.match(
-          /<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i,
-        )?.[0];
+        const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
         const href = alt?.match(/href="([^"]+)"/i)?.[1];
         if (!href) return { ok: true, items: [] };
         text = await this.fetchText(new URL(href, url).toString());
       }
-      let items = parseFeed(text, fallback);
+      const via: ObservationVia = useGoogle ? "google_news" : "flux";
+      let items: RawItem[] = parseFeed(text, fallback).map((i) => ({ ...i, via }));
+      let enrichment: EnrichmentOutcome | undefined;
       if (useGoogle && company) {
-        const extra = await perplexitySearch(company);
-        const seen = new Set(items.map((i) => i.url));
-        items = [...extra.filter((i) => !seen.has(i.url)), ...items];
+        const extra = await perplexitySearch(company, this.env);
+        enrichment = extra.outcome;
+        items = mergeEnrichment(items, extra.items);
       }
       if (company && !useGoogle) {
         // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
@@ -318,7 +398,7 @@ export class RealCollector implements Collector {
           );
         }
       }
-      const cutoff = input.now.getTime() - 180 * 86_400_000;
+      const cutoff = input.now.getTime() - FRESHNESS_DAYS * 86_400_000;
       // Certains flux (agendas d'événements) mettent la date de l'événement à venir
       // à la place de la date de publication : une date future n'est pas fiable.
       const future = input.now.getTime() + 86_400_000;
@@ -329,7 +409,7 @@ export class RealCollector implements Collector {
       );
       items = items.filter((i) => !i.publishedAt || new Date(i.publishedAt).getTime() >= cutoff);
       items.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
-      return { ok: true, items };
+      return enrichment ? { ok: true, items, enrichment } : { ok: true, items };
     } catch (e) {
       const err = e as Error & { code?: string };
       return {

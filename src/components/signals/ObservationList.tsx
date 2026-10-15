@@ -7,6 +7,8 @@ import type { SignalDetail } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { useSignalActions } from "./hooks";
 import { KoraCheckbox } from "./KoraCheckbox";
+import { VIA_LABEL } from "./signal-utils";
+import { PerplexityPill } from "./SignalSources";
 
 /** Observations rattachées au signal ; cocher puis « Détacher » = défusion. */
 export function ObservationList({
@@ -86,6 +88,7 @@ export function ObservationList({
                   <div className="flex flex-wrap items-center gap-1.5">
                     <BrandMark name={o.outlet.name} brand={o.outlet.brand} size="xs" />
                     <span className="text-[12px] font-semibold text-kora-ink">{o.outlet.name}</span>
+                    <PerplexityPill via={o.via} />
                     {o.isSyndicated && (
                       <Pill tone="amber" size="sm" className="font-semibold">
                         Reprise
@@ -115,6 +118,7 @@ export function ObservationList({
                     <span className="inline-flex items-center gap-1">
                       <Download className="size-3" />
                       Collecté le {formatDateTime(o.collectedAt)}
+                      {o.via && ` via ${VIA_LABEL[o.via]}`}
                     </span>
                     <a
                       href={o.url}
