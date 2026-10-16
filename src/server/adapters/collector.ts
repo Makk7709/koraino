@@ -18,6 +18,7 @@ import {
 } from "../store/catalog";
 import { hash32 } from "../store/prng";
 import type { CompanyRecord, SourceRecord } from "../store/records";
+import { safeFetchText } from "../domain/safeHttp";
 
 /** Élément brut renvoyé par un collecteur (HTML non fiable, nettoyé ensuite). */
 export interface RawItem {
@@ -560,6 +561,7 @@ export class RealCollector implements Collector {
 
   /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun. */
   private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
+
     let text = await this.fetchText(url);
     if (!isFeed(text)) {
       const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
@@ -590,31 +592,11 @@ export class RealCollector implements Collector {
   }
 
   private async fetchText(url: string): Promise<string> {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 15_000);
-    try {
-      const res = await fetch(url, {
-        signal: ctrl.signal,
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
-          accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
-        },
-      });
-      if (!res.ok) {
-        const e = new Error(`Réponse HTTP ${res.status}`) as Error & { code: string };
-        e.code = `HTTP_${res.status}`;
-        throw e;
-      }
-      return await res.text();
-    } catch (e) {
-      if ((e as Error).name === "AbortError") {
-        const err = new Error("Délai de réponse dépassé") as Error & { code: string };
-        err.code = "TIMEOUT";
-        throw err;
-      }
-      throw e;
-    } finally {
-      clearTimeout(t);
-    }
+    return safeFetchText(url, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
+        accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
+      },
+    });
   }
 }

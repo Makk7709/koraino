@@ -103,6 +103,19 @@ export function checkHost(rawHost: string): string | null {
   return null;
 }
 
+/** Refuse les ports autres que 80 (http) et 443 (https). */
+export function checkPort(url: URL): string | null {
+  const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  if (!Number.isFinite(port)) return "port invalide";
+  if (url.protocol === "http:" && port !== 80) {
+    return `port ${port} non autorisé pour http (80 uniquement)`;
+  }
+  if (url.protocol === "https:" && port !== 443) {
+    return `port ${port} non autorisé pour https (443 uniquement)`;
+  }
+  return null;
+}
+
 /** Validation d'une URL de source avant toute collecte. */
 export function validateSourceUrl(raw: string): UrlCheck {
   let url: URL;
@@ -120,6 +133,8 @@ export function validateSourceUrl(raw: string): UrlCheck {
   if (url.username || url.password) {
     return { ok: false, reason: "identifiants intégrés à l'URL interdits" };
   }
+  const portReason = checkPort(url);
+  if (portReason) return { ok: false, reason: portReason };
   const reason = checkHost(url.hostname);
   if (reason) return { ok: false, reason };
   return { ok: true, url };

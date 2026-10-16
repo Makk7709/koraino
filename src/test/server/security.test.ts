@@ -150,6 +150,7 @@ describe("validation des URL de sources (SSRF)", () => {
     "ftp://example.com/file",
     "file:///etc/passwd",
     "http://user:pass@example.com/",
+    "https://example.com:8443/feed",
   ])("refuse %s (422 url_refused)", async (url) => {
     const res = await call<ApiErrorBody>("POST", "/sources", {
       body: { companyId: "co_pasqal", type: "rss", label: "Test", url },
