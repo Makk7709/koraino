@@ -5,6 +5,7 @@ import type {
   ArticleDetail,
   ArticleVersionInput,
   AuditEvent,
+  CollectionBatch,
   CollectionRun,
   Company,
   CompanyInput,
@@ -169,8 +170,12 @@ export const api = {
   deleteSource: (id: string) => apiFetch<void>(`/sources/${id}`, json("DELETE")),
   /** WF1 : collecte d'une source (simulée), puis classement des observations. */
   collectSource: (id: string) => apiFetch<CollectionRun>(`/sources/${id}/collect`, json("POST")),
-  /** WF1 : collecte de toutes les sources actives. */
-  collectAll: () => apiFetch<CollectionRun[]>("/collect", json("POST")),
+  /**
+   * WF1 : un lot de la collecte globale. Sans `since`, une nouvelle collecte démarre ; le lot
+   * suivant se demande avec le `since` renvoyé, jusqu'à `remaining: 0`.
+   */
+  collectAll: (body: { since?: string; limit?: number } = {}) =>
+    apiFetch<CollectionBatch>("/collect", json("POST", body)),
   collectionRuns: (q?: { sourceId?: string; limit?: number }) =>
     apiFetch<CollectionRun[]>(`/collection-runs${toQuery(q)}`),
 

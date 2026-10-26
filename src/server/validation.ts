@@ -72,6 +72,13 @@ const KORA_CATEGORY_LABELS = Object.values(CATEGORY_LABEL);
 
 export const schemas = {
   switchUser: z.object({ userId: text(64) }),
+  collectAll: z.object({
+    since: z
+      .string()
+      .datetime({ message: "Date de début de collecte attendue au format ISO 8601 (UTC)." })
+      .optional(),
+    limit: z.number().int().min(1).max(25).optional(),
+  }),
   createUser: z.object({
     name: text(120),
     email: z.string().trim().toLowerCase().email("Adresse e-mail invalide").max(254),

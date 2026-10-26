@@ -103,6 +103,18 @@ export interface CollectionRun {
   enrichment?: CollectionEnrichment | null;
 }
 
+/** Lot d'une collecte globale (`POST /collect`) : le client enchaîne les lots jusqu'à `remaining: 0`. */
+export interface CollectionBatch {
+  /** Début de la collecte globale : à renvoyer tel quel pour obtenir le lot suivant. */
+  since: string;
+  /** Sources actives au moment de l'appel. */
+  total: number;
+  /** Exécutions de ce lot (plus les exécutions `bloque_quota` des sources restantes, le cas échéant). */
+  runs: CollectionRun[];
+  /** Sources actives non encore collectées depuis `since` ; 0 : collecte terminée. */
+  remaining: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* Signal Engine : observations, signaux, déduplication (§3.2)         */
 /* ------------------------------------------------------------------ */
