@@ -74,7 +74,7 @@ Tous les chemins sont préfixés par `/api`. La colonne « Rôles » indique les
 | PATCH | [`/api/sources/:id`](#patch-source) | admin, rédacteur | Modifier une source |
 | DELETE | [`/api/sources/:id`](#delete-source) | admin, rédacteur | Supprimer une source |
 | POST | [`/api/sources/:id/collect`](#post-source-collect) | admin, rédacteur | Collecter une source (réseau réel hors tests, payant) |
-| POST | [`/api/collect`](#post-collect) | admin, rédacteur | Collecter toutes les sources actives |
+| POST | [`/api/collect`](#post-collect) | admin, rédacteur | Collecter les sources actives, par lots |
 | GET | [`/api/collection-runs`](#get-collection-runs) | tous | Historique des exécutions de collecte |
 | GET | [`/api/signals`](#get-signals) | tous | Liste filtrée et paginée des signaux |
 | POST | [`/api/signals/rescore`](#post-signals-rescore) | admin | Recalculer les scores avec la grille active |
@@ -421,7 +421,7 @@ Faute de transaction en base, les opérations exposées aux doubles clics, aux o
 
 | Clé du verrou | Durée | Opérations protégées | Code si déjà pris |
 |---|---|---|---|
-| `collecte` | 15 min | `POST /sources/:id/collect` et `POST /collect` : une seule collecte à la fois, toutes sources confondues | `collection_in_progress` |
+| `collecte` | 5 min | `POST /sources/:id/collect` et `POST /collect` (par lot) : une seule collecte à la fois, toutes sources confondues | `collection_in_progress` |
 | `article-create:<signalId>` | 2 min | `POST /articles` | `generation_in_progress` |
 | `linkedin-create:<articleId ou signalId>` | 2 min | `POST /linkedin` | `generation_in_progress` |
 | `newsletter-current` | 30 s, attente 5 s | création implicite de l'édition en cours par `PATCH /signals/:id` (`inNewsletter: true`) | `newsletter_busy` |
@@ -479,7 +479,7 @@ Les opérations « payantes » passent par `paidCall()` de [`usage.ts`](../src/s
 | Dossier et brouillon | `POST /articles` | `generation_article` | 0,45 € | 0,45 € | `articles` |
 | Variantes LinkedIn | `POST /linkedin` | `generation_linkedin` | 0,08 € | 0,08 € | `linkedin_posts` |
 | Résumé de sujet newsletter | `POST /newsletters/:id/items`, `PATCH /signals/:id` (`inNewsletter: true`) | `generation_summary` | 0,02 € | 0,02 € | aucun |
-| Collecte d'une source | `POST /sources/:id/collect`, `POST /collect` (par source) | `search_query`, `observation` | 0,075 € | 0,012 € + 0,021 € par nouvelle publication (3 au plus) | `search_queries`, `observations` |
+| Collecte d'une source | `POST /sources/:id/collect`, `POST /collect` (réservation par lot, consommation par source) | `search_query`, `observation` | 0,117 € par source | 0,012 € + 0,021 € par nouvelle publication (5 au plus) | `search_queries`, `observations` |
 
 Les coûts de collecte restent ces montants estimés alors que les flux RSS et Google News lus par le [collecteur réel](#collecte-reelle) sont gratuits, et la recherche Perplexity n'a pas de ligne de coût propre. Seules les publications nouvelles sont facturées (une publication dont l'URL canonique est déjà connue, ou refusée par le filtrage SSRF, ne compte pas) : une collecte complète de 150 sources consigne entre 1,80 € (aucune nouveauté) et 11,25 € (trois nouveautés par source), soit au moins une douzaine de collectes complètes par mois avec le plafond de 150 €.
 
@@ -1064,7 +1064,7 @@ Handlers : [`registry.ts`](../src/server/handlers/registry.ts) (CRUD) et [`signa
 | `actualites` dont l'URL ne contient ni « rss », « feed », « atom » ni « xml » | Google News RSS sur le nom de l'entreprise |
 | `actualites` avec une URL de flux, `site_officiel`, `communiques`, `rss`, `newsletter_import` | URL de la source |
 
-Pour les deux premières lignes, l'URL enregistrée sur la source n'est pas lue, sauf si elle contient déjà `news.google.com` : c'est le cas de la source créée par [`POST /api/companies`](#post-companies). La requête Google News est construite par `googleNewsUrl` avec le nom de l'entreprise entre guillemets (à défaut d'entreprise, le libellé de la source), en français (`hl=fr`, `gl=FR`).
+Pour les deux premières lignes, l'URL enregistrée sur la source n'est pas lue dès que la source est rattachée à une entreprise : la requête Google News est reconstruite à chaque collecte à partir du nom courant et des alias de l'entreprise (`googleNewsUrl(companyNames(company))`, soit `"Bertin Alpao" OR "Alpao"`), ce qui suit les renommages et les alias ajoutés depuis la création. Sans entreprise, l'URL est lue telle quelle si elle contient déjà `news.google.com`, sinon la requête porte sur le libellé de la source. La requête Google News est construite par `googleNewsUrl` avec le nom de l'entreprise entre guillemets (à défaut d'entreprise, le libellé de la source), en français (`hl=fr`, `gl=FR`).
 
 Déroulement d'une tentative :
 
@@ -1072,9 +1072,9 @@ Déroulement d'une tentative :
 2. `parseFeed` analyse le RSS 2.0 (`<item>`) ou l'Atom (`<entry>`) par expressions régulières : titre, lien (texte de `<link>` ou attribut `href`), date (`pubDate`, `published` ou `updated`), description (`description`, `summary` ou `content`). Le média vient de la balise `<source>` de Google News (le suffixe « - `<média>` » est retiré du titre) ; à défaut, c'est l'entreprise, ou le nom d'hôte sans entreprise. `eventDate` vaut toujours `null`. Le lien de l'entrée est stocké tel quel, sans suivre de redirection : pour Google News, c'est une adresse `news.google.com`. Chaque entrée reçoit sa provenance `via` : `google_news` pour les deux premières lignes du tableau, `flux` pour la troisième.
 3. Pour les deux premières lignes, les résultats Perplexity retenus (voir ci-dessous) sont ajoutés, sauf ceux déjà présents dans Google News : même URL, ou titres normalisés dont l'un commence par l'autre sur au moins 25 caractères (`mergeEnrichment`).
 4. Hors Google News (troisième ligne du tableau), si l'URL de la source n'est pas hébergée sur le domaine de l'entreprise (test `hostOf(url).endsWith(company.domain)`, sans point de séparation), seules les entrées dont le titre ou la description contient le nom ou un alias (sous-chaîne, sans tenir compte de la casse) sont gardées.
-5. Ne sont gardées que les entrées datées des 30 derniers jours (`FRESHNESS_DAYS`), au plus un jour dans le futur ; les entrées sans date sont écartées. Le reste est trié par date décroissante. `runSource` parcourt ensuite cette liste et s'arrête à 3 nouvelles observations (`MAX_ITEMS`) : une publication déjà connue n'occupe pas de place, et celles qui dépassent la limite peuvent être ingérées à la collecte suivante tant qu'elles ont moins de 30 jours.
+5. Ne sont gardées que les entrées datées des 30 derniers jours (`FRESHNESS_DAYS`), au plus un jour dans le futur ; les entrées sans date sont écartées. Le reste est trié par date décroissante. `settle` parcourt ensuite cette liste et s'arrête à 5 nouvelles observations (`MAX_ITEMS`) : une publication déjà connue n'occupe pas de place, et celles qui dépassent la limite peuvent être ingérées à la collecte suivante tant qu'elles ont moins de 30 jours.
 
-**Recherche Perplexity.** Pour les deux premières lignes du tableau, et seulement si la source est rattachée à une entreprise, `perplexitySearch` interroge Perplexity en parallèle de Google News, à chaque tentative : requête `"<nom de l'entreprise>" Grenoble actualité entreprise`, 5 résultats du dernier mois, délai de 20 s. L'appel passe par la passerelle de connexion de la plateforme d'hébergement, avec les secrets `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY`. Un résultat n'est retenu (`mapPerplexityResults`) que s'il a une URL et un titre, n'est pas hébergé sur le domaine de l'entreprise ou l'un de ses sous-domaines, porte une date valide et cite le nom ou un alias dans son titre ou son extrait ; il reçoit `via: "perplexity"` et le nom d'hôte comme média. Perplexity ne fait jamais échouer une tentative : son bilan est renvoyé dans `CollectionRun.enrichment` (voir [`POST /api/sources/:id/collect`](#post-source-collect)), avec le statut `non_configure` (« Secret manquant : … ») si un secret manque, `erreur` (statut HTTP et début de la réponse, ou « Délai de réponse dépassé ») si l'appel échoue. À l'inverse, si Google News échoue alors que Perplexity a répondu (`status: "ok"`), la tentative réussit avec les seuls résultats Perplexity, et l'échec de Google News devient un avertissement : `errorCode` reprend son code, `errorMessage` vaut « Google News : `<motif>` ». Si Perplexity n'a pas répondu, l'échec de Google News reste un échec de la tentative.
+**Recherche Perplexity.** Pour les deux premières lignes du tableau, et seulement si la source est rattachée à une entreprise, `perplexitySearch` interroge Perplexity en parallèle de Google News, une seule fois par exécution (un réessai de Google News réutilise le résultat, `RealCollector.search`) : requête `perplexityRequest` avec le nom et les alias en expressions exactes (`"Bertin Alpao" OR "Alpao" actualité`), `max_results: 10`, `country: "FR"`, `search_language_filter: ["fr", "en"]`, `search_recency_filter: "month"`, et le domaine de l'entreprise exclu (`search_domain_filter: ["-<domaine>"]`), délai de 20 s. L'appel passe par la passerelle de connexion de la plateforme d'hébergement, avec les secrets `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY`. Un résultat n'est retenu (`mapPerplexityResults`) que s'il a une URL et un titre, n'est pas hébergé sur le domaine de l'entreprise ou l'un de ses sous-domaines, porte une date valide (`date`, sinon `last_updated`) et cite le nom ou un alias dans son titre ou son extrait (comparaison sans accents ni casse) ; il reçoit `via: "perplexity"` et le nom d'hôte comme média. Perplexity ne fait jamais échouer une tentative : son bilan est renvoyé dans `CollectionRun.enrichment` (voir [`POST /api/sources/:id/collect`](#post-source-collect)), avec le statut `non_configure` (« Secret manquant : … ») si un secret manque, `erreur` (statut HTTP et début de la réponse, ou « Délai de réponse dépassé ») si l'appel échoue. À l'inverse, si Google News échoue alors que Perplexity a répondu (`status: "ok"`), la tentative réussit avec les seuls résultats Perplexity, et l'échec de Google News devient un avertissement : `errorCode` reprend son code, `errorMessage` vaut « Google News : `<motif>` ». Si Perplexity n'a pas répondu, l'échec de Google News reste un échec de la tentative.
 
 Chaque requête utilise `fetch` avec un délai de 15 s (lecture du corps comprise), l'en-tête `user-agent: Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et un en-tête `accept` qui privilégie RSS, Atom et XML. Les redirections sont suivies sans nouveau filtrage SSRF, l'URL de flux découverte dans une page ne passe pas par `validateSourceUrl`, et la taille de la réponse n'est pas limitée.
 
@@ -1170,10 +1170,10 @@ Déroulement (`collectOne` puis `runSource`) :
 
 1. Une source `desactivee` est refusée (`409 source_disabled`), avant toute prise de verrou.
 2. La collecte prend le verrou exclusif `collecte` (15 min), partagé avec [`POST /api/collect`](#post-collect) : si une autre collecte est en cours, `409 collection_in_progress` (« Une collecte est déjà en cours : réessayez dans quelques minutes. »).
-3. Appel payant `search_query` : 0,075 € réservés, puis 0,012 € consignés pour la requête et 0,021 € par nouvelle publication renvoyée (3 au plus ; une publication dont l'URL canonique est déjà connue, ou refusée par le filtrage SSRF, n'est pas facturée), même si les flux interrogés sont gratuits. Budget épuisé : exécution consignée `bloque_quota` (`errorCode: "budget_exhausted"`) puis `402 budget_exhausted`. Verrou `budget` occupé au-delà de 5 s : exécution consignée et renvoyée en `200` avec `status: "echec"`, `errorCode: "budget_busy"` et `errorMessage` « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. », sans appel au collecteur ni modification de la source.
-4. Le collecteur ([`RealCollector`](#collecte-reelle) hors tests) est appelé jusqu'à 3 fois (`MAX_ATTEMPTS`) tant qu'il échoue, quel que soit le caractère transitoire de l'erreur.
+3. Appel payant `search_query` : 0,117 € réservés (une requête et 5 observations), puis 0,012 € consignés pour la requête et 0,021 € par nouvelle publication renvoyée (5 au plus ; une publication dont l'URL canonique est déjà connue, ou refusée par le filtrage SSRF, n'est pas facturée), même si les flux interrogés sont gratuits. Budget épuisé : exécution consignée `bloque_quota` (`errorCode: "budget_exhausted"`) puis `402 budget_exhausted`. Verrou `budget` occupé au-delà de 5 s : exécution consignée et renvoyée en `200` avec `status: "echec"`, `errorCode: "budget_busy"` et `errorMessage` « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. », sans appel au collecteur ; la source garde son état, seule sa date de dernière collecte est posée.
+4. Le collecteur ([`RealCollector`](#collecte-reelle) hors tests) est appelé jusqu'à 3 fois (`MAX_ATTEMPTS`) tant qu'il échoue sur une erreur **transitoire** (`transient: true` : délai dépassé, erreur réseau, HTTP 5xx). Un échec définitif (HTTP 403, 404) n'est pas réessayé : `attempts` vaut alors 1.
 5. Échec : la source passe `access: "erreur"` avec `failureCode`, `failureReason` (codes `TIMEOUT`, `HTTP_<statut>`, `NETWORK`… décrits dans [Collecteur réel](#collecte-reelle)) et `attempts` ; notification `erreur_source` si elle n'était pas déjà en échec ; exécution `echec` avec les mêmes `errorCode` et `errorMessage`.
-6. Succès : les publications renvoyées par le collecteur, des plus récentes aux plus anciennes, sont traitées jusqu'à 3 nouvelles observations (`MAX_ITEMS`). Une publication est ignorée, sans compter dans la limite, si son URL est refusée par le filtrage SSRF, si son URL canonique est déjà connue ou si son titre ou son extrait est vide après nettoyage (`sanitizeText`). Les autres deviennent des observations, avec leur provenance `via`, rattachées à une entreprise (seuil `MATCH_THRESHOLD = 60`, sinon « à rattacher ») puis, selon `decideCluster` (fenêtre `CLUSTER_WINDOW_DAYS` de 7 jours), sont ajoutées à un signal récent de la même entreprise, ou créent un nouveau signal scoré avec la grille active (avec une revue `fusion_incertaine` si un signal proche existe). Notification `signal` si un nouveau signal atteint 80. La source repasse `ok` ; exécution `succes` (au moins une nouvelle observation) ou `succes_sans_actualite`.
+6. Succès : les publications renvoyées par le collecteur, des plus récentes aux plus anciennes, sont traitées jusqu'à 5 nouvelles observations (`MAX_ITEMS`). Une publication est ignorée, sans compter dans la limite, si son URL est refusée par le filtrage SSRF, si son URL canonique est déjà connue ou si son titre ou son extrait est vide après nettoyage (`sanitizeText`). Les autres deviennent des observations, avec leur provenance `via`, rattachées à une entreprise (seuil `MATCH_THRESHOLD = 60`, sinon « à rattacher ») puis, selon `decideCluster` (fenêtre `CLUSTER_WINDOW_DAYS` de 7 jours), sont ajoutées à un signal récent de la même entreprise, ou créent un nouveau signal scoré avec la grille active (avec une revue `fusion_incertaine` si un signal proche existe), résumé par gabarit ; quand une clé IA est configurée, le résumé est amélioré après le lot, en parallèle, sans retarder l'ingestion. Notification `signal` si un nouveau signal atteint 80. La source repasse `ok` ; exécution `succes` (au moins une nouvelle observation) ou `succes_sans_actualite`.
 
 Sur une exécution réussie, `errorCode` et `errorMessage` valent `null` ou portent un **avertissement** : `NO_FEED` (page sans flux), ou le code d'un échec de Google News compensé par Perplexity (`errorMessage` « Google News : `<motif>` »). Le champ `enrichment` ([`CollectionEnrichment`](../src/lib/api/types.ts)) est présent dès que le collecteur réel a tenté la recherche Perplexity, c'est-à-dire pour une source Google News rattachée à une entreprise ; il est absent des autres exécutions, de celles du collecteur simulé et des exécutions antérieures à cet enrichissement.
 
@@ -1181,8 +1181,8 @@ Sur une exécution réussie, `errorCode` et `errorMessage` valent `null` ou port
 |---|---|
 | `provider` | `"perplexity"` |
 | `status` | `ok`, `non_configure` (secret manquant) ou `erreur` (appel en échec) |
-| `received` | résultats renvoyés par Perplexity (5 au plus) |
-| `matched` | résultats retenus par `mapPerplexityResults`, avant dédoublonnage avec Google News et filtre de fraîcheur |
+| `received` | résultats renvoyés par Perplexity (10 au plus, `PERPLEXITY_MAX_RESULTS`) |
+| `matched` | résultats retenus par `mapPerplexityResults` (datés par `date` ou `last_updated`, hors site de l'entreprise, citant le nom ou un alias), avant dédoublonnage avec Google News et filtre de fraîcheur |
 | `added` | nouvelles observations créées à partir de ces résultats (`via: "perplexity"`) |
 | `message` | motif de `non_configure` ou `erreur`, sinon `null` |
 
@@ -1197,18 +1197,32 @@ curl -s -X POST http://localhost:8080/api/sources/<sourceId>/collect \
 
 <a id="post-collect"></a>
 
-### `POST /api/collect` — collecter toutes les sources actives
+### `POST /api/collect` — collecter les sources actives, par lots
 
-- **Client** : `api.collectAll()`.
+- **Client** : `api.collectAll({ since?, limit? })` ; `useCollectAll` enchaîne les lots (`collectAllInBatches`) et affiche l'avancement.
 - **Droit** : `collect` (admin, rédacteur).
-- **Corps** : aucun.
-- **Réponse** : `200` `CollectionRun[]` (une exécution par source non désactivée, traitées séquentiellement).
+- **Corps** : `{ since?: string, limit?: number }`, facultatif. `since` : début de la collecte globale, tel que renvoyé par le premier lot (ISO 8601, sinon `400 validation_error`) ; absent, une nouvelle collecte démarre à l'instant de la requête. `limit` : sources traitées dans ce lot, 8 par défaut (`BATCH_SIZE`), 25 au plus (`MAX_BATCH_SIZE`, sinon `400`).
+- **Réponse** : `200` [`CollectionBatch`](../src/lib/api/types.ts) : `since` (à renvoyer pour le lot suivant), `total` (sources actives), `runs` (exécutions du lot) et `remaining` (sources actives non encore collectées depuis `since` ; `0` : collecte terminée).
 
-Effets : comme la collecte unitaire pour chaque source ; dès qu'une exécution est bloquée par le budget, toutes les suivantes sont consignées `bloque_quota` sans appel. Cet endpoint ne renvoie jamais `402`. Audit `collect.all` (« `n` sources, `m` nouvelles observations, `k` échec(s) »).
+Chaque appel traite les sources actives dont la dernière collecte (`lastRunAt`) est antérieure à `since` ou absente, les jamais collectées d'abord puis de la plus ancienne à la plus récente, `limit` au plus. Le client rappelle l'endpoint avec le même `since` jusqu'à `remaining: 0` ; un lot vide (`runs: []`) l'arrête aussi. Deux clients qui enchaînent des lots en même temps se partagent les sources sans en traiter une deux fois.
 
-Les sources sont collectées l'une après l'autre, avec des requêtes réseau réelles, dans une seule requête HTTP : sur un registre complet, la réponse peut prendre plusieurs minutes (jusqu'à 90 s par source dans le pire cas, voir [Collecteur réel](#collecte-reelle)). Le lot entier s'exécute sous le verrou `collecte` (15 min) : pendant ce temps, toute autre collecte, unitaire ou globale, reçoit `409 collection_in_progress`. Le verrou expire au bout de 15 min même si le lot n'est pas terminé.
+Dans un lot : le coût estimé de toutes les sources est réservé en une fois (`paidCall`, une seule relecture du budget et une seule vérification des alertes par lot), les lectures réseau se font en parallèle (3 sources à la fois, chacune pouvant ouvrir deux connexions : flux et Perplexity), puis les publications sont ingérées en série, source par source, pour que le dédoublonnage reste sûr ; les résumés IA des nouveaux signaux sont améliorés en parallèle à la fin du lot. Les exécutions ont le même `startedAt` (instant de la requête) et un `finishedAt` réel.
 
-Erreurs spécifiques : `409 collection_in_progress`. Un verrou `budget` trop longtemps occupé n'interrompt pas le lot : seule l'exécution de la source concernée est consignée `echec` (`errorCode: "budget_busy"`), et les sources suivantes sont collectées.
+Budget épuisé au moment de la réservation : toutes les exécutions du lot sont consignées `bloque_quota`, les sources restantes aussi, et `remaining` vaut `0` : la collecte s'arrête. Cet endpoint ne renvoie jamais `402`. Verrou `budget` occupé au-delà de 5 s : les exécutions du lot sont consignées `echec` (`errorCode: "budget_busy"`), sans appel au collecteur ; les sources gardent leur état mais reçoivent la date de collecte, et le client passe au lot suivant.
+
+Le lot s'exécute sous le verrou `collecte` (5 min) : pendant ce temps, toute autre collecte, unitaire ou globale, reçoit `409 collection_in_progress` ; entre deux lots, le verrou est libre. Audit `collect.all` à chaque lot (« Lot de `n` source(s) sur `total` : `m` nouvelles observations, `k` échec(s) ; `r` source(s) restante(s) » ou « ; collecte terminée »).
+
+Erreurs spécifiques : `400 validation_error`, `409 collection_in_progress`.
+
+```bash
+curl -s -X POST http://localhost:8080/api/collect \
+  -H 'x-kora-request: 1' -H 'content-type: application/json' -b 'kora_uid=u_lucas' \
+  -d '{"limit": 8}'
+# puis, avec le `since` renvoyé, jusqu'à "remaining": 0
+curl -s -X POST http://localhost:8080/api/collect \
+  -H 'x-kora-request: 1' -H 'content-type: application/json' -b 'kora_uid=u_lucas' \
+  -d '{"since": "2026-10-26T08:30:00.000Z"}'
+```
 
 <a id="get-collection-runs"></a>
 
