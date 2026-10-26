@@ -296,6 +296,27 @@ async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<Co
   return run;
 }
 
+/**
+ * Remplace les redirections Google News par l'adresse de l'article, pour les publications encore
+ * inconnues qui seront ingérées (au plus `MAX_ITEMS` résolutions par source). Une résolution qui
+ * échoue laisse la redirection ; une adresse résolue déjà connue sera écartée à l'ingestion.
+ */
+async function resolveLinks(state: CollectState, items: RawItem[]): Promise<RawItem[]> {
+  const { links } = adapters();
+  let budget = MAX_ITEMS;
+  const out: RawItem[] = [];
+  for (const item of items) {
+    if (budget > 0 && item.via === "google_news" && !isKnown(state, item)) {
+      budget -= 1;
+      const resolved = await links.resolve(item.url);
+      out.push(resolved ? { ...item, url: resolved } : item);
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
 /** Appel du collecteur, réessayé sur erreur transitoire seulement (§6 : tentatives bornées). */
 async function fetchOutcome(
   ctx: Pick<Ctx, "now">,
@@ -317,6 +338,7 @@ async function fetchOutcome(
     attempt += 1;
     result = await collector.collect(input());
   }
+  if (result.ok) result = { ...result, items: await resolveLinks(state, result.items) };
   return { result, attempts: attempt };
 }
 

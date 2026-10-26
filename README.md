@@ -30,6 +30,7 @@ La collecte est réelle et se lance à la main (« Lancer la collecte » sur la 
 - Seules les publications datées de moins de 30 jours sont gardées. Chaque source apporte au plus 5 nouvelles publications par collecte.
 - La collecte globale se fait par lots de 8 sources (lectures réseau en parallèle, ingestion en série), enchaînés par l'interface avec l'avancement affiché ; les échecs définitifs (403, 404) ne sont pas réessayés et Perplexity n'est appelé qu'une fois par source et par collecte.
 - Une seule collecte à la fois : une seconde demande reçoit « Une collecte est déjà en cours ».
+- Les redirections Google News sont résolues en adresse d'article avant l'enregistrement (adaptateur `links`) ; si Google ne répond pas, la redirection est conservée.
 - La provenance de chaque publication (flux, Google News, Perplexity) est visible dans la fiche du signal et dans l'export des observations.
 
 ## Stack
