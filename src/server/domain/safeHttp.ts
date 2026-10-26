@@ -15,7 +15,38 @@ export type SafeFetchTextOptions = {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
+  allowedHost?: string;
 };
+
+// Sert à comparer qu'une URL est bien celle du site qu'on souhaite atteindre
+function assertAllowedHost(
+  urlString: string,
+  allowedHost: string,
+): boolean {
+  const host = normalizeHostname(urlString);
+  const allowed = normalizeHostname(allowedHost);
+
+  return host !== "" && allowed !== "" && host === allowed;
+}
+
+function normalizeHostname(value: string): string {
+  const input = value.trim();
+
+  let hostname: string;
+  try {
+    hostname = input.includes("://")
+      ? new URL(input).hostname
+      : new URL(`https://${input}`).hostname;
+  } catch {
+    return "";
+  }
+
+  // Normalise la casse et le point DNS final.
+  return hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+}
+
+
+
 
 function httpError(code: string, message: string): Error & { code: string } {
   const e = new Error(message) as Error & { code: string };
@@ -68,6 +99,8 @@ export async function safeFetchText(
   const maxBytes = options.maxBytes ?? SAFE_FETCH_DEFAULTS.maxBytes;
   const maxRedirects = options.maxRedirects ?? SAFE_FETCH_DEFAULTS.maxRedirects;
   const headers = options.headers ?? {};
+  const allowedHost = options.allowedHost ?? rawUrl;
+
 
   let current = rawUrl;
   let redirectsFollowed = 0;
@@ -77,6 +110,7 @@ export async function safeFetchText(
     if (!check.ok) {
       throw httpError("URL_REFUSED", check.reason);
     }
+
 
     let res: Response;
     try {
@@ -104,7 +138,13 @@ export async function safeFetchText(
         throw httpError("REDIRECT_NO_LOCATION", "Redirection sans en-tête Location");
       }
       current = new URL(location, check.url).toString();
-      redirectsFollowed += 1;
+      const next = validateSourceUrl(current);
+      if (!next.ok) throw httpError("URL_REFUSED", next.reason);
+      if (!assertAllowedHost(current, allowedHost)) {
+        throw httpError("HOST_MISMATCH", "Hôte différent de la source");
+      }
+
+      redirectsFollowed += 1;     
       continue;
     }
 
