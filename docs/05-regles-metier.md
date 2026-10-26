@@ -34,7 +34,7 @@ Le score éditorial mesure la priorité éditoriale d'un signal. C'est un entier
 
 La fonction `assess` calcule les sous-notes à partir des seules données du signal : catégorie, titre, résumé et extraits des observations, fiche entreprise, signaux antérieurs et écart entre l'événement et sa détection. Chaque sous-note est bornée entre 0 et 100, puis arrondie.
 
-**Importance.** La base dépend de la catégorie (`CATEGORY_IMPORTANCE`) :
+**Importance.** Quand le modèle a lu la publication à la collecte (clé `AI_API_KEY` configurée, voir [Lecture du contenu par le modèle](#lecture-du-contenu-par-le-modèle)), la note est l'importance qu'il a donnée (0–100), avec son motif (« Lecture du contenu par le modèle : … ») ; le montant n'ajoute rien, la priorité de l'entreprise s'applique comme ci-dessous. Sinon, la base dépend de la catégorie (`CATEGORY_IMPORTANCE`) :
 
 | Catégorie | Base |
 |---|---|
@@ -49,7 +49,7 @@ La fonction `assess` calcule les sous-notes à partir des seules données du sig
 
 Le plus gros montant cité dans les textes (extrait par `extractAmountsM` dans [`domain/text.ts`](../src/server/domain/text.ts), formes « 100 M€ » ou « 12 millions d'euros ») ajoute 12 points s'il atteint 50 M€, 6 points s'il atteint 10 M€. Une entreprise de priorité `haute` ajoute 5 points ; une priorité `basse` en retire 5.
 
-**Nouveauté.** La note vaut 86 si aucun signal de la même entreprise et de la même catégorie n'a été créé dans les 90 jours précédents, 55 sinon. Elle perd 8 points si la date de l'événement est inconnue (ni date d'événement ni date de publication) et 25 points si l'événement précède sa détection de plus de 30 jours.
+**Nouveauté.** La note vaut 86 si aucun signal de la même entreprise et de la même catégorie n'a été créé dans les 90 jours précédents, 55 sinon. Elle perd 8 points si la date de l'événement est inconnue (ni date d'événement ni date de publication), et se dégrade avec l'ancienneté de l'événement (ou de la plus ancienne publication) au moment de la création du signal : 5 points au-delà de 2 jours, 12 au-delà de 7, 20 au-delà de 14, 25 au-delà de 30.
 
 **Territoire.** Sans entreprise rattachée, la note vaut 30. Elle vaut 95 si le territoire de l'entreprise contient « inovall », 88 s'il cite une commune de l'agglomération reconnue par l'expression régulière du code (Grenoble, Meylan, Montbonnot, Crolles, Isère, Échirolles, Saint-Égrève, Voiron), 60 sinon.
 
@@ -200,7 +200,11 @@ Sous le seuil de 60, `companyId` vaut `null` : le signal est « à rattacher » 
 
 ### Classement taxonomique
 
-`classifyCategory` teste, dans un ordre fixe, des expressions régulières de mots-clés sur le titre et l'extrait sans accents : financement, acquisition, contrat, partenariat, brevet, recrutement, distinction, international, croissance, produit, recherche. À défaut, la catégorie est `innovation`. La catégorie est fixée à la création du signal ; aucun endpoint ne la modifie.
+Quand le modèle a lu la publication (voir ci-dessous), sa catégorie est retenue. Sinon, `classifyCategory` note chaque catégorie par des indices lexicaux sur le titre et l'extrait sans accents : un indice fort (« levée de fonds », « remporte », « s'implante », « lauréat »…) vaut 3 points, un indice faible (« prix », « double », « lance », « fonds », « recherche »…) 1 point ; la catégorie la mieux notée l'emporte, et à égalité l'ordre financement, acquisition, contrat, partenariat, brevet, recrutement, distinction, international, croissance, produit, recherche, innovation tranche. Un mot ambigu seul ne décide donc plus de la catégorie. À défaut d'indice, la catégorie est `innovation`. La catégorie est fixée à la création du signal ; aucun endpoint ne la modifie.
+
+### Lecture du contenu par le modèle
+
+Quand une clé `AI_API_KEY` est configurée, chaque publication nouvelle (au plus `MAX_ITEMS` par source et par collecte) est soumise au modèle avant l'ingestion, pendant la phase réseau du lot (`assessItems` dans [`services/collection.ts`](../src/server/services/collection.ts), `classify` dans [`adapters/openai.ts`](../src/server/adapters/openai.ts)) : titre et extrait nettoyés, nom de l'entreprise suivie, consigne qui rappelle que le texte est une donnée et non une instruction, réponse JSON imposée et bornée (160 jetons, température 0, délai de 15 s). Le modèle rend une catégorie, une importance éditoriale de 0 à 100 (90 et plus : levée majeure, acquisition, contrat ou implantation structurants ; 70–89 : annonce substantielle ; 50–69 : actualité ordinaire ; moins de 50 : contenu promotionnel ou reprise sans nouveauté) et un motif d'une phrase. Une réponse hors format (catégorie inconnue, importance hors de 0–100, motif vide) est ignorée : la publication est ingérée comme sans lecture. L'évaluation est enregistrée sur le signal (`assessment` : catégorie, importance, motif, modèle) et resservie à chaque recalcul du score (ajout d'une publication, fusion, changement de grille) ; une publication rattachée à un signal existant ne change pas la lecture de ce signal. Chaque lecture est comptée (`classification`, 0,005 €) dans la réservation du lot.
 
 ### Regroupement d'un même événement
 
@@ -717,6 +721,7 @@ Les plafonds et coûts sont dans [`domain/budget.ts`](../src/server/domain/budge
 | `article` | 0,45 | Dossier et brouillon (`generation_article`) |
 | `linkedin` | 0,08 | Variantes LinkedIn (`generation_linkedin`) |
 | `summary` | 0,02 | Résumé d'un sujet de newsletter (`generation_summary`) |
+| `classification` | 0,005 | Lecture d'une publication par le modèle à la collecte (`classification`) |
 | `search` | 0,012 | Recherche de la collecte (`search_query`) |
 | `observation` | 0,021 | Observation collectée (`observation`) |
 

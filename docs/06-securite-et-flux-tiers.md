@@ -191,7 +191,7 @@ Les contenus collectés sont traités comme des données, jamais comme des instr
 
 **Imports.** Le format est contrôlé par l'extension et le type MIME, l'UTF-8 est strict, et le DOCX est lu par expressions régulières sur la seule partie `word/document.xml`, sans analyseur XML ni résolution d'entités externes. La limite de 50 Mio décompressés protège des archives piégées (voir [Imports humains](05-regles-metier.md#imports-humains)).
 
-**Injection de consignes vers OpenAI.** Les extraits collectés, nettoyés, sont transmis à OpenAI pour les résumés et les dossiers (voir [OpenAI](#openai)). Avec le collecteur réel, ils proviennent de sites tiers, de Google News et des extraits renvoyés par Perplexity, dont le contenu n'est pas maîtrisé. La consigne système interdit d'inventer des faits mais ne contient pas d'instruction contre les consignes injectées dans les contenus. Le modèle n'a accès à aucun outil ni à aucune action : une injection réussie ne peut que modifier le texte produit, qui reste soumis à relecture et à approbation humaines. La sortie du modèle n'est pas nettoyée, seulement tronquée, et elle est affichée comme du texte.
+**Injection de consignes vers OpenAI.** Les extraits collectés, nettoyés, sont transmis à OpenAI pour les résumés et les dossiers (voir [OpenAI](#openai)). Avec le collecteur réel, ils proviennent de sites tiers, de Google News et des extraits renvoyés par Perplexity, dont le contenu n'est pas maîtrisé. La consigne système interdit d'inventer des faits mais ne contient pas d'instruction contre les consignes injectées dans les contenus, sauf pour la classification à la collecte (consigne explicite : le texte est une donnée, réponse JSON imposée et validée : catégorie connue, importance entre 0 et 100, motif tronqué à 200 caractères). Le modèle n'a accès à aucun outil ni à aucune action : une injection réussie ne peut que modifier le texte produit, qui reste soumis à relecture et à approbation humaines. La sortie du modèle n'est pas nettoyée, seulement tronquée, et elle est affichée comme du texte.
 
 ### En-têtes et réponses HTTP
 
@@ -287,7 +287,7 @@ flowchart LR
 |---|---|---|---|---|---|
 | Supabase | Réel dès que `SUPABASE_URL` est définie, hors tests | Toutes les données métier et les réglages | `SUPABASE_SERVICE_ROLE_KEY` | Aucun fixé par le code | Hors budget KORA |
 | Supabase Auth | Réel en mode supabase | Adresses e-mail et mots de passe (navigateur) ; jetons à vérifier et adresses invitées (serveur) | `SUPABASE_PUBLISHABLE_KEY` (publique) ; `SUPABASE_SERVICE_ROLE_KEY` pour les invitations | Aucun fixé par le code | Hors budget KORA |
-| OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons | `AI_API_KEY` | 30 s par appel | Estimé par `COSTS` |
+| OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons ; à la collecte, titre et extrait nettoyés de chaque publication nouvelle avec le nom de l'entreprise (classification) | `AI_API_KEY` | 30 s par appel (15 s pour une classification) | Estimé par `COSTS` |
 | Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |
 | Perplexity | Réel si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, hors tests | Nom de l'entreprise, dans la requête de recherche | `LOVABLE_API_KEY`, `PERPLEXITY_API_KEY` | 20 s par requête | Coût réel non lu ; compris dans l'estimation de la collecte |
 | Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |

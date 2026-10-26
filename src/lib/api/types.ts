@@ -178,6 +178,19 @@ export interface ScoringGrid {
   note: string | null;
 }
 
+/**
+ * Lecture du contenu par le modèle à la création du signal : catégorie et importance éditoriale
+ * (0–100), avec le motif. Absente sans clé IA ou si le modèle n'a pas répondu : la catégorie vient
+ * alors des indices lexicaux et l'importance de la catégorie.
+ */
+export interface ContentAssessment {
+  category: Category;
+  importance: number;
+  reason: string;
+  /** Modèle qui a produit l'évaluation (traçabilité). */
+  model: string;
+}
+
 export interface ScoreResult {
   /** Score éditorial 0–100. L'UI l'affiche sur 10 (ex. 92 → 9.2/10). */
   total: number;
@@ -216,6 +229,8 @@ export interface Signal {
   eventDate: string | null;
   matchConfidence: number;
   score: ScoreResult;
+  /** Évaluation du contenu par le modèle, quand elle existe ; sert à recalculer le score. */
+  assessment?: ContentAssessment | null;
   evidence: EvidenceState;
   whyInteresting: string[];
   suggestedAngle: { text: string; tags: string[] };

@@ -136,7 +136,7 @@ async function ingest(
   const match = matchCompany(`${title} ${excerpt}`, item.url, state.companies, source.companyId);
   const companyId = match.confidence >= MATCH_THRESHOLD ? match.companyId : null;
   const company = companyId ? (state.companies.find((c) => c.id === companyId) ?? null) : null;
-  const category = classifyCategory(`${title} ${excerpt}`);
+  const category = item.assessment?.category ?? classifyCategory(`${title} ${excerpt}`);
   const obs: ObservationRecord = {
     id: repo.nextId("obs"),
     signalId: null,
@@ -235,6 +235,7 @@ async function ingest(
     readingMinutes: 1,
     review,
     articleId: null,
+    assessment: item.assessment ?? null,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -317,6 +318,35 @@ async function resolveLinks(state: CollectState, items: RawItem[]): Promise<RawI
   return out;
 }
 
+/**
+ * Lecture des publications par le modèle (catégorie, importance), pour les publications encore
+ * inconnues qui seront ingérées, au plus `MAX_ITEMS` par source. Sans clé IA, ou si le modèle ne
+ * répond pas, la publication est ingérée sans évaluation (indices lexicaux, importance par
+ * catégorie). Le texte est nettoyé avant d'être soumis : donnée, jamais instruction.
+ */
+async function assessItems(
+  state: CollectState,
+  items: RawItem[],
+  company: CompanyRecord | null,
+): Promise<RawItem[]> {
+  const { ai } = adapters();
+  if (!ai) return items;
+  const picked = new Set<RawItem>();
+  for (const item of items) {
+    if (picked.size >= MAX_ITEMS) break;
+    if (!isKnown(state, item)) picked.add(item);
+  }
+  const assessed = await parallel([...picked], CONCURRENCY, async (item) => {
+    const title = sanitizeText(item.title, 300);
+    const text = sanitizeText(item.html, 1200);
+    if (!title || !text) return item;
+    const assessment = await ai.classify({ title, text, companyName: company?.name ?? null });
+    return assessment ? { ...item, assessment } : item;
+  });
+  const byOriginal = new Map([...picked].map((item, i) => [item, assessed[i]!]));
+  return items.map((item) => byOriginal.get(item) ?? item);
+}
+
 /** Appel du collecteur, réessayé sur erreur transitoire seulement (§6 : tentatives bornées). */
 async function fetchOutcome(
   ctx: Pick<Ctx, "now">,
@@ -338,15 +368,18 @@ async function fetchOutcome(
     attempt += 1;
     result = await collector.collect(input());
   }
-  if (result.ok) result = { ...result, items: await resolveLinks(state, result.items) };
+  if (result.ok) {
+    const items = await assessItems(state, await resolveLinks(state, result.items), company);
+    result = { ...result, items };
+  }
   return { result, attempts: attempt };
 }
 
-/** Coût réel d'une source : une requête, plus les nouvelles publications retenues. */
+/** Coût réel d'une source : une requête, les nouvelles publications retenues, les lectures par le modèle. */
 function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome): UsageLine[] {
-  const units = outcome.result.ok
-    ? Math.min(outcome.result.items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS)
-    : 0;
+  const items = outcome.result.ok ? outcome.result.items : [];
+  const units = Math.min(items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS);
+  const assessed = items.filter((i) => i.assessment).length;
   return [
     { kind: "search_query", costEur: COSTS.search, units: 1, label: `Collecte ${source.label}` },
     ...(units
@@ -359,7 +392,23 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
           },
         ]
       : []),
+    ...(assessed
+      ? [
+          {
+            kind: "classification" as const,
+            costEur: assessed * COSTS.classification,
+            units: assessed,
+            label: `Lecture par le modèle ${source.label}`,
+          },
+        ]
+      : []),
   ];
+}
+
+/** Coût estimé d'une source, réservé avant l'appel : requête, publications, lectures par le modèle. */
+function estimatePerSource(): number {
+  const perItem = COSTS.observation + (adapters().ai ? COSTS.classification : 0);
+  return COSTS.search + MAX_ITEMS * perItem;
 }
 
 /** Suite d'une exécution après l'appel réseau : état de la source, ingestion, exécution consignée. */
@@ -477,7 +526,7 @@ async function runBatch(
       ctx,
       {
         kind: "search_query",
-        estimate: sources.length * (COSTS.search + MAX_ITEMS * COSTS.observation),
+        estimate: sources.length * estimatePerSource(),
         units: sources.length,
         label:
           sources.length === 1

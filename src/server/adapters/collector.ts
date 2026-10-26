@@ -1,4 +1,10 @@
-import type { Category, CollectionEnrichment, ObservationVia, Outlet } from "@/lib/api/types";
+import type {
+  Category,
+  CollectionEnrichment,
+  ContentAssessment,
+  ObservationVia,
+  Outlet,
+} from "@/lib/api/types";
 import { slugify } from "../domain/text";
 import {
   CITIES,
@@ -22,6 +28,8 @@ export interface RawItem {
   publishedAt: string | null;
   eventDate: string | null;
   via?: ObservationVia;
+  /** Lecture du contenu par le modèle, ajoutée par le service de collecte avant l'ingestion. */
+  assessment?: ContentAssessment;
 }
 
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */

@@ -77,6 +77,7 @@ export function rebuildSignal(input: RebuildInput): {
     observations: marked,
     priorSameCategory,
     eventLagDays: reference ? Math.max(0, daysBetween(reference, created)) : null,
+    content: signal.assessment ?? null,
   });
   const score = applyGrid(base, grid);
   const notes = adapters().textModel.editorialNotes({
