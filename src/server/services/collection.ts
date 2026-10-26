@@ -8,6 +8,7 @@ import {
   CLUSTER_WINDOW_DAYS,
   canonicalUrl,
   classifyCategory,
+  clusterReference,
   decideCluster,
   MATCH_THRESHOLD,
   matchCompany,
@@ -155,14 +156,26 @@ async function ingest(
   };
   state.knownUrls.add(key);
 
-  const windowStart = now.getTime() - (CLUSTER_WINDOW_DAYS + 1) * DAY;
+  // Candidats : signaux de l'entreprise dont l'événement (sinon la publication la plus ancienne)
+  // est à moins de 7 jours de la publication, qu'ils aient été créés hier ou il y a trois semaines.
+  const obsTime = Date.parse(obs.publishedAt ?? obs.collectedAt);
   const candidates = state.signals
-    .filter((s) => companyId && s.companyId === companyId && Date.parse(s.createdAt) >= windowStart)
+    .filter(
+      (s) =>
+        companyId &&
+        s.companyId === companyId &&
+        Math.abs(obsTime - clusterReference(s)) <= (CLUSTER_WINDOW_DAYS + 1) * DAY,
+    )
     .map((s) => ({
       signal: s,
       observations: state.observations.filter((o) => o.signalId === s.id),
     }));
-  const decision = decideCluster(obs, category, candidates);
+  const decision = decideCluster(
+    obs,
+    category,
+    candidates,
+    company ? [company.name, ...company.aliases] : [],
+  );
   const { grid } = state;
 
   if (decision.kind === "attach") {
