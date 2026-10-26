@@ -557,4 +557,52 @@ describe("collecte réelle : flux des entreprises", () => {
       "https://www.kalray.eu/rss.xml",
     ]);
   });
+
+
+  it("refuse un flux RSS découvert dans le HTML qui pointe vers une adresse interne", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+
+      if (url === ownSite.url) {
+        return new Response(
+          `<html>
+            <head>
+              <link
+                rel="alternate"
+                type="application/rss+xml"
+                href="http://127.0.0.1/secret"
+              />
+            </head>
+            <body>Kalray</body>
+          </html>`,
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        );
+      }
+
+      throw new Error(`Requête inattendue : ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    // La page HTML est récupérée, mais aucune requête vers le flux interdit
+    // ne doit être effectuée.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(ownSite.url);
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes("127.0.0.1"),
+    )).toBe(false);
+    expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
+  });
+
 });
