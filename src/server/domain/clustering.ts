@@ -68,6 +68,7 @@ const CATEGORY_RULES: CategoryRule[] = [
     category: "partenariat",
     strong: [
       /\bpartenariats?\b/,
+      /\baccords?\b/,
       /\bs'associent?\b/,
       /\balliance\b/,
       /\bcollaboration\b/,
@@ -255,7 +256,10 @@ export function matchCompany(
 }
 
 export interface ClusterCandidate {
-  signal: Pick<Signal, "id" | "companyId" | "category" | "title" | "createdAt" | "eventDate">;
+  signal: Pick<
+    Signal,
+    "id" | "companyId" | "category" | "title" | "createdAt" | "eventDate" | "publishedAt"
+  >;
   observations: Observation[];
 }
 
@@ -264,30 +268,147 @@ export type ClusterDecision =
   | { kind: "uncertain"; signalId: string; similarity: number }
   | { kind: "new" };
 
+/** Date de référence d'un signal pour le regroupement : événement, sinon publication la plus ancienne, sinon création. */
+export function clusterReference(
+  signal: Pick<Signal, "createdAt" | "eventDate" | "publishedAt">,
+): number {
+  return Date.parse(signal.eventDate ?? signal.publishedAt ?? signal.createdAt);
+}
+
+/** Unités de montant : jamais des entités à part entière. */
+const UNITS = new Set([
+  "m€",
+  "m$",
+  "meur",
+  "md€",
+  "k€",
+  "millions",
+  "million",
+  "milliards",
+  "milliard",
+]);
+
+const TITLE_STOP = new Set([
+  "le",
+  "la",
+  "les",
+  "un",
+  "une",
+  "des",
+  "du",
+  "de",
+  "et",
+  "ou",
+  "en",
+  "au",
+  "aux",
+  "pour",
+  "par",
+  "sur",
+  "avec",
+  "sans",
+  "dans",
+  "son",
+  "sa",
+  "ses",
+  "ce",
+  "cette",
+  "ces",
+  "qui",
+  "que",
+  "the",
+  "and",
+  "for",
+  "with",
+  "its",
+  "new",
+  "nouveau",
+  "nouvelle",
+  "nouveaux",
+  "nouvelles",
+]);
+
+/** Montant lisible (« 5 M€ », « 5 millions d'euros », « 12 M$ ») ramené à une clé « 5m ». */
+const AMOUNT = /(\d+(?:[.,]\d+)?)\s*(?:m€|m\$|meur|millions?|milliards?|md€|k€|%)/gi;
+
 /**
- * Regroupement d'un même événement : même entreprise, même catégorie, titres proches,
- * dans une fenêtre de 7 jours. Une reprise quasi identique d'un communiqué est toujours regroupée.
+ * Entités d'un titre : noms propres (mots capitalisés hors début de titre), sigles et montants,
+ * sans les noms de l'entreprise suivie. Ce sont les marqueurs d'un même événement (« Openchip »,
+ * « 5 M€ ») que la ressemblance des mots ne capte pas quand deux médias titrent différemment.
+ */
+export function titleEntities(title: string, exclude: string[] = []): Set<string> {
+  const out = new Set<string>();
+  const excluded = new Set(exclude.flatMap((n) => normalize(n).split(" ")));
+  const words = title.split(/[^\p{L}\p{N}€$%.,-]+/u).filter(Boolean);
+  words.forEach((w, i) => {
+    const clean = w.replace(/^[.,-]+|[.,-]+$/g, "");
+    if (clean.length < 2) return;
+    const key = normalize(clean);
+    if (!key || TITLE_STOP.has(key) || UNITS.has(key) || excluded.has(key)) return;
+    const acronym = /^[A-Z0-9][A-Z0-9-]+$/.test(clean) && /[A-Z]/.test(clean);
+    const capitalized = /^\p{Lu}/u.test(clean) && i > 0;
+    if (acronym || capitalized) out.add(key);
+  });
+  for (const m of title.matchAll(AMOUNT)) out.add(`${m[1]!.replace(",", ".")}m`);
+  return out;
+}
+
+/**
+ * Affinité de deux titres pour un même événement : ressemblance des mots, plus 0,3 par entité
+ * commune (partenaire, sigle, montant), plus 0,1 si les catégories coïncident, moins 0,2 si les
+ * deux titres portent des montants différents et moins 0,1 s'ils nomment des partenaires différents.
+ */
+export function titleAffinity(
+  a: string,
+  b: string,
+  opts: { exclude?: string[]; sameCategory?: boolean } = {},
+): number {
+  const ea = titleEntities(a, opts.exclude);
+  const eb = titleEntities(b, opts.exclude);
+  const isAmount = (e: string) => /^\d/.test(e);
+  const split = (set: Set<string>) => ({
+    amounts: [...set].filter(isAmount),
+    names: [...set].filter((e) => !isAmount(e)),
+  });
+  const sa = split(ea);
+  const sb = split(eb);
+  const sharedAmounts = sa.amounts.filter((e) => eb.has(e)).length;
+  const sharedNames = sa.names.filter((e) => eb.has(e)).length;
+  let affinity = textSimilarity(a, b) + 0.3 * (sharedAmounts + sharedNames);
+  if (opts.sameCategory) affinity += 0.1;
+  // Deux montants connus et différents (85 M€ contre 100 M€), ou deux partenaires connus et
+  // différents : vraisemblablement deux événements, même si les mots se ressemblent.
+  if (sa.amounts.length && sb.amounts.length && !sharedAmounts) affinity -= 0.2;
+  if (sa.names.length && sb.names.length && !sharedNames) affinity -= 0.1;
+  return Math.max(0, Math.min(1, affinity));
+}
+
+/**
+ * Regroupement d'un même événement : même entreprise, dans une fenêtre de 7 jours autour de la
+ * date de l'événement (sinon de la publication la plus ancienne), titres proches ou marqueurs
+ * communs. Une reprise quasi identique d'un communiqué est toujours regroupée. Une catégorie
+ * différente n'interdit pas le regroupement, elle le rend seulement plus exigeant.
  */
 export function decideCluster(
   obs: Pick<Observation, "companyId" | "title" | "excerpt" | "collectedAt" | "publishedAt">,
   category: Category,
   candidates: ClusterCandidate[],
+  companyNames: string[] = [],
 ): ClusterDecision {
   if (!obs.companyId) return { kind: "new" };
   const obsTime = Date.parse(obs.publishedAt ?? obs.collectedAt);
   let best: { id: string; sim: number } | null = null;
   for (const { signal, observations } of candidates) {
     if (signal.companyId !== obs.companyId) continue;
-    const ref = Date.parse(signal.eventDate ?? signal.createdAt);
-    if (Math.abs(obsTime - ref) > CLUSTER_WINDOW_DAYS * DAY) continue;
+    if (Math.abs(obsTime - clusterReference(signal)) > CLUSTER_WINDOW_DAYS * DAY) continue;
     const copy = observations.some(
       (o) => textSimilarity(o.excerpt, obs.excerpt) >= SYNDICATION_THRESHOLD,
     );
     if (copy) return { kind: "attach", signalId: signal.id, similarity: 1 };
-    if (signal.category !== category) continue;
+    const opts = { exclude: companyNames, sameCategory: signal.category === category };
     const sim = Math.max(
-      textSimilarity(signal.title, obs.title),
-      ...observations.map((o) => textSimilarity(o.title, obs.title)),
+      titleAffinity(signal.title, obs.title, opts),
+      ...observations.map((o) => titleAffinity(o.title, obs.title, opts)),
     );
     if (!best || sim > best.sim) best = { id: signal.id, sim };
   }

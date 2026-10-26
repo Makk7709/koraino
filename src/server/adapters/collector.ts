@@ -294,10 +294,40 @@ function comparable(s: string): string {
     .trim();
 }
 
+const INDEX_TITLE_PATTERNS = [
+  /\bpage\s+\d+(?:\s*(?:of|sur|\/)\s*\d+)?\b/i,
+  /^(?:actualit[ée]s?|news|blog|innovation|[ée]conomie|entreprises?|rubriques?|tags?|cat[ée]gories?|archives?|th[ée]matiques?|dossiers?|r[ée]sultats? de recherche|search results?)\s*(?:[-|–—:]|$)/i,
+  /\b(?:tous les articles|all articles|toutes les actualit[ée]s|derni[èe]res actualit[ée]s|latest news|recent news)\b/i,
+  /\bsitemap\b/i,
+  /^(?:th[ée]matiques?|dossiers?|rubriques?|tags?|cat[ée]gories?|archives?)\b/i,
+];
+const INDEX_PATH_PATTERN =
+  /\/(?:tags?|categor(?:y|ies|ie|ies)|rubriques?|archives?|search|recherche|page\/\d+|sitemap|feed|rss|author|auteur)(?:\/|$)|[?&](?:page|paged|p|s|q|search)=/i;
+
+/**
+ * Page de rubrique, de liste ou de pagination plutôt qu'article : titre réduit à un nom de
+ * rubrique (« Innovation - Le Dauphiné Libéré »), pagination (« page 970 of 1107 »), ou adresse
+ * de catégorie, d'étiquette ou de recherche. Ces pages citent l'entreprise sans parler d'elle.
+ */
+export function looksLikeIndexPage(title: string, url: string): boolean {
+  const t = title.trim();
+  if (INDEX_TITLE_PATTERNS.some((re) => re.test(t))) return true;
+  const [head = "", ...rest] = t.split(/\s+[-|–—:]\s+/);
+  const headWords = head.split(/\s+/).filter(Boolean).length;
+  if (rest.length > 0 && headWords <= 2 && t.split(/\s+/).length <= 6) return true;
+  try {
+    const u = new URL(url);
+    return INDEX_PATH_PATTERN.test(`${u.pathname}${u.search}`);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Résultats Perplexity retenus, au format des éléments collectés : publications datées, hors
  * site de l'entreprise (couvert par ses propres sources), qui la citent. Les pages sans date
- * de publication ni de mise à jour (annuaires, pages produit) ne sont pas des actualités.
+ * de publication ni de mise à jour (annuaires, pages produit) et les pages de rubrique, de liste
+ * ou de pagination ne sont pas des actualités.
  */
 export function mapPerplexityResults(
   results: PerplexityResult[],
@@ -312,6 +342,7 @@ export function mapPerplexityResults(
     const dated = r.date ?? r.last_updated;
     const d = dated ? new Date(dated) : null;
     if (!host || ownSite(host) || !d || Number.isNaN(d.getTime())) return [];
+    if (looksLikeIndexPage(r.title, r.url)) return [];
     const text = comparable(`${r.title} ${r.snippet ?? ""}`);
     if (!names.some((n) => text.includes(n))) return [];
     return [

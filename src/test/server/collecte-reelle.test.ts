@@ -178,15 +178,28 @@ describe("collecte réelle : enrichissement Perplexity", () => {
             snippet: "Panorama du secteur.",
             date: daysAgo(1),
           },
+          {
+            title: "Innovation - Le Dauphiné Libéré",
+            url: "https://www.ledauphine.com/innovation",
+            snippet: "Kalray, Soitec et les autres : toute l'innovation en Isère.",
+            date: daysAgo(1),
+          },
+          {
+            title: "Network Technology recent news | page 970 of 1107 | Light Reading",
+            url: "https://www.lightreading.com/network-technology?page=970",
+            snippet: "Kalray launches its new DPU…",
+            date: daysAgo(2),
+          },
         ],
       }),
     );
     const result = await collect(KEYS);
 
+    // Les pages de rubrique et de pagination qui citent Kalray ne sont pas retenues.
     expect(result.enrichment).toEqual({
       provider: "perplexity",
       status: "ok",
-      received: 5,
+      received: 7,
       matched: 2,
       message: null,
     });
