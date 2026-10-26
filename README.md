@@ -30,7 +30,10 @@ La collecte est réelle et se lance à la main (« Lancer la collecte » sur la 
 - Seules les publications datées de moins de 30 jours sont gardées. Chaque source apporte au plus 5 nouvelles publications par collecte.
 - La collecte globale se fait par lots de 8 sources (lectures réseau en parallèle, ingestion en série), enchaînés par l'interface avec l'avancement affiché ; les échecs définitifs (403, 404) ne sont pas réessayés et Perplexity n'est appelé qu'une fois par source et par collecte.
 - Une seule collecte à la fois : une seconde demande reçoit « Une collecte est déjà en cours ».
+- Une page sans flux annoncé est lue aux adresses habituelles (`/feed/`, `/rss`, `/feed.xml`, `/rss.xml`) ; sans flux, la source passe en échec `NO_FEED` jusqu'à correction de son adresse.
 - Les redirections Google News sont résolues en adresse d'article avant l'enregistrement (adaptateur `links`) ; si Google ne répond pas, la redirection est conservée.
+- Le marqueur « [À vérifier] » suit un fait non corroboré jusque dans l'extrait WordPress, les variantes LinkedIn et les résumés de newsletter ; une réécriture par le modèle qui le perdrait est ignorée.
+- Une nouvelle grille de score s'applique aussitôt aux signaux en cours ; les signaux traités ou rejetés gardent le score de leur décision.
 - Avec une clé `AI_API_KEY`, chaque publication nouvelle est lue par le modèle à la collecte (catégorie, importance de 0 à 100, motif), lecture comptée dans le budget et resservie à chaque recalcul du score ; sans clé ou sans réponse, la catégorie vient d'indices lexicaux pondérés et l'importance de la catégorie.
 - La provenance de chaque publication (flux, Google News, Perplexity) est visible dans la fiche du signal et dans l'export des observations.
 
