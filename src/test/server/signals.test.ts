@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ApiErrorBody,
+  CollectionBatch,
   CollectionRun,
   Notification,
   Paginated,
@@ -300,7 +301,7 @@ describe("collecte WF1 : dédoublonnage, regroupement, rattachement", () => {
     });
   });
 
-  it("borne les essais à 3, consigne l'échec et notifie", async () => {
+  it("ne réessaie pas un échec définitif, consigne l'échec et notifie", async () => {
     const source = await pasqalSource();
     let calls = 0;
     stubCollector(() => {
@@ -308,16 +309,27 @@ describe("collecte WF1 : dédoublonnage, regroupement, rattachement", () => {
       return { ok: false, code: "HTTP_403", reason: "Accès refusé par le site", transient: false };
     });
     const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`);
-    expect(calls).toBe(3);
+    expect(calls).toBe(1);
     expect(run.body).toMatchObject({ status: "echec", errorCode: "HTTP_403", newObservations: 0 });
     const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
     expect(sources.body.find((s) => s.id === source.id)).toMatchObject({
       access: "erreur",
-      attempts: 3,
+      attempts: 1,
       failureCode: "HTTP_403",
     });
     const notifications = await call<Notification[]>("GET", "/notifications");
     expect(notifications.body[0]).toMatchObject({ kind: "erreur_source", read: false });
+
+    calls = 0;
+    stubCollector(() => {
+      calls += 1;
+      return { ok: false, code: "TIMEOUT", reason: "Délai dépassé", transient: true };
+    });
+    const exhausted = await call<CollectionRun>("POST", `/sources/${source.id}/collect`);
+    expect(calls).toBe(3);
+    expect(exhausted.body).toMatchObject({ status: "echec", errorCode: "TIMEOUT" });
+    const stillFailing = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    expect(stillFailing.body.find((s) => s.id === source.id)).toMatchObject({ attempts: 3 });
 
     calls = 0;
     stubCollector((attempt) =>
@@ -335,15 +347,57 @@ describe("collecte WF1 : dédoublonnage, regroupement, rattachement", () => {
     });
   });
 
-  it("collecte toutes les sources actives avec le collecteur simulé", async () => {
-    const res = await call<CollectionRun[]>("POST", "/collect");
-    expect(res.status).toBe(200);
-    const statuses = new Set(res.body.map((r) => r.status));
-    expect(res.body.length).toBeGreaterThanOrEqual(250);
+  it("collecte toutes les sources actives par lots, avec le collecteur simulé", async () => {
+    const active = (await call<Source[]>("GET", "/sources")).body.filter(
+      (s) => s.access !== "desactivee",
+    );
+    const first = await call<CollectionBatch>("POST", "/collect", { body: { limit: 25 } });
+    expect(first.status).toBe(200);
+    expect(first.body.total).toBe(active.length);
+    expect(first.body.runs).toHaveLength(25);
+    expect(first.body.remaining).toBe(active.length - 25);
+
+    const runs = [...first.body.runs];
+    let batch = first.body;
+    let batches = 1;
+    while (batch.remaining > 0) {
+      const next = await call<CollectionBatch>("POST", "/collect", {
+        body: { since: batch.since, limit: 25 },
+      });
+      expect(next.body.since).toBe(first.body.since);
+      expect(next.body.remaining).toBeLessThan(batch.remaining);
+      batch = next.body;
+      runs.push(...batch.runs);
+      batches += 1;
+    }
+    expect(batches).toBe(Math.ceil(active.length / 25));
+    expect(runs.length).toBe(active.length);
+    expect(new Set(runs.map((r) => r.sourceId)).size).toBe(active.length);
+    expect(runs.length).toBeGreaterThanOrEqual(250);
+    const statuses = new Set(runs.map((r) => r.status));
     expect(statuses.has("echec")).toBe(true);
     expect(statuses.has("succes_sans_actualite")).toBe(true);
-    const runs = await call<CollectionRun[]>("GET", "/collection-runs?limit=5");
-    expect(runs.body).toHaveLength(5);
+
+    // Un lot de plus avec le même début : plus rien à collecter, aucune exécution.
+    const done = await call<CollectionBatch>("POST", "/collect", { body: { since: batch.since } });
+    expect(done.body).toMatchObject({ runs: [], remaining: 0 });
+
+    const history = await call<CollectionRun[]>("GET", "/collection-runs?limit=5");
+    expect(history.body).toHaveLength(5);
+    const audit = await call<{ action: string; details: string }[]>("GET", "/audit?limit=20");
+    const lots = audit.body.filter((a) => a.action === "collect.all");
+    expect(lots.length).toBeGreaterThanOrEqual(batches);
+    expect(lots[0]!.details).toContain("collecte terminée");
+  });
+
+  it("refuse un lot mal formé et borne sa taille", async () => {
+    const bad = await call<ApiErrorBody>("POST", "/collect", { body: { since: "hier" } });
+    expect(bad.status).toBe(400);
+    const tooBig = await call<ApiErrorBody>("POST", "/collect", { body: { limit: 500 } });
+    expect(tooBig.status).toBe(400);
+    const small = await call<CollectionBatch>("POST", "/collect", { body: { limit: 2 } });
+    expect(small.body.runs).toHaveLength(2);
+    expect(small.body.remaining).toBe(small.body.total - 2);
   });
 });
 

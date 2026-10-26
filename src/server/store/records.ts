@@ -116,6 +116,7 @@ export type UsageKind =
   | "generation_article"
   | "generation_linkedin"
   | "generation_summary"
+  | "classification"
   | "search_query"
   | "observation";
 

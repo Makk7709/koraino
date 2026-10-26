@@ -1,6 +1,7 @@
-import type { CollectionRun } from "@/lib/api/types";
-import { adapters, enhanceSummary } from "../adapters";
+import type { CollectionBatch, CollectionRun } from "@/lib/api/types";
+import { adapters } from "../adapters";
 import type { CollectResult, RawItem } from "../adapters/collector";
+import { now as clock } from "../clock";
 import type { Ctx } from "../context";
 import { budgetExhausted, COSTS } from "../domain/budget";
 import {
@@ -11,6 +12,7 @@ import {
   MATCH_THRESHOLD,
   matchCompany,
 } from "../domain/clustering";
+import { PRIORITY_SCORE } from "../domain/dashboard";
 import { DAY } from "../domain/dates";
 import { isDecided } from "../domain/scoring";
 import { sanitizeText, validateSourceUrl } from "../domain/security";
@@ -18,6 +20,7 @@ import { HttpError, conflict } from "../http";
 import { CATEGORY_LABEL, THEME_TAGS } from "../store/catalog";
 import type {
   CompanyRecord,
+  GridRecord,
   ObservationRecord,
   SignalRecord,
   SourceRecord,
@@ -25,12 +28,21 @@ import type {
 import { notify } from "./journal";
 import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
-import { paidCall } from "./usage";
+import { paidCall, type UsageLine } from "./usage";
 
-/** Nombre maximal d'essais par exécution (§6 : tentatives bornées). */
+/** Nombre maximal d'essais par exécution (§6 : tentatives bornées), sur erreur transitoire seulement. */
 export const MAX_ATTEMPTS = 3;
 /** Nombre maximal de nouvelles publications retenues par source et par exécution. */
-const MAX_ITEMS = 3;
+export const MAX_ITEMS = 5;
+/** Sources traitées par appel de collecte globale (`POST /collect`), à défaut de `limit`. */
+export const BATCH_SIZE = 8;
+/** Borne haute de `limit` : un lot reste court pour tenir dans une requête de l'hébergeur. */
+export const MAX_BATCH_SIZE = 25;
+/**
+ * Lectures réseau simultanées dans un lot. Cloudflare Workers n'ouvre que 6 connexions
+ * sortantes à la fois par invocation ; chaque source peut en tenir deux (flux et Perplexity).
+ */
+const CONCURRENCY = 3;
 
 /** État chargé une fois par lot de collecte. */
 interface CollectState {
@@ -38,20 +50,51 @@ interface CollectState {
   observations: ObservationRecord[];
   knownUrls: Set<string>;
   signals: SignalRecord[];
+  grid: GridRecord;
+  /** Nouveaux signaux dont le résumé reste à améliorer par l'IA, après l'ingestion. */
+  pendingSummaries: { signalId: string; title: string; text: string; base: string }[];
 }
 
+interface Outcome {
+  result: CollectResult;
+  attempts: number;
+}
+
+type RunBase = Pick<CollectionRun, "id" | "sourceId" | "companyId" | "startedAt">;
+
 async function loadState(ctx: Pick<Ctx, "repo">): Promise<CollectState> {
-  const [companies, observations, signals] = await Promise.all([
+  const [companies, observations, signals, grid] = await Promise.all([
     ctx.repo.companies.list(),
     ctx.repo.observations.list(),
     ctx.repo.signals.list(),
+    activeGrid(ctx.repo),
   ]);
   return {
     companies,
     observations,
     signals,
+    grid,
     knownUrls: new Set(observations.map((o) => canonicalUrl(o.url))),
+    pendingSummaries: [],
   };
+}
+
+/** Exécute `fn` sur chaque élément, `limit` à la fois au plus, en conservant l'ordre des résultats. */
+export async function parallel<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /** Publication déjà connue (ou URL refusée) : elle n'occupe pas de place dans la limite par exécution. */
@@ -93,7 +136,7 @@ async function ingest(
   const match = matchCompany(`${title} ${excerpt}`, item.url, state.companies, source.companyId);
   const companyId = match.confidence >= MATCH_THRESHOLD ? match.companyId : null;
   const company = companyId ? (state.companies.find((c) => c.id === companyId) ?? null) : null;
-  const category = classifyCategory(`${title} ${excerpt}`);
+  const category = item.assessment?.category ?? classifyCategory(`${title} ${excerpt}`);
   const obs: ObservationRecord = {
     id: repo.nextId("obs"),
     signalId: null,
@@ -120,7 +163,7 @@ async function ingest(
       observations: state.observations.filter((o) => o.signalId === s.id),
     }));
   const decision = decideCluster(obs, category, candidates);
-  const grid = await activeGrid(repo);
+  const { grid } = state;
 
   if (decision.kind === "attach") {
     const target = state.signals.find((s) => s.id === decision.signalId)!;
@@ -162,11 +205,13 @@ async function ingest(
       : companyId
         ? null
         : match.review;
+  // Résumé par gabarit à la création ; l'amélioration par l'IA est faite après le lot, en parallèle.
+  const summary = adapters().textModel.summarize({ title, text: excerpt });
   const draft: SignalRecord = {
     id: signalId,
     companyId,
     title,
-    summary: await enhanceSummary({ title, text: excerpt }),
+    summary,
     category,
     themes,
     tags: [CATEGORY_LABEL[category], ...themes.map((t) => THEME_TAGS[t])].slice(0, 4),
@@ -190,6 +235,7 @@ async function ingest(
     readingMinutes: 1,
     review,
     articleId: null,
+    assessment: item.assessment ?? null,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -204,7 +250,8 @@ async function ingest(
   await repo.observations.insert(rebuilt.observations[0]!);
   await repo.signals.insert(rebuilt.signal);
   replaceSignal(state, rebuilt.signal, rebuilt.observations);
-  if (rebuilt.signal.score.total >= 80) {
+  state.pendingSummaries.push({ signalId, title, text: excerpt, base: summary });
+  if (rebuilt.signal.score.total >= PRIORITY_SCORE) {
     await notify(repo, now, {
       kind: "signal",
       title: `Nouveau signal prioritaire${company ? ` : ${company.name}` : ""}`,
@@ -227,103 +274,154 @@ function replaceSignal(
   state.observations = [...state.observations.filter((o) => !ids.has(o.id)), ...observations];
 }
 
+/**
+ * Résumés améliorés par l'IA pour les signaux créés dans le lot, en parallèle et hors du chemin
+ * critique de l'ingestion. Sans clé IA, rien n'est appelé ni réécrit.
+ */
+async function enhanceSummaries(
+  repo: Pick<Ctx, "repo">["repo"],
+  pending: CollectState["pendingSummaries"],
+): Promise<void> {
+  const ai = adapters().ai;
+  if (!ai || pending.length === 0) return;
+  await parallel(pending, CONCURRENCY, async (p) => {
+    const summary = await ai.enhanceSummary({ title: p.title, text: p.text }, p.base);
+    if (summary === p.base) return;
+    const current = await repo.signals.get(p.signalId);
+    if (current) await repo.signals.update({ ...current, summary });
+  });
+}
+
 async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<CollectionRun> {
   await ctx.repo.runs.insert(run);
   return run;
 }
 
 /**
- * Exécute la collecte d'une source (WF1). Le coût estimé est réservé avant l'appel :
- * si le budget est épuisé, l'exécution est consignée « bloque_quota » et l'erreur 402 propagée.
- * Budget momentanément occupé (`budget_busy`) : seule cette exécution échoue, la source reste
- * dans son état et la collecte globale continue.
+ * Remplace les redirections Google News par l'adresse de l'article, pour les publications encore
+ * inconnues qui seront ingérées (au plus `MAX_ITEMS` résolutions par source). Une résolution qui
+ * échoue laisse la redirection ; une adresse résolue déjà connue sera écartée à l'ingestion.
  */
-async function runSource(
-  ctx: Pick<Ctx, "repo" | "user" | "now">,
+async function resolveLinks(state: CollectState, items: RawItem[]): Promise<RawItem[]> {
+  const { links } = adapters();
+  let budget = MAX_ITEMS;
+  const out: RawItem[] = [];
+  for (const item of items) {
+    if (budget > 0 && item.via === "google_news" && !isKnown(state, item)) {
+      budget -= 1;
+      const resolved = await links.resolve(item.url);
+      out.push(resolved ? { ...item, url: resolved } : item);
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/**
+ * Lecture des publications par le modèle (catégorie, importance), pour les publications encore
+ * inconnues qui seront ingérées, au plus `MAX_ITEMS` par source. Sans clé IA, ou si le modèle ne
+ * répond pas, la publication est ingérée sans évaluation (indices lexicaux, importance par
+ * catégorie). Le texte est nettoyé avant d'être soumis : donnée, jamais instruction.
+ */
+async function assessItems(
+  state: CollectState,
+  items: RawItem[],
+  company: CompanyRecord | null,
+): Promise<RawItem[]> {
+  const { ai } = adapters();
+  if (!ai) return items;
+  const picked = new Set<RawItem>();
+  for (const item of items) {
+    if (picked.size >= MAX_ITEMS) break;
+    if (!isKnown(state, item)) picked.add(item);
+  }
+  const assessed = await parallel([...picked], CONCURRENCY, async (item) => {
+    const title = sanitizeText(item.title, 300);
+    const text = sanitizeText(item.html, 1200);
+    if (!title || !text) return item;
+    const assessment = await ai.classify({ title, text, companyName: company?.name ?? null });
+    return assessment ? { ...item, assessment } : item;
+  });
+  const byOriginal = new Map([...picked].map((item, i) => [item, assessed[i]!]));
+  return items.map((item) => byOriginal.get(item) ?? item);
+}
+
+/** Appel du collecteur, réessayé sur erreur transitoire seulement (§6 : tentatives bornées). */
+async function fetchOutcome(
+  ctx: Pick<Ctx, "now">,
   state: CollectState,
   source: SourceRecord,
+  company: CompanyRecord | null,
+): Promise<Outcome> {
+  const collector = adapters().collector;
+  let attempt = 1;
+  const input = () => ({
+    source,
+    company,
+    attempt,
+    now: ctx.now,
+    knownEvents: knownEvents(state, source.companyId),
+  });
+  let result = await collector.collect(input());
+  while (!result.ok && result.transient && attempt < MAX_ATTEMPTS) {
+    attempt += 1;
+    result = await collector.collect(input());
+  }
+  if (result.ok) {
+    const items = await assessItems(state, await resolveLinks(state, result.items), company);
+    result = { ...result, items };
+  }
+  return { result, attempts: attempt };
+}
+
+/** Coût réel d'une source : une requête, les nouvelles publications retenues, les lectures par le modèle. */
+function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome): UsageLine[] {
+  const items = outcome.result.ok ? outcome.result.items : [];
+  const units = Math.min(items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS);
+  const assessed = items.filter((i) => i.assessment).length;
+  return [
+    { kind: "search_query", costEur: COSTS.search, units: 1, label: `Collecte ${source.label}` },
+    ...(units
+      ? [
+          {
+            kind: "observation" as const,
+            costEur: units * COSTS.observation,
+            units,
+            label: `Observations ${source.label}`,
+          },
+        ]
+      : []),
+    ...(assessed
+      ? [
+          {
+            kind: "classification" as const,
+            costEur: assessed * COSTS.classification,
+            units: assessed,
+            label: `Lecture par le modèle ${source.label}`,
+          },
+        ]
+      : []),
+  ];
+}
+
+/** Coût estimé d'une source, réservé avant l'appel : requête, publications, lectures par le modèle. */
+function estimatePerSource(): number {
+  const perItem = COSTS.observation + (adapters().ai ? COSTS.classification : 0);
+  return COSTS.search + MAX_ITEMS * perItem;
+}
+
+/** Suite d'une exécution après l'appel réseau : état de la source, ingestion, exécution consignée. */
+async function settle(
+  ctx: Pick<Ctx, "repo" | "now">,
+  state: CollectState,
+  source: SourceRecord,
+  outcome: Outcome,
+  base: RunBase,
 ): Promise<CollectionRun> {
   const { repo, now } = ctx;
-  const startedAt = now.toISOString();
-  const base = {
-    id: repo.nextId("run"),
-    sourceId: source.id,
-    companyId: source.companyId,
-    startedAt,
-  };
-  const company = state.companies.find((c) => c.id === source.companyId) ?? null;
-
-  let outcome: { result: CollectResult; attempts: number };
-  try {
-    outcome = await paidCall(
-      ctx,
-      {
-        kind: "search_query",
-        estimate: COSTS.search + MAX_ITEMS * COSTS.observation,
-        units: 1,
-        label: `Collecte ${source.label}`,
-      },
-      async () => {
-        const collector = adapters().collector;
-        let attempt = 1;
-        let result = await collector.collect({
-          source,
-          company,
-          attempt,
-          now,
-          knownEvents: knownEvents(state, source.companyId),
-        });
-        while (!result.ok && attempt < MAX_ATTEMPTS) {
-          attempt += 1;
-          result = await collector.collect({
-            source,
-            company,
-            attempt,
-            now,
-            knownEvents: knownEvents(state, source.companyId),
-          });
-        }
-        return { result, attempts: attempt };
-      },
-      ({ result }) => {
-        const units = result.ok
-          ? Math.min(result.items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS)
-          : 0;
-        return [
-          {
-            kind: "search_query",
-            costEur: COSTS.search,
-            units: 1,
-            label: `Collecte ${source.label}`,
-          },
-          ...(units
-            ? [
-                {
-                  kind: "observation" as const,
-                  costEur: units * COSTS.observation,
-                  units,
-                  label: `Observations ${source.label}`,
-                },
-              ]
-            : []),
-        ];
-      },
-    );
-  } catch (e) {
-    if (!(e instanceof HttpError)) throw e;
-    if (e.status === 402) return recordRun(ctx, blockedRun(base, now));
-    if (e.code !== "budget_busy") throw e;
-    return recordRun(ctx, {
-      ...base,
-      finishedAt: now.toISOString(),
-      status: "echec",
-      newObservations: 0,
-      errorCode: e.code,
-      errorMessage: e.message,
-    });
-  }
-
   const { result, attempts } = outcome;
+  const company = state.companies.find((c) => c.id === source.companyId) ?? null;
   const current = (await repo.sources.get(source.id)) ?? source;
   if (!result.ok) {
     const wasFailing = current.access === "erreur";
@@ -346,7 +444,7 @@ async function runSource(
     }
     return recordRun(ctx, {
       ...base,
-      finishedAt: now.toISOString(),
+      finishedAt: clock().toISOString(),
       status: "echec",
       newObservations: 0,
       errorCode: result.code,
@@ -375,7 +473,7 @@ async function runSource(
   });
   return recordRun(ctx, {
     ...base,
-    finishedAt: now.toISOString(),
+    finishedAt: clock().toISOString(),
     status: created > 0 ? "succes" : "succes_sans_actualite",
     newObservations: created,
     errorCode: result.warning?.code ?? null,
@@ -384,10 +482,7 @@ async function runSource(
   });
 }
 
-function blockedRun(
-  base: Pick<CollectionRun, "id" | "sourceId" | "companyId" | "startedAt">,
-  now: Date,
-): CollectionRun {
+function blockedRun(base: RunBase, now: Date): CollectionRun {
   return {
     ...base,
     finishedAt: now.toISOString(),
@@ -398,9 +493,86 @@ function blockedRun(
   };
 }
 
+/**
+ * Collecte d'un lot de sources (WF1). Le coût estimé du lot est réservé en une fois avant les
+ * appels : budget épuisé, toutes les exécutions du lot sont consignées `bloque_quota` ; verrou
+ * `budget` occupé, elles sont consignées `echec` (`budget_busy`) et les sources restent dans leur
+ * état. Les lectures réseau se font en parallèle (`CONCURRENCY`), l'ingestion en série pour que
+ * le dédoublonnage reste sûr.
+ */
+async function runBatch(
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
+  state: CollectState,
+  sources: SourceRecord[],
+): Promise<CollectionRun[]> {
+  if (sources.length === 0) return [];
+  const { repo, now } = ctx;
+  const bases = new Map<string, RunBase>(
+    sources.map((s) => [
+      s.id,
+      {
+        id: repo.nextId("run"),
+        sourceId: s.id,
+        companyId: s.companyId,
+        startedAt: now.toISOString(),
+      },
+    ]),
+  );
+  const companyOf = (s: SourceRecord) => state.companies.find((c) => c.id === s.companyId) ?? null;
+
+  let outcomes: Outcome[];
+  try {
+    outcomes = await paidCall(
+      ctx,
+      {
+        kind: "search_query",
+        estimate: sources.length * estimatePerSource(),
+        units: sources.length,
+        label:
+          sources.length === 1
+            ? `Collecte ${sources[0]!.label}`
+            : `Collecte de ${sources.length} sources`,
+      },
+      () => parallel(sources, CONCURRENCY, (s) => fetchOutcome(ctx, state, s, companyOf(s))),
+      (outs) => outs.flatMap((o, i) => usageLines(state, sources[i]!, o)),
+    );
+  } catch (e) {
+    if (!(e instanceof HttpError)) throw e;
+    const runs: CollectionRun[] = [];
+    if (e.status === 402) {
+      for (const s of sources) runs.push(await recordRun(ctx, blockedRun(bases.get(s.id)!, now)));
+      return runs;
+    }
+    if (e.code !== "budget_busy") throw e;
+    for (const s of sources) {
+      // Datée comme tentée : la collecte globale ne la représente pas dans ce passage.
+      const current = (await repo.sources.get(s.id)) ?? s;
+      await repo.sources.update({ ...current, lastRunAt: now.toISOString() });
+      runs.push(
+        await recordRun(ctx, {
+          ...bases.get(s.id)!,
+          finishedAt: clock().toISOString(),
+          status: "echec",
+          newObservations: 0,
+          errorCode: e.code,
+          errorMessage: e.message,
+        }),
+      );
+    }
+    return runs;
+  }
+
+  const runs: CollectionRun[] = [];
+  for (const [i, source] of sources.entries()) {
+    runs.push(await settle(ctx, state, source, outcomes[i]!, bases.get(source.id)!));
+  }
+  await enhanceSummaries(repo, state.pendingSummaries.splice(0));
+  return runs;
+}
+
 const COLLECT_LOCK = "collecte";
-/** Couvre une collecte complète (une soixantaine de sources, chacune bornée à ~35 s par essai). */
-const COLLECT_LOCK_TTL_MS = 15 * 60_000;
+/** Couvre un lot (`MAX_BATCH_SIZE` sources, chacune bornée à ~35 s par essai, par vagues de `CONCURRENCY`). */
+const COLLECT_LOCK_TTL_MS = 5 * 60_000;
 
 /**
  * Une seule collecte à la fois : deux collectes simultanées (deux onglets, deux personnes)
@@ -433,27 +605,52 @@ export async function collectOne(
       "Cette source est désactivée : réactivez-la avant de lancer une collecte.",
     );
   }
-  const run = await exclusive(ctx, async () => runSource(ctx, await loadState(ctx), source));
-  if (run.status === "bloque_quota") {
+  const [run] = await exclusive(ctx, async () => runBatch(ctx, await loadState(ctx), [source]));
+  if (run!.status === "bloque_quota") {
     throw budgetExhausted(
       "Budget API atteint : la collecte est suspendue jusqu'au mois prochain ou à une hausse du plafond.",
     );
   }
-  return run;
+  return run!;
 }
 
-/** Collecte de toutes les sources actives ; au plafond budgétaire, les suivantes sont « bloque_quota ». */
+export interface CollectAllOptions {
+  /** Début de la collecte globale (renvoyé par le premier lot) ; absent : nouvelle collecte. */
+  since?: string | undefined;
+  /** Sources traitées dans ce lot (`BATCH_SIZE` par défaut, `MAX_BATCH_SIZE` au plus). */
+  limit?: number | undefined;
+}
+
+/** Sources jamais collectées d'abord, puis de la plus ancienne collecte à la plus récente. */
+function oldestFirst(a: SourceRecord, b: SourceRecord): number {
+  if (a.lastRunAt === b.lastRunAt) return a.id.localeCompare(b.id);
+  if (!a.lastRunAt) return -1;
+  if (!b.lastRunAt) return 1;
+  return a.lastRunAt.localeCompare(b.lastRunAt);
+}
+
+/**
+ * Collecte globale par lots : chaque appel traite les sources actives non encore collectées
+ * depuis `since` (date du premier appel), `limit` au plus, et renvoie le nombre de sources
+ * restantes. Le client enchaîne les appels jusqu'à `remaining: 0`. Au plafond budgétaire, les
+ * sources restantes sont consignées `bloque_quota` et la collecte s'arrête.
+ */
 export async function collectAll(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
-): Promise<CollectionRun[]> {
+  opts: CollectAllOptions = {},
+): Promise<CollectionBatch> {
   return exclusive(ctx, async () => {
-    const state = await loadState(ctx);
-    const sources = (await ctx.repo.sources.list()).filter((s) => s.access !== "desactivee");
-    const runs: CollectionRun[] = [];
-    let blocked = false;
-    for (const source of sources) {
-      const run = blocked
-        ? await recordRun(
+    const since = opts.since ?? ctx.now.toISOString();
+    const limit = Math.max(1, Math.min(opts.limit ?? BATCH_SIZE, MAX_BATCH_SIZE));
+    const active = (await ctx.repo.sources.list()).filter((s) => s.access !== "desactivee");
+    const pending = active.filter((s) => !s.lastRunAt || s.lastRunAt < since).sort(oldestFirst);
+    const batch = pending.slice(0, limit);
+    const runs = await runBatch(ctx, await loadState(ctx), batch);
+    let rest = pending.slice(batch.length);
+    if (runs.some((r) => r.status === "bloque_quota")) {
+      for (const source of rest) {
+        runs.push(
+          await recordRun(
             ctx,
             blockedRun(
               {
@@ -464,11 +661,11 @@ export async function collectAll(
               },
               ctx.now,
             ),
-          )
-        : await runSource(ctx, state, source);
-      if (run.status === "bloque_quota") blocked = true;
-      runs.push(run);
+          ),
+        );
+      }
+      rest = [];
     }
-    return runs;
+    return { since, total: active.length, runs, remaining: rest.length };
   });
 }

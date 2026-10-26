@@ -146,7 +146,7 @@ En production, l'application démarre sans aucune donnée. Avant la première co
 1. **Inviter l'équipe**. Connecté avec le premier compte administrateur, ajoutez vos collègues dans Paramètres, onglet [Utilisateurs & rôles](#utilisateurs--rôles). L'ajout d'entreprises et de sources demande le rôle rédacteur ou administrateur.
 2. **Créer les entreprises**. Dans Entreprises, cliquez sur « Ajouter une entreprise » pour chacune des entreprises à suivre (150 au maximum ; voir [Ajouter une entreprise](#ajouter-une-entreprise)). Soignez la raison sociale, les alias et le domaine officiel : les recherches Google News et Perplexity portent sur la raison sociale, et le rattachement des publications s'appuie sur les noms et le domaine. KORA crée pour chaque entreprise la source « Google News — » suivie de la raison sociale.
 3. **Compléter les sources**, si vous le souhaitez. Dans Veille, « Ajouter une source » permet d'ajouter le flux RSS d'un site officiel ou d'un média (voir [Ce que lit la collecte](#ce-que-lit-la-collecte)).
-4. **Lancer la collecte**. Dans Veille, cliquez sur « Lancer la collecte ». Le bouton affiche « Collecte en cours… » ; pour un registre complet, comptez plusieurs minutes. Le message « Collecte terminée sur N sources » donne le bilan, et chaque collecte consomme une part du budget API (voir [Lancer une collecte](#lancer-une-collecte)).
+4. **Lancer la collecte**. Dans Veille, cliquez sur « Lancer la collecte ». Le bouton affiche « Collecte en cours… » et une notification suit l'avancement, lot par lot (« Collecte en cours : 16 / 60 sources ») ; pour un registre complet, comptez une à deux minutes. Le message « Collecte terminée sur N sources » donne le bilan, et chaque collecte consomme une part du budget API (voir [Lancer une collecte](#lancer-une-collecte)).
 5. **Qualifier les premiers signaux**. Ouvrez Signaux. La collecte ne retient que les publications de moins de 30 jours : les actualités plus anciennes des entreprises n'apparaissent pas, même au premier passage.
 
 Le « Corpus d'exemples historiques » de l'onglet « Editorial DNA » reste vide en production (« Aucun exemple dans le corpus ») : aucun écran ne permet d'y ajouter des exemples.
@@ -249,7 +249,7 @@ Le type de source détermine ce que la collecte lit réellement (voir ci-dessous
 
 ### Lancer une collecte
 
-« Lancer la collecte » interroge toutes les sources actives, l'une après l'autre ; le bouton affiche « Collecte en cours… » et le message « Collecte terminée sur N sources » donne le bilan. Une collecte complète peut durer plusieurs minutes : chaque essai attend jusqu'à 15 secondes la réponse de la source. Pour une seule source, utilisez l'icône « Collecter maintenant » du registre, « Réessayer » dans l'encadré des échecs, ou le bouton de la fiche entreprise. Le résultat s'affiche alors en clair :
+« Lancer la collecte » interroge toutes les sources actives par lots de huit, plusieurs sources lues en même temps ; le bouton affiche « Collecte en cours… », une notification donne l'avancement (« Collecte en cours : 16 / 60 sources ») et le message « Collecte terminée sur N sources » donne le bilan. Une collecte complète prend une à deux minutes : chaque essai attend jusqu'à 15 secondes la réponse de la source, et une source injoignable (403, 404) n'est pas réessayée. Pour une seule source, utilisez l'icône « Collecter maintenant » du registre, « Réessayer » dans l'encadré des échecs, ou le bouton de la fiche entreprise. Le résultat s'affiche alors en clair :
 
 | Message | Signification |
 |---|---|

@@ -1,4 +1,10 @@
-import type { Category, CollectionEnrichment, ObservationVia, Outlet } from "@/lib/api/types";
+import type {
+  Category,
+  CollectionEnrichment,
+  ContentAssessment,
+  ObservationVia,
+  Outlet,
+} from "@/lib/api/types";
 import { slugify } from "../domain/text";
 import {
   CITIES,
@@ -22,6 +28,8 @@ export interface RawItem {
   publishedAt: string | null;
   eventDate: string | null;
   via?: ObservationVia;
+  /** Lecture du contenu par le modèle, ajoutée par le service de collecte avant l'ingestion. */
+  assessment?: ContentAssessment;
 }
 
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */
@@ -170,9 +178,22 @@ export class SimulatedCollector implements Collector {
   }
 }
 
-/** Lien Google News (flux RSS) pour une recherche par nom d'entreprise. */
-export function googleNewsUrl(query: string): string {
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(`"${query}"`)}&hl=fr&gl=FR&ceid=FR:fr`;
+/** Nom et alias d'une entreprise, dédoublonnés, pour les requêtes par nom. */
+export function companyNames(company: Pick<CompanyRecord, "name" | "aliases">): string[] {
+  const seen = new Set<string>();
+  return [company.name, ...company.aliases]
+    .map((n) => n.trim())
+    .filter((n) => n && !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase()));
+}
+
+/** Expression exacte par nom, les alias en alternative (`"Bertin Alpao" OR "Alpao"`). */
+export function quotedNames(names: string | string[]): string {
+  return (Array.isArray(names) ? names : [names]).map((n) => `"${n}"`).join(" OR ");
+}
+
+/** Lien Google News (flux RSS) pour une recherche par nom d'entreprise, alias compris. */
+export function googleNewsUrl(query: string | string[]): string {
+  return `https://news.google.com/rss/search?q=${encodeURIComponent(quotedNames(query))}&hl=fr&gl=FR&ceid=FR:fr`;
 }
 
 function decode(s: string): string {
@@ -250,26 +271,41 @@ interface PerplexityResult {
   url?: string;
   snippet?: string;
   date?: string | null;
+  /** Dernière mise à jour de la page, en repli de `date` (les deux sont facultatifs dans l'API). */
+  last_updated?: string | null;
+}
+
+/** Texte comparable : minuscules, sans accents, espaces et apostrophes normalisés. */
+function comparable(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
  * Résultats Perplexity retenus, au format des éléments collectés : publications datées, hors
  * site de l'entreprise (couvert par ses propres sources), qui la citent. Les pages sans date
- * de publication (annuaires, pages produit) ne sont pas des actualités.
+ * de publication ni de mise à jour (annuaires, pages produit) ne sont pas des actualités.
  */
 export function mapPerplexityResults(
   results: PerplexityResult[],
   company: CompanyRecord,
 ): RawItem[] {
-  const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+  const names = companyNames(company).map(comparable);
   const ownSite = (host: string) =>
     !!company.domain && (host === company.domain || host.endsWith(`.${company.domain}`));
   return results.flatMap((r) => {
     if (!r.url || !r.title) return [];
     const host = hostOf(r.url);
-    const d = r.date ? new Date(r.date) : null;
+    const dated = r.date ?? r.last_updated;
+    const d = dated ? new Date(dated) : null;
     if (!host || ownSite(host) || !d || Number.isNaN(d.getTime())) return [];
-    if (!names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n))) return [];
+    const text = comparable(`${r.title} ${r.snippet ?? ""}`);
+    if (!names.some((n) => text.includes(n))) return [];
     return [
       {
         url: r.url,
@@ -307,6 +343,25 @@ export function mergeEnrichment(items: RawItem[], extra: RawItem[]): RawItem[] {
   return [...extra.filter((i) => !urls.has(i.url) && !sameStory(titleKey(i.title))), ...items];
 }
 
+/** Nombre de résultats demandés à Perplexity (10 par défaut dans l'API, 20 au plus). */
+export const PERPLEXITY_MAX_RESULTS = 10;
+
+/**
+ * Requête Perplexity Search : le nom et les alias en expressions exactes, la presse française
+ * d'abord (`country`, langues), le site de l'entreprise exclu (il est couvert par ses propres
+ * sources), le dernier mois seulement.
+ */
+export function perplexityRequest(company: CompanyRecord): Record<string, unknown> {
+  return {
+    query: `${quotedNames(companyNames(company))} actualité`,
+    max_results: PERPLEXITY_MAX_RESULTS,
+    country: "FR",
+    search_language_filter: ["fr", "en"],
+    search_recency_filter: "month",
+    ...(company.domain ? { search_domain_filter: [`-${company.domain}`] } : {}),
+  };
+}
+
 /**
  * Recherche Perplexity (via la passerelle) : résultats web du dernier mois sur l'entreprise.
  * Ne lève jamais : un échec n'interrompt pas la collecte Google News, il est consigné.
@@ -340,11 +395,7 @@ export async function perplexitySearch(
         "X-Connection-Api-Key": pplxKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        query: `"${company.name}" Grenoble actualité entreprise`,
-        max_results: 5,
-        search_recency_filter: "month",
-      }),
+      body: JSON.stringify(perplexityRequest(company)),
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) {
@@ -372,21 +423,44 @@ export async function perplexitySearch(
 export class RealCollector implements Collector {
   readonly name = "collecteur-rss-google-v1";
 
+  /** Recherches Perplexity de l'exécution en cours, par source : une seule par exécution, essais compris. */
+  private readonly searches = new WeakMap<Date, Map<string, ReturnType<typeof perplexitySearch>>>();
+
   constructor(private readonly env: Record<string, string | undefined> = process.env) {}
+
+  /** Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas. */
+  private search(company: CompanyRecord, source: SourceRecord, now: Date) {
+    let bySource = this.searches.get(now);
+    if (!bySource) {
+      bySource = new Map();
+      this.searches.set(now, bySource);
+    }
+    let pending = bySource.get(source.id);
+    if (!pending) {
+      pending = perplexitySearch(company, this.env);
+      bySource.set(source.id, pending);
+    }
+    return pending;
+  }
 
   async collect(input: CollectInput): Promise<CollectResult> {
     const { source, company } = input;
     const useGoogle =
       source.type === "recherche_web" ||
       (source.type === "actualites" && !/rss|feed|atom|xml/i.test(source.url));
-    const url =
-      useGoogle && !source.url.includes("news.google.com")
-        ? googleNewsUrl(company?.name ?? source.label)
-        : source.url;
+    // Source presse d'une entreprise : la requête suit le nom courant et les alias, pas l'URL
+    // enregistrée à la création (renommage, alias ajoutés depuis).
+    const url = useGoogle
+      ? company
+        ? googleNewsUrl(companyNames(company))
+        : source.url.includes("news.google.com")
+          ? source.url
+          : googleNewsUrl(source.label)
+      : source.url;
     const fallback: Outlet = company
       ? { name: company.name, domain: company.domain, brand: company.brand }
       : { name: hostOf(url), domain: hostOf(url), brand: brandFor(hostOf(url)) };
-    const search = useGoogle && company ? perplexitySearch(company, this.env) : null;
+    const search = useGoogle && company ? this.search(company, source, input.now) : null;
 
     let items: RawItem[];
     let warning: CollectWarning | undefined;

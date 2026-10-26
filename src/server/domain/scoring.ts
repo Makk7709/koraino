@@ -1,5 +1,6 @@
 import type {
   Category,
+  ContentAssessment,
   Criterion,
   Observation,
   ScoreResult,
@@ -101,6 +102,8 @@ export interface AssessInput {
   priorSameCategory: boolean;
   /** Écart (jours) entre l'événement et sa détection ; null si la date est inconnue. */
   eventLagDays: number | null;
+  /** Lecture du contenu par le modèle : son importance remplace celle déduite de la catégorie. */
+  content?: ContentAssessment | null;
 }
 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
@@ -113,7 +116,12 @@ export function assess(input: AssessInput): Pick<ScoreResult, "subScores" | "rea
 
   let importance = CATEGORY_IMPORTANCE[category];
   const impParts = [`catégorie « ${category} »`];
-  if (maxAmount >= 50) {
+  if (input.content) {
+    // Le modèle a lu la publication : son jugement remplace la grille par catégorie et le montant.
+    importance = clamp(input.content.importance);
+    impParts.length = 0;
+    impParts.push(`lecture du contenu par le modèle : ${input.content.reason}`);
+  } else if (maxAmount >= 50) {
     importance += 12;
     impParts.push(`montant élevé (${maxAmount} M€)`);
   } else if (maxAmount >= 10) {
@@ -134,12 +142,22 @@ export function assess(input: AssessInput): Pick<ScoreResult, "subScores" | "rea
       ? "un sujet de même nature existe déjà sur les 90 derniers jours"
       : "premier sujet de cette nature sur 90 jours",
   ];
-  if (input.eventLagDays === null) {
+  const lag = input.eventLagDays;
+  if (lag === null) {
     nouveaute -= 8;
     nouvParts.push("date de l'événement inconnue");
-  } else if (input.eventLagDays > 30) {
+  } else if (lag > 30) {
     nouveaute -= 25;
-    nouvParts.push(`événement antérieur de ${input.eventLagDays} jours à sa détection`);
+    nouvParts.push(`événement antérieur de ${lag} jours à sa détection`);
+  } else if (lag > 14) {
+    nouveaute -= 20;
+    nouvParts.push(`événement antérieur de ${lag} jours à sa détection`);
+  } else if (lag > 7) {
+    nouveaute -= 12;
+    nouvParts.push(`événement antérieur de ${lag} jours à sa détection`);
+  } else if (lag > 2) {
+    nouveaute -= 5;
+    nouvParts.push(`événement antérieur de ${lag} jours à sa détection`);
   }
 
   let territoire = 30;

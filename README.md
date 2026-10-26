@@ -26,9 +26,12 @@ Les brouillons sont envoyés à WordPress par l'API REST du site ; cet envoi res
 La collecte est réelle et se lance à la main (« Lancer la collecte » sur la page Veille, ou la relance d'une source) : aucune collecte n'est planifiée.
 
 - Chaque entreprise reçoit à sa création une source presse « Google News — nom ». On peut lui ajouter des flux RSS/Atom et des pages d'actualités.
-- Les recherches presse sont enrichies par Perplexity, appelé par la passerelle de connexion de la plateforme d'hébergement. Seuls sont gardés les résultats datés, hors du site de l'entreprise, qui la citent. Si Google News échoue, les résultats Perplexity sont quand même enregistrés et la collecte signale l'échec.
-- Seules les publications datées de moins de 30 jours sont gardées. Chaque source apporte au plus 3 nouvelles publications par collecte.
+- Les recherches presse interrogent Google News et Perplexity sur le nom courant et les alias de l'entreprise (`"Bertin Alpao" OR "Alpao"`), Perplexity par la passerelle de connexion de la plateforme d'hébergement (10 résultats, France, français et anglais, site de l'entreprise exclu). Seuls sont gardés les résultats datés (date de publication ou de mise à jour), hors du site de l'entreprise, qui la citent. Si Google News échoue, les résultats Perplexity sont quand même enregistrés et la collecte signale l'échec.
+- Seules les publications datées de moins de 30 jours sont gardées. Chaque source apporte au plus 5 nouvelles publications par collecte.
+- La collecte globale se fait par lots de 8 sources (lectures réseau en parallèle, ingestion en série), enchaînés par l'interface avec l'avancement affiché ; les échecs définitifs (403, 404) ne sont pas réessayés et Perplexity n'est appelé qu'une fois par source et par collecte.
 - Une seule collecte à la fois : une seconde demande reçoit « Une collecte est déjà en cours ».
+- Les redirections Google News sont résolues en adresse d'article avant l'enregistrement (adaptateur `links`) ; si Google ne répond pas, la redirection est conservée.
+- Avec une clé `AI_API_KEY`, chaque publication nouvelle est lue par le modèle à la collecte (catégorie, importance de 0 à 100, motif), lecture comptée dans le budget et resservie à chaque recalcul du score ; sans clé ou sans réponse, la catégorie vient d'indices lexicaux pondérés et l'importance de la catégorie.
 - La provenance de chaque publication (flux, Google News, Perplexity) est visible dans la fiche du signal et dans l'export des observations.
 
 ## Stack
