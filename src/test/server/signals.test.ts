@@ -3,6 +3,7 @@ import type {
   ApiErrorBody,
   CollectionBatch,
   CollectionRun,
+  CreatedScoringGrid,
   Notification,
   Paginated,
   ScoringGrid,
@@ -84,7 +85,7 @@ describe("grilles de score", () => {
 
   it("une nouvelle grille ne réécrit pas l'historique des signaux décidés", async () => {
     const before = await allSignals();
-    const created = await call<ScoringGrid>("POST", "/scoring-grids", {
+    const created = await call<CreatedScoringGrid>("POST", "/scoring-grids", {
       body: {
         weights: { importance: 10, nouveaute: 10, territoire: 50, lecteurs: 20, diffusion: 10 },
         note: "Priorité territoire",
@@ -92,6 +93,7 @@ describe("grilles de score", () => {
     });
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ version: 2, active: true, createdBy: "Sophie Martin" });
+    expect(created.body.rescored).toBeGreaterThan(0);
     const grids = await call<ScoringGrid[]>("GET", "/scoring-grids");
     expect(grids.body.map((g) => [g.version, g.active])).toEqual([
       [2, true],
@@ -105,12 +107,16 @@ describe("grilles de score", () => {
       diffusion: 10,
     });
 
-    // Pas de recalcul implicite.
-    const unchanged = await allSignals();
-    expect(unchanged.map((s) => s.score)).toEqual(before.map((s) => s.score));
-
+    // La nouvelle grille s'applique aussitôt aux signaux en cours ; un recalcul explicite
+    // ensuite ne change plus rien.
+    const applied = new Map((await allSignals()).map((s) => [s.id, s]));
+    expect(
+      before
+        .filter((s) => s.status !== "traite" && s.status !== "rejete")
+        .every((s) => applied.get(s.id)!.score.gridVersion === 2),
+    ).toBe(true);
     const rescore = await call<{ rescored: number }>("POST", "/signals/rescore");
-    expect(rescore.body.rescored).toBeGreaterThan(0);
+    expect(rescore.body.rescored).toBe(0);
     const after = new Map((await allSignals()).map((s) => [s.id, s]));
     for (const s of before) {
       const now = after.get(s.id)!;

@@ -6,6 +6,7 @@ import type {
   ArticleVersionInput,
   AuditEvent,
   CollectionBatch,
+  CreatedScoringGrid,
   CollectionRun,
   Company,
   CompanyInput,
@@ -196,7 +197,7 @@ export const api = {
 
   scoringGrids: () => apiFetch<ScoringGrid[]>("/scoring-grids"),
   createScoringGrid: (input: ScoringGridInput) =>
-    apiFetch<ScoringGrid>("/scoring-grids", json("POST", input)),
+    apiFetch<CreatedScoringGrid>("/scoring-grids", json("POST", input)),
 
   /* Studio (WF2), import humain (WF3), approbations */
   articles: (q?: { status?: string; origin?: string }) =>

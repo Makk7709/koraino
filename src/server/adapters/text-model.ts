@@ -203,7 +203,8 @@ export class TemplateTextModel implements TextModel {
       "Ouverture — enjeux pour l'écosystème Inovallée",
     ];
 
-    const cleanChapo = chapo.replace(`${UNVERIFIED} `, "");
+    // Le marqueur « [À vérifier] » reste dans l'extrait : un fait non corroboré ne part jamais
+    // sans signalement, même dans un texte court (voir aussi linkedinVariants et summarize).
     return {
       factChecks,
       angles,
@@ -212,7 +213,7 @@ export class TemplateTextModel implements TextModel {
         title,
         chapo,
         body,
-        excerpt: truncate(cleanChapo, 200),
+        excerpt: truncate(chapo, 200),
         seoTitle: truncate(title, 60),
         categories: [CATEGORY_LABEL[signal.category]],
         tags: [...signal.tags],
@@ -226,22 +227,31 @@ export class TemplateTextModel implements TextModel {
       "#Grenoble",
       ...input.themes.slice(0, 2).map((t) => `#${THEME_TAGS[t].replace(/[^\p{L}\p{N}]/gu, "")}`),
     ];
-    const lead = input.lead.replace(`${UNVERIFIED} `, "");
+    // Accroche marquée « [À vérifier] » : le marqueur reste dans les variantes, le rédacteur
+    // doit le lever consciemment avant publication.
+    const lead = input.lead;
+    const marked = lead.startsWith(UNVERIFIED);
+    const first = marked
+      ? `${UNVERIFIED} ${firstSentence(lead.slice(UNVERIFIED.length).trim())}`
+      : firstSentence(lead);
     return [
       {
         text: `🚀 ${input.title}\n\n${lead}\n\n👉 À lire sur le site d'Inovallée.`,
         hashtags,
       },
       {
-        text: `${input.companyName ? `${input.companyName} — ` : ""}${firstSentence(lead)}\n\nUne actualité de l'écosystème Inovallée à suivre de près. 💡`,
+        text: `${input.companyName ? `${input.companyName} — ` : ""}${first}\n\nUne actualité de l'écosystème Inovallée à suivre de près. 💡`,
         hashtags: hashtags.slice(0, 3),
       },
     ];
   }
 
   summarize(input: { title: string; text: string }): string {
-    const text = input.text.replace(`${UNVERIFIED} `, "").trim() || input.title;
-    return truncate(firstSentence(text), 280);
+    const text = input.text.trim() || input.title;
+    const marked = text.startsWith(UNVERIFIED);
+    const body = marked ? text.slice(UNVERIFIED.length).trim() : text;
+    const sentence = firstSentence(body) || input.title;
+    return truncate(marked ? `${UNVERIFIED} ${sentence}` : sentence, 280);
   }
 
   editorialNotes(input: {

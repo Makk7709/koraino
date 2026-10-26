@@ -9,7 +9,13 @@ import type { GridRecord, SignalRecord } from "../store/records";
 import { collectAll, collectOne } from "../services/collection";
 import { audit } from "../services/journal";
 import { addItem, ensureCurrentEdition, removeItems, renumber } from "../services/newsletters";
-import { activeGrid, rebuildSignal, saveRebuilt, STATUS_LABEL } from "../services/signals";
+import {
+  activeGrid,
+  applyGridToSignals,
+  rebuildSignal,
+  saveRebuilt,
+  STATUS_LABEL,
+} from "../services/signals";
 import { currentEdition, loadSignalView, signalDetail, toSignal } from "../services/view";
 import { CATEGORIES, parse, schemas, SIGNAL_STATUSES, THEMES } from "../validation";
 
@@ -396,14 +402,7 @@ export const splitSignal: Handler = async (ctx) => {
 export const rescoreSignals: Handler = async (ctx) => {
   assertCan(ctx.user, "grid.write");
   const grid = await activeGrid(ctx.repo);
-  let rescored = 0;
-  for (const s of await ctx.repo.signals.list()) {
-    if (isDecided(s.status)) continue;
-    const score = applyGrid(s.score, grid);
-    if (score.total === s.score.total && score.gridVersion === s.score.gridVersion) continue;
-    await ctx.repo.signals.update({ ...s, score });
-    rescored += 1;
-  }
+  const rescored = await applyGridToSignals(ctx.repo, grid);
   await audit(
     ctx,
     "grid.rescore",
@@ -444,13 +443,16 @@ export const createGrid: Handler = async (ctx) => {
     note: input.note ?? null,
   };
   await ctx.repo.grids.insert(rec);
+  // La grille active s'applique aussitôt aux signaux non décidés ; les décisions historiques
+  // gardent leur score et leur version (voir `applyGridToSignals`).
+  const rescored = await applyGridToSignals(ctx.repo, rec);
   const w = rec.weights;
   await audit(
     ctx,
     "grid.create",
     "grid",
     rec.id,
-    `Grille v${version} : importance ${w.importance}, nouveauté ${w.nouveaute}, territoire ${w.territoire}, lecteurs ${w.lecteurs}, diffusion ${w.diffusion}`,
+    `Grille v${version} : importance ${w.importance}, nouveauté ${w.nouveaute}, territoire ${w.territoire}, lecteurs ${w.lecteurs}, diffusion ${w.diffusion} ; ${rescored} signal(aux) recalculé(s)`,
   );
-  return json(toGrid(rec), { status: 201 });
+  return json({ ...toGrid(rec), rescored }, { status: 201 });
 };

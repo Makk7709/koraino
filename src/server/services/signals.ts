@@ -2,7 +2,7 @@ import type { Signal } from "@/lib/api/types";
 import { adapters } from "../adapters";
 import { DAY, daysBetween, parseDate } from "../domain/dates";
 import { markSyndication } from "../domain/evidence";
-import { applyGrid, assess } from "../domain/scoring";
+import { applyGrid, assess, isDecided } from "../domain/scoring";
 import { wordCount } from "../domain/text";
 import type { CompanyRecord, GridRecord, ObservationRecord, SignalRecord } from "../store/records";
 import type { Repository } from "../store/repository";
@@ -101,6 +101,22 @@ export function rebuildSignal(input: RebuildInput): {
     updatedAt: now.toISOString(),
   };
   return { signal: next, observations: marked };
+}
+
+/**
+ * Applique une grille aux signaux non décidés (les décisions historiques gardent leur score et
+ * leur version de grille) ; renvoie le nombre de signaux dont le score a changé.
+ */
+export async function applyGridToSignals(repo: Repository, grid: GridRecord): Promise<number> {
+  let rescored = 0;
+  for (const s of await repo.signals.list()) {
+    if (isDecided(s.status)) continue;
+    const score = applyGrid(s.score, grid);
+    if (score.total === s.score.total && score.gridVersion === s.score.gridVersion) continue;
+    await repo.signals.update({ ...s, score });
+    rescored += 1;
+  }
+  return rescored;
 }
 
 /** Persiste un signal reconstruit et ses observations. */

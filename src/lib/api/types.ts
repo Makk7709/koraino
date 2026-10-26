@@ -803,6 +803,11 @@ export interface ScoringGridInput {
   note?: string | null;
 }
 
+/** Réponse de `POST /scoring-grids` : la grille créée et le nombre de signaux recalculés avec elle. */
+export interface CreatedScoringGrid extends ScoringGrid {
+  rescored: number;
+}
+
 export interface UserInput {
   name: string;
   email: string;

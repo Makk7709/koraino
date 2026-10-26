@@ -243,7 +243,7 @@ Le type de source détermine ce que la collecte lit réellement (voir ci-dessous
 
 **Relais quand Google News échoue.** Si Google News ne répond pas mais que Perplexity répond, la collecte est réussie avec les seuls résultats de Perplexity, et l'historique affiche un avertissement : le code de l'erreur de Google News, avec un motif qui commence par « Google News : ». Si Perplexity échoue aussi, la collecte est en échec comme d'habitude.
 
-**Adresse saisie.** Un flux RSS ou Atom est lu directement. Pour une page web, KORA cherche le flux que la page déclare et lit celui-ci ; il ne lit pas le contenu de la page elle-même. Une page qui ne déclare aucun flux ne rapporte aucune publication : la collecte est affichée « Succès · aucune actualité », et l'historique porte l'avertissement `NO_FEED` avec le motif « Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités. ». Remplacez alors la source par l'adresse de son flux.
+**Adresse saisie.** Un flux RSS ou Atom est lu directement. Pour une page web, KORA cherche le flux que la page déclare et lit celui-ci ; il ne lit pas le contenu de la page elle-même. Si la page ne déclare aucun flux, KORA essaie les adresses habituelles du site (`/feed/`, `/rss`, `/feed.xml`, `/rss.xml`). Si aucune ne répond, la source passe en échec `NO_FEED` dans l'encadré des sources en échec, avec le motif « Aucun flux RSS annoncé sur cette page, ni aux adresses habituelles … : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités. » ; elle n'est pas réessayée tant que son adresse n'est pas corrigée.. Remplacez alors la source par l'adresse de son flux.
 
 **Filtres.** Lorsqu'un flux n'appartient pas au domaine officiel de l'entreprise, par exemple celui d'un média, seules les publications qui citent la raison sociale ou un alias sont retenues. Seules les publications de moins de 30 jours sont retenues. Celles qui n'ont pas de date sont écartées, tout comme celles datées de plus d'un jour dans le futur, par exemple les annonces d'un agenda d'événements.
 
@@ -736,7 +736,7 @@ Si vous modifiez l'article après l'étape 7, l'approbation est invalidée : sou
 2. Réglez les poids. Le total doit afficher « Total conforme » (100 %). Comparez votre brouillon à la version active dans le « Profil de la grille ».
 3. Expliquez le changement dans « Motif du changement ».
 4. Cliquez sur « Enregistrer une nouvelle version ». La nouvelle grille devient active ; l'ancienne passe « Archivée ».
-5. Cliquez sur « Recalculer les scores » pour appliquer la grille aux signaux en cours. Les signaux « Traité » et « Rejeté » conservent le score et la version de grille sous lesquels ils ont été décidés.
+5. La nouvelle grille s'applique aussitôt aux signaux en cours : le message indique « Grille vN enregistrée et activée · k signaux recalculés ». Les signaux « Traité » et « Rejeté » conservent le score et la version de grille sous lesquels ils ont été décidés. « Recalculer les scores » reste disponible pour réappliquer la grille active si besoin.
 6. Contrôlez le résultat dans Signaux : la carte « Grille de score » indique la version utilisée pour chaque signal.
 
 « Rétablir » abandonne un brouillon de grille non enregistré.

@@ -488,8 +488,23 @@ describe("collecte réelle : flux des entreprises", () => {
     expect(result.ok && result.items.map((i) => i.url)).toEqual(["https://www.kalray.eu/a"]);
   });
 
-  it("signale une page qui n'annonce aucun flux", async () => {
-    stubPage("<html><head><title>Kalray</title></head><body>Bienvenue</body></html>");
+  it("essaie les adresses habituelles du flux quand la page n'en annonce aucun", async () => {
+    const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        asked.push(url);
+        if (url === "https://www.kalray.eu/feed/")
+          return new Response(
+            `<rss><channel><item><title>Kalray publie ses résultats</title><link>https://www.kalray.eu/a</link><pubDate>${date}</pubDate></item></channel></rss>`,
+          );
+        if (url === "https://www.kalray.eu/")
+          return new Response("<html><body>Bienvenue</body></html>");
+        return new Response("introuvable", { status: 404 });
+      }),
+    );
     const result = await new RealCollector({}).collect({
       source: ownSite,
       company,
@@ -497,7 +512,36 @@ describe("collecte réelle : flux des entreprises", () => {
       now: NOW,
       knownEvents: [],
     });
-    expect(result).toMatchObject({ ok: true, items: [], warning: { code: "NO_FEED" } });
-    expect(result.ok && result.enrichment).toBeUndefined();
+    expect(result.ok && result.items.map((i) => i.url)).toEqual(["https://www.kalray.eu/a"]);
+    expect(asked).toEqual(["https://www.kalray.eu/", "https://www.kalray.eu/feed/"]);
+  });
+
+  it("met en échec définitif une page sans flux, même aux adresses habituelles", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        asked.push(String(input));
+        return new Response(
+          "<html><head><title>Kalray</title></head><body>Bienvenue</body></html>",
+        );
+      }),
+    );
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+    expect(result).toMatchObject({ ok: false, code: "NO_FEED", transient: false });
+    expect(result.ok === false && result.reason).toContain("/feed/");
+    expect(asked).toEqual([
+      "https://www.kalray.eu/",
+      "https://www.kalray.eu/feed/",
+      "https://www.kalray.eu/rss",
+      "https://www.kalray.eu/feed.xml",
+      "https://www.kalray.eu/rss.xml",
+    ]);
   });
 });

@@ -27,7 +27,8 @@ export function ScoringGridTab({ readOnly }: { readOnly: boolean }) {
   const [note, setNote] = useState("");
 
   const save = useKoraMutation((input: ScoringGridInput) => api.createScoringGrid(input), {
-    success: (g) => `Grille v${g.version} enregistrée et activée`,
+    success: (g) =>
+      `Grille v${g.version} enregistrée et activée · ${plural(g.rescored, "signal recalculé", "signaux recalculés")}`,
     onSuccess: () => {
       setDraft(null);
       setNote("");
@@ -146,12 +147,13 @@ export function ScoringGridTab({ readOnly }: { readOnly: boolean }) {
               icon={History}
               title="Les décisions historiques ne sont pas réécrites"
             >
-              Un changement de grille crée une nouvelle version. Chaque score conserve la version de
-              grille sous laquelle il a été calculé, ses sous-notes et ses motifs.
+              Une nouvelle version s'applique aussitôt aux signaux en cours (nouveaux, à traiter, en
+              revue, surveillés). Les signaux traités ou rejetés conservent le score, la version de
+              grille, les sous-notes et les motifs de leur décision.
             </Notice>
             <div className="mt-3 flex items-center justify-between gap-3">
               <p className="text-[12px] text-kora-ink-soft">
-                Applique la grille active v{active.version} aux signaux.
+                Réapplique la grille active v{active.version} aux signaux en cours, si besoin.
               </p>
               <GhostButton
                 disabled={readOnly || rescore.isPending}

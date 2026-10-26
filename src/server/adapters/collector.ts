@@ -49,7 +49,10 @@ export type CollectResult =
 export const FRESHNESS_DAYS = 30;
 
 const NO_FEED_REASON =
-  "Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités.";
+  "Aucun flux RSS annoncé sur cette page, ni aux adresses habituelles (/feed/, /rss, /feed.xml, /rss.xml) : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités.";
+
+/** Adresses de flux essayées quand une page n'en annonce aucun (WordPress, Hugo, Jekyll, Ghost…). */
+export const FEED_PROBES = ["/feed/", "/rss", "/feed.xml", "/rss.xml"] as const;
 
 export interface CollectInput {
   source: SourceRecord;
@@ -232,6 +235,11 @@ function hostOf(url: string): string {
   } catch {
     return "";
   }
+}
+
+/** Un document est un flux s'il s'ouvre sur `<rss`, `<feed` ou `<rdf:RDF`. */
+export function isFeed(text: string): boolean {
+  return /<(rss|feed|rdf:RDF)[\s>]/i.test(text);
 }
 
 /** Analyse un flux RSS 2.0 ou Atom. */
@@ -466,9 +474,11 @@ export class RealCollector implements Collector {
     let warning: CollectWarning | undefined;
     try {
       const feed = await this.readFeed(url, fallback);
+      // Page sans flux, même aux adresses habituelles : échec définitif, visible sur la source
+      // (et non un succès silencieux), jusqu'à ce que son adresse soit corrigée.
+      if (!feed) return { ok: false, code: "NO_FEED", reason: NO_FEED_REASON, transient: false };
       const via: ObservationVia = useGoogle ? "google_news" : "flux";
-      items = (feed ?? []).map((i) => ({ ...i, via }));
-      if (!feed) warning = { code: "NO_FEED", reason: NO_FEED_REASON };
+      items = feed.map((i) => ({ ...i, via }));
     } catch (e) {
       const err = e as Error & { code?: string };
       const failure = {
@@ -520,13 +530,32 @@ export class RealCollector implements Collector {
   /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun. */
   private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
     let text = await this.fetchText(url);
-    if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
+    if (!isFeed(text)) {
       const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
       const href = alt?.match(/href="([^"]+)"/i)?.[1];
-      if (!href) return null;
-      text = await this.fetchText(new URL(href, url).toString());
+      if (href) {
+        text = await this.fetchText(new URL(href, url).toString());
+      } else {
+        const probed = await this.probeFeed(url);
+        if (!probed) return null;
+        text = probed;
+      }
     }
     return parseFeed(text, fallback);
+  }
+
+  /** Flux aux adresses habituelles du site, quand la page n'en annonce aucun ; null sinon. */
+  private async probeFeed(pageUrl: string): Promise<string | null> {
+    const origin = new URL(pageUrl).origin;
+    for (const path of FEED_PROBES) {
+      try {
+        const text = await this.fetchText(`${origin}${path}`);
+        if (isFeed(text)) return text;
+      } catch {
+        // Adresse absente ou injoignable : on essaie la suivante.
+      }
+    }
+    return null;
   }
 
   private async fetchText(url: string): Promise<string> {
