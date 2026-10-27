@@ -69,8 +69,10 @@ function ipv6Blocked(g: number[]): string | null {
   if ((g0 & 0xfe00) === 0xfc00) return "adresse locale unique (fc00::/7)";
   if ((g0 & 0xffc0) === 0xfe80) return "adresse lien-local (fe80::/10)";
   if ((g0 & 0xff00) === 0xff00) return "adresse multicast (ff00::/8)";
-  if (g.slice(0, 5).every((x) => x === 0) && g5 === 0x64 && g6 === 0xff9b)
+
+  if (g[0] === 0x0064 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0))
     return "préfixe NAT64 (64:ff9b::/96)";
+
   if (g0 === 0x2001 && g[1] === 0x0db8) return "documentation (2001:db8::/32)";
   if ((g0 & 0xffc0) === 0xfec0) return "local site (fec0::/10)";
   const mapped = g.slice(0, 5).every((x) => x === 0) && (g5 === 0xffff || g5 === 0);

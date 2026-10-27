@@ -142,6 +142,7 @@ describe("validation des URL de sources (SSRF)", () => {
     "http://169.254.169.254/latest/meta-data",
     "http://[::1]/",
     "http://[fd12:3456::1]/",
+    "http://[64:ff9b::1]/",
     "http://[::ffff:127.0.0.1]/",
     "http://intranet.local/",
     "http://metadata.internal/",
