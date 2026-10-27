@@ -252,4 +252,43 @@ describe("safeFetchText (SSRF collecteur)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("interrompt la lecture du corps si le délai expire", async () => {
+    const fetchMock = vi.fn((_input: string | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        return Promise.reject(new Error("Signal d'annulation absent"));
+      }
+
+      const body = new ReadableStream<Uint8Array>({
+        pull(_controller) {
+          // Premier read() bloque jusqu'à abort (latence corps).
+          return new Promise((_resolve, reject) => {
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          });
+        },
+      });
+
+      // En-têtes / Response OK immédiatement
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/xml" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      safeFetchText("https://example.com/feed", { timeoutMs: 50 }),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

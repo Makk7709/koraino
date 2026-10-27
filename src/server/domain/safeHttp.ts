@@ -55,7 +55,11 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-async function readBodyLimited(res: Response, maxBytes: number): Promise<string> {
+async function readBodyLimited(
+  res: Response,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<string> {
   const len = Number(res.headers.get("content-length") ?? "");
   if (Number.isFinite(len) && len > maxBytes) {
     await res.body?.cancel().catch(() => {});
@@ -69,6 +73,9 @@ async function readBodyLimited(res: Response, maxBytes: number): Promise<string>
   let text = "";
   try {
     for (;;) {
+      if (signal?.aborted) {
+        throw signal.reason ?? httpError("TIMEOUT", "Délai de réponse dépassé");
+      }
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
@@ -102,6 +109,7 @@ export async function safeFetchText(
   let redirectsFollowed = 0;
 
   for (;;) {
+    const signal = AbortSignal.timeout(timeoutMs);
     const check = validateSourceUrl(current);
     if (!check.ok) {
       throw httpError("URL_REFUSED", check.reason);
@@ -116,7 +124,7 @@ export async function safeFetchText(
         method: "GET",
         redirect: "manual",
         headers,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch (e) {
       const err = e as Error;
@@ -147,7 +155,15 @@ export async function safeFetchText(
       await res.body?.cancel().catch(() => {});
       throw httpError(`HTTP_${res.status}`, `Réponse HTTP ${res.status}`);
     }
-
-    return await readBodyLimited(res, maxBytes);
+    try {
+      return await readBodyLimited(res, maxBytes, signal);
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      if (err.code === "BODY_TOO_LARGE") throw e;
+      if (err.name === "TimeoutError" || err.name === "AbortError") {
+        throw httpError("TIMEOUT", "Délai de réponse dépassé");
+      }
+      throw e;
+    }
   }
 }
