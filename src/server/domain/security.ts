@@ -9,13 +9,13 @@ export type UrlCheck = { ok: true; url: URL } | { ok: false; reason: string };
 const BLOCKED_SUFFIXES = [".local", ".internal", ".localhost", ".localdomain", ".home.arpa"];
 
 function ipv4Blocked(parts: number[]): string | null {
-  const [a = 0, b = 0, c=0] = parts;
+  const [a = 0, b = 0, c = 0] = parts;
   if (a === 0) return "adresse non routable (0.0.0.0/8)";
   if (a === 10) return "réseau privé (10.0.0.0/8)";
   if (a === 127) return "adresse de bouclage (127.0.0.0/8)";
   if (a === 169 && b === 254) return "adresse lien-local (169.254.0.0/16)";
   if (a === 172 && b >= 16 && b <= 31) return "réseau privé (172.16.0.0/12)";
-  if (a === 192 && b ===0 && c === 0) return "assignations IETF (192.0.0.0/24)";
+  if (a === 192 && b === 0 && c === 0) return "assignations IETF (192.0.0.0/24)";
   if (a === 192 && b === 0 && c === 2) return "assignations réseau de documentation (192.0.2.0/24)";
   if (a === 192 && b === 168) return "réseau privé (192.168.0.0/16)";
   if (a === 198 && (b === 18 || b === 19)) return "benchmark (198.18.0.0/15)";

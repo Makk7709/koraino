@@ -558,7 +558,6 @@ describe("collecte réelle : flux des entreprises", () => {
     ]);
   });
 
-
   it("refuse un flux RSS découvert dans le HTML qui pointe vers une adresse interne", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -599,10 +598,7 @@ describe("collecte réelle : flux des entreprises", () => {
     // ne doit être effectuée.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]![0])).toBe(ownSite.url);
-    expect(fetchMock.mock.calls.some(([input]) =>
-      String(input).includes("127.0.0.1"),
-    )).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("127.0.0.1"))).toBe(false);
     expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
   });
-
 });

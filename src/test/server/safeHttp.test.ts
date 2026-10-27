@@ -36,7 +36,9 @@ describe("safeFetchText (SSRF collecteur)", () => {
     const xml = '<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>';
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(xml, { status: 200, headers: { "content-type": "text/xml" } })),
+      vi.fn(
+        async () => new Response(xml, { status: 200, headers: { "content-type": "text/xml" } }),
+      ),
     );
 
     const text = await safeFetchText("https://news.google.com/rss/search?q=test");
@@ -51,36 +53,50 @@ describe("safeFetchText (SSRF collecteur)", () => {
     ["IPv6 privée", "http://[fd12:3456::1]/"],
     ["IPv4 loopback encodée en IPv6", "http://[::ffff:127.0.0.1]/"],
   ])("refuse une redirection vers une cible interne (%s)", async (_label, target) => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        status: 302,
-        headers: { Location: target },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: target },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      safeFetchText("https://example.com/feed"),
-    ).rejects.toMatchObject({ code: "URL_REFUSED" });
+    await expect(safeFetchText("https://example.com/feed")).rejects.toMatchObject({
+      code: "URL_REFUSED",
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   // B — Une redirection vers un autre domaine public est refusée
   it("refuse une redirection vers un autre domaine public", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        status: 302,
-        headers: { Location: "https://evil.example.org/feed" },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "https://evil.example.org/feed" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      safeFetchText("https://example.com/feed"),
-    ).rejects.toMatchObject({ code: "HOST_MISMATCH" });
+    await expect(safeFetchText("https://example.com/feed")).rejects.toMatchObject({
+      code: "HOST_MISMATCH",
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("refuse la première URL si l'hôte ne correspond pas à allowedHost", async () => {
+    const fetchMock = vi.fn(async () => new Response("secret", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      safeFetchText("https://evil.example.org/feed", {
+        allowedHost: "example.com",
+      }),
+    ).rejects.toMatchObject({ code: "HOST_MISMATCH" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // C1 — Une redirection relative vers le même site fonctionne
@@ -108,9 +124,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      safeFetchText("https://example.com/feed"),
-    ).resolves.toContain("<rss");
+    await expect(safeFetchText("https://example.com/feed")).resolves.toContain("<rss");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -137,9 +151,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      safeFetchText("https://example.com/feed"),
-    ).resolves.toContain("<rss");
+    await expect(safeFetchText("https://example.com/feed")).resolves.toContain("<rss");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -149,20 +161,21 @@ describe("safeFetchText (SSRF collecteur)", () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 302 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      safeFetchText("https://example.com/feed"),
-    ).rejects.toMatchObject({ code: "REDIRECT_NO_LOCATION" });
+    await expect(safeFetchText("https://example.com/feed")).rejects.toMatchObject({
+      code: "REDIRECT_NO_LOCATION",
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   // E — Le nombre maximal de redirections est respecté
   it("refuse les redirections au-delà de la limite configurée", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        status: 302,
-        headers: { Location: "/loop" },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "/loop" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -195,11 +208,12 @@ describe("safeFetchText (SSRF collecteur)", () => {
 
   // F2 — Content-Length permet de refuser un corps avant sa lecture
   it("refuse un Content-Length supérieur à maxBytes", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        status: 200,
-        headers: { "content-length": "101" },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 200,
+          headers: { "content-length": "101" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -227,11 +241,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
             return;
           }
 
-          signal.addEventListener(
-            "abort",
-            () => reject(signal.reason),
-            { once: true },
-          );
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -242,5 +252,4 @@ describe("safeFetchText (SSRF collecteur)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-
 });

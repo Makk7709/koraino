@@ -561,7 +561,6 @@ export class RealCollector implements Collector {
 
   /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun. */
   private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
-
     let text = await this.fetchText(url);
     if (!isFeed(text)) {
       const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];

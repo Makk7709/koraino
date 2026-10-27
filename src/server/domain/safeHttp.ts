@@ -19,10 +19,7 @@ export type SafeFetchTextOptions = {
 };
 
 // Sert à comparer qu'une URL est bien celle du site qu'on souhaite atteindre
-function assertAllowedHost(
-  urlString: string,
-  allowedHost: string,
-): boolean {
+function assertAllowedHost(urlString: string, allowedHost: string): boolean {
   const host = normalizeHostname(urlString);
   const allowed = normalizeHostname(allowedHost);
 
@@ -42,11 +39,11 @@ function normalizeHostname(value: string): string {
   }
 
   // Normalise la casse et le point DNS final.
-  return hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  return hostname
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .replace(/^www\./, "");
 }
-
-
-
 
 function httpError(code: string, message: string): Error & { code: string } {
   const e = new Error(message) as Error & { code: string };
@@ -101,7 +98,6 @@ export async function safeFetchText(
   const headers = options.headers ?? {};
   const allowedHost = options.allowedHost ?? rawUrl;
 
-
   let current = rawUrl;
   let redirectsFollowed = 0;
 
@@ -111,9 +107,11 @@ export async function safeFetchText(
       throw httpError("URL_REFUSED", check.reason);
     }
 
-
     let res: Response;
     try {
+      if (!assertAllowedHost(current, allowedHost)) {
+        throw httpError("HOST_MISMATCH", "Hôte différent de la source");
+      }
       res = await fetch(check.url, {
         method: "GET",
         redirect: "manual",
@@ -140,11 +138,8 @@ export async function safeFetchText(
       current = new URL(location, check.url).toString();
       const next = validateSourceUrl(current);
       if (!next.ok) throw httpError("URL_REFUSED", next.reason);
-      if (!assertAllowedHost(current, allowedHost)) {
-        throw httpError("HOST_MISMATCH", "Hôte différent de la source");
-      }
 
-      redirectsFollowed += 1;     
+      redirectsFollowed += 1;
       continue;
     }
 
