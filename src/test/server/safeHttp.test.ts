@@ -86,6 +86,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
   it("refuse la première URL si l'hôte ne correspond pas à allowedHost", async () => {
     const fetchMock = vi.fn(async () => new Response("secret", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -224,7 +225,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  // G — Timeout de la requête
+  // G — Timeout de la requête : l'en-tête ne répond pas, la requête doit s'interrompre
   it("interrompt une requête qui dépasse le délai", async () => {
     const fetchMock = vi.fn(
       (_input: string | URL, init?: RequestInit) =>
@@ -253,6 +254,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // G — Timeout de la requête : l'en-tête répond immédiatement mais la lecture du corps dépasse le délai
   it("interrompt la lecture du corps si le délai expire", async () => {
     const fetchMock = vi.fn((_input: string | URL, init?: RequestInit) => {
       const signal = init?.signal;
@@ -281,7 +283,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
           status: 200,
           headers: { "content-type": "text/xml" },
         }),
-      );
+      ); 
     });
     vi.stubGlobal("fetch", fetchMock);
 

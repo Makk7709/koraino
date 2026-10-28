@@ -601,4 +601,96 @@ describe("collecte réelle : flux des entreprises", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("127.0.0.1"))).toBe(false);
     expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
   });
+
+  it("intégration : HTML → feed.xml → item daté (2 fetch)", async () => {
+    const siteUrl = "https://www.kalray.eu/";
+    const feedUrl = "https://www.kalray.eu/feed.xml";
+    const date = (d: number) => new Date(NOW.getTime() - d * DAY).toUTCString();
+  
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === siteUrl) {
+        return new Response(
+          `<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/feed.xml" />
+          </head><body></body></html>`,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === feedUrl) {
+        return new Response(
+          `<?xml version="1.0"?><rss><channel>
+            <item>
+              <title>Kalray publie</title>
+              <link>https://www.kalray.eu/a</link>
+              <pubDate>${date(2)}</pubDate>
+            </item>
+          </channel></rss>`,
+          { status: 200, headers: { "content-type": "application/rss+xml" } },
+        );
+      }
+      throw new Error(`URL inattendue : ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+  
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.ok && result.items[0]?.url).toBe("https://www.kalray.eu/a");
+  });
+
+  it("intégration : 2 fetch OK puis refus avant 3ème vers interne (redirect)", async () => {
+    const siteUrl = "https://www.kalray.eu/";
+    const feedUrl = "https://www.kalray.eu/feed.xml";
+    const feedFinal = "https://www.kalray.eu/feed-final";
+  
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+  
+      if (url === siteUrl) {
+        return new Response(
+          `<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/feed.xml" />
+          </head></html>`,
+          { status: 200 },
+        );
+      }
+      if (url === feedUrl) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/feed-final" },
+        });
+      }
+      if (url === feedFinal) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "http://127.0.0.1/secret" },
+        });
+      }
+      throw new Error(`Requête interdite ou inattendue : ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+  
+    // HTML + feed.xml + feed-final ; jamais 127.0.0.1
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([siteUrl, feedUrl, feedFinal]);
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1")),
+    ).toBe(false);
+    expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
+  });
 });
