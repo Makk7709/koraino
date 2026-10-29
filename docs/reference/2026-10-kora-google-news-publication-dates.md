@@ -3,10 +3,10 @@
 - **Projet :** KORA Newsroom / veille Inovallée
 - **Branche de travail :** `fix/kora-publication-dates`
 - **Date de rédaction :** 29 octobre 2026
-- **Statut :** PR Draft #2 ouverte ; première CI réussie (638 tests). Correctif RSS testé localement (639 tests), en attente de push et de nouvelle CI.
+- **Statut :** PR Draft #2 ouverte ; correctif RSS poussé (`d618a10`) ; CI GitHub réussie avec 639/639 tests. Recette applicative isolée restante.
 **Périmètre :** collecte Google News, confirmation des dates de publication, protections réseau et tests de régression
 
-> **Note de validation du 29 octobre 2026.** L'utilisatrice a **relancé elle-même les tests dans son terminal Mac** sur `fix/kora-publication-dates` : **46 fichiers et 638 tests réussis (code de sortie 0)**. Elle a aussi exécuté `bunx tsc --noEmit -p .` (aucune erreur affichée), `bun run lint` (**0 erreur, 6 avertissements préexistants dans `src/components/ui/`**) et `bun run build` (build client, SSR et Nitro réussi). Les réponses HTTP des tests restent majoritairement **simulées** : cela n'équivaut pas à une recette Google News réelle. GitHub Actions n'a pas encore été exécuté sur une PR, et la dernière version du code d'annulation du corps HTTP n'a pas été relue indépendamment après son dernier ajustement.
+> **Note de validation du 29 octobre 2026.** L'utilisatrice a **relancé elle-même les tests dans son terminal Mac** sur `fix/kora-publication-dates` : **46 fichiers et 638 tests réussis (code de sortie 0)**. Elle a aussi exécuté `bunx tsc --noEmit -p .` (aucune erreur affichée), `bun run lint` (**0 erreur, 6 avertissements préexistants dans `src/components/ui/`**) et `bun run build` (build client, SSR et Nitro réussi). Les réponses HTTP des tests restent majoritairement **simulées** : cela n'équivaut pas à une recette Google News réelle. GitHub Actions a ensuite été exécuté avec succès sur la PR Draft, et la dernière version du code d'annulation du corps HTTP n'a pas été relue indépendamment après son dernier ajustement.
 
 ## 1. Résumé exécutif
 
@@ -192,14 +192,14 @@ Les tests ci-dessous vérifient les **décisions de KORA sur les observations** 
 | **Erreurs et résilience** | Couvert sur scénarios ciblés | HTTP 403/500, timeouts, redirections, dépassement de taille, annulation, essais suivants |
 | **Régression globale** | **Réussite reproduite indépendamment** | 638/638 tests dans 46 fichiers, exécutés sur Mac le 29/10/2026 ; code de sortie 0 ; tests HTTP simulés |
 | **Qualité statique et compilation** | **Réussite reproduite indépendamment** | `tsc --noEmit` sans erreur, ESLint 0 erreur/6 avertissements préexistants, build Vite + SSR + Nitro réussi ; `git diff --check` annoncé auparavant par Cursor |
-| **CI GitHub sur PR Draft** | **À faire** | Workflow configuré, mais aucune exécution de cette PR constatée |
+| **CI GitHub sur PR Draft** | 39 tests, TypeScript, ESLint et build réussis sur `d618a10` |
 | **E2E réel / recette métier** | **À faire avant mise en production** | Nouvelle version de la branche à tester en environnement isolé avec vraies pages Google News/éditeurs ; ne pas modifier la base locale de 30 entreprises |
 | **Performance et stabilité réelles** | **À mesurer** | Temps/volume de requêtes d’une collecte réelle et taux de rejets par cause ; budgets simulés ≠ mesure réseau réelle |
 | **Sécurité réseau de bout en bout** | **Partielle** | URL internes et redirections simulées couvertes ; DNS/rebinding et comportement exact de Cloudflare non démontrés |
 
-**Les 638 tests ne signifient pas « 638 tests de ce correctif ».** Il s’agit de la suite globale KORA, dont les nouveaux tests de dates et de réseau. Les tests de bout en bout réels ne sont pas remplacés par cette réussite.
+**Les 639 tests ne sont pas tous spécifiques à ce correctif.** Ils correspondent à la suite globale KORA. Une recette applicative réelle de bout en bout reste nécessaire.
 
-**Détail des tests ciblés, vérifié dans la sortie terminal du 29 octobre 2026 :** `src/test/server/dates-publication.test.ts` : **26 tests réussis** ; `src/test/server/liens-google-news.test.ts` : **13 tests réussis**. Ces 39 tests font partie des 638 tests globaux et ne s’y ajoutent pas. Le reste de la suite couvre les autres fonctions de KORA et les non-régressions.
+**Détail des tests ciblés, vérifié dans la sortie terminal du 29 octobre 2026 :** `src/test/server/dates-publication.test.ts` : **26 tests réussis** ; `src/test/server/liens-google-news.test.ts` : **13 tests réussis**. Après ajout du test de régression Google News, 40 tests ciblés (26 tests de dates et 14 tests de liens) font partie des 639 tests globaux. Le reste de la suite couvre les autres fonctions de KORA et les non-régressions.
 
 ### 7.3 Critères métier de recette à vérifier avant usage opérationnel
 
@@ -219,7 +219,7 @@ Les tests ci-dessous vérifient les **décisions de KORA sur les observations** 
 - `bun run lint` : aucune erreur et six avertissements `react-refresh/only-export-components` dans les composants UI ;
 - `bun run build` avec les principales variables de connexion neutralisées : builds client, SSR et Nitro terminés avec succès. Les recommandations de Vite et Nitro ne sont pas des échecs de compilation.
 
-**Preuves non obtenues à ce stade :** aucune exécution de CI sur la future PR Draft ; aucun test HTTP réel du correctif avec Google News et les éditeurs ; aucune mesure représentative du taux de faux négatifs, du nombre de candidats exclus par cause, ou du temps des collectes dans le runtime de production.
+**Preuves obtenues :** CI GitHub réussie sur `d618a10` (639/639 tests) et quatre résolutions de liens Google News réels, dont deux dates confirmées. **Restent à vérifier :** collecte applicative complète en environnement isolé et mesures représentatives des faux négatifs et des performances.
 
 **Recette HTTP isolée à réaliser avant toute décision de fusion/déploiement :** utiliser le code de cette branche, des sources publiques réelles et un stockage de test indépendant (ou une exécution sans persistance) ; vérifier un article récent, une archive réindexée et une source inaccessible ; relever URL, date du flux, date originale, motif de rejet ou d’acceptation, durée et nombre de requêtes. Ne pas utiliser la base locale de 30 entreprises, les secrets de production ou les API payantes. Déclarer « non démontré » tout scénario impossible à observer réellement.
 
@@ -295,8 +295,8 @@ Ne pas oublier que `git diff --stat` **n'affiche pas les fichiers non suivis** (
 - [ ] Les fichiers préexistants de formatage/CI sont séparés ou justifiés dans le commit.
 - [x] `bun run test` (638/638), `bunx tsc --noEmit -p .`, `bun run lint` (0 erreur, 6 avertissements), `bun run build` réussissent sur la branche locale au 29/10/2026 ; à relancer si des fichiers changent.
 - [ ] `git diff --check` réussit.
-- [ ] Le document présent figure dans la branche, au même titre que le correctif.
-- [ ] La CI GitHub réussit sur la PR Draft avant toute décision de merge.
+- [x] Le document figure dans la branche avec le correctif.
+- [x] La CI GitHub a réussi sur `d618a10`. La recette applicative isolée reste nécessaire avant toute fusion.
 
 **Protection opérationnelle :** ne modifier ni `main`, ni Lovable, ni le répertoire local `~/Projects/koraino` et sa base Supabase des trente entreprises lors de ces opérations.
 
@@ -317,7 +317,7 @@ Un test automatisé de régression HTTP 429 a été ajouté.
 
 ### Résultats des tests HTTP réels
 
-| Source | Lien récision |
+| Source | Lien éditeur résolu | Date originale | Décision |
 |---|---|---|---|
 | Boursier.com / Kalray Openchip | Oui | HTTP 403, non confirmée | Rejet |
 | Les Échos Investir / Kalray | Oui | Non confirmée | Rejet |
@@ -366,7 +366,7 @@ Les éditeurs inaccessibles peuvent donc provoquer des faux négatifs.
 - ESLint : 0 erreur, 6 avertissements préexistants.
 - Build Vite / SSR / Nitro : réussi.
 - Première CI GitHub : 638 tests réussis.
-- Nouvelle CI à vérifier après push du correctif complémentaire.
+- Nouvelle CI GitHub réussie : **639/639 tests dans 46 fichiers**, TypeScript, ESLint et build validés.
 
 ### Limites restantes
 
