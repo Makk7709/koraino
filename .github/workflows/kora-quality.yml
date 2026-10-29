@@ -1,0 +1,60 @@
+name: KORA - Verification PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kora-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: TypeScript, ESLint, Vitest et build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      KORA_PUBLIC_URL: ""
+      SUPABASE_URL: ""
+      SUPABASE_SERVICE_ROLE_KEY: ""
+      SUPABASE_PUBLISHABLE_KEY: ""
+      VITE_SUPABASE_URL: ""
+      VITE_SUPABASE_PUBLISHABLE_KEY: ""
+      LOVABLE_API_KEY: ""
+      PERPLEXITY_API_KEY: ""
+      AI_API_KEY: ""
+      APP_USER_CONNECTION_KEY_SECRET: ""
+      WORDPRESS_APP_PASSWORD: ""
+      LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY: ""
+    steps:
+      - name: Recuperer le code de la PR
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Installer Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.19"
+
+      - name: Installer les dependances verrouillees
+        run: bun install --frozen-lockfile
+
+      - name: Verifier TypeScript
+        run: bunx tsc --noEmit -p .
+
+      - name: Verifier ESLint sur tout le projet
+        run: bun run lint
+
+      - name: Executer tous les tests Vitest
+        run: bun run test
+
+      - name: Verifier la compilation
+        run: bun run build

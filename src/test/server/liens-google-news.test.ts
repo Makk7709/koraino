@@ -105,11 +105,254 @@ describe("liens Google News : décodage", () => {
     );
     expect(await odd.resolve(RSS_LINK(NEW_ID))).toBeNull();
   });
+
+  it("annule le premier fetch, n'appelle pas le décodage, et laisse une tentative suivante aboutir", async () => {
+    const calls: { url: string; signal: AbortSignal | undefined }[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, signal: init?.signal ?? undefined });
+      if (url.startsWith("https://news.google.com/articles/")) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            reject(new DOMException("The operation was aborted", "AbortError"));
+            return;
+          }
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted", "AbortError"));
+          });
+        });
+      }
+      return new Response(DECODE_RESPONSE);
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const ctrl = new AbortController();
+    const pending = resolver.resolve(RSS_LINK(NEW_ID), ctrl.signal);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url.startsWith("https://news.google.com/articles/")).toBe(true);
+    expect(calls[0]!.signal?.aborted).toBe(false);
+    ctrl.abort();
+    await expect(pending).resolves.toBeNull();
+    expect(calls[0]!.signal?.aborted).toBe(true);
+    expect(calls).toHaveLength(1);
+
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push({ url, signal: undefined });
+      if (url.startsWith("https://news.google.com/articles/")) return new Response(PAGE_HTML);
+      return new Response(DECODE_RESPONSE);
+    });
+    expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
+    expect(calls.filter((call) => call.url.endsWith("/batchexecute"))).toHaveLength(1);
+    expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
+    expect(calls.filter((call) => call.url.endsWith("/batchexecute"))).toHaveLength(1);
+  });
+
+  it("n'annule pas une autre tentative sur la même adresse, et garde le cache d'un appel sans signal", async () => {
+    const pages: { signal: AbortSignal; finish: () => void }[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/batchexecute")) return new Response(DECODE_RESPONSE);
+      return new Promise<Response>((resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          resolve(new Response(PAGE_HTML));
+          return;
+        }
+        signal.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+        pages.push({ signal, finish: () => resolve(new Response(PAGE_HTML)) });
+      });
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const left = new AbortController();
+    const right = new AbortController();
+    const leftResult = resolver.resolve(RSS_LINK(NEW_ID), left.signal);
+    const rightResult = resolver.resolve(RSS_LINK(NEW_ID), right.signal);
+    expect(pages).toHaveLength(2);
+    left.abort();
+    expect(pages[0]!.signal.aborted).toBe(true);
+    expect(pages[1]!.signal.aborted).toBe(false);
+    pages[1]!.finish();
+    expect(await leftResult).toBeNull();
+    expect(await rightResult).toBe(ARTICLE);
+    expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/batchexecute")),
+    ).toHaveLength(1);
+
+    const cached = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const warm = cached.resolve(RSS_LINK(legacyId(ARTICLE)));
+    expect(await warm).toBe(ARTICLE);
+    const again = new AbortController();
+    again.abort();
+    expect(await cached.resolve(RSS_LINK(legacyId(ARTICLE)), again.signal)).toBe(ARTICLE);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining(legacyId(ARTICLE)),
+      expect.anything(),
+    );
+  });
+
+  it("coupe seul une requête au bout de 8 secondes", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    try {
+      const pending = resolver.resolve(RSS_LINK(NEW_ID));
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      await expect(pending).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("garde l'annulation active pendant le corps de la page et n'appelle pas le décodage", async () => {
+    let pageSignal: AbortSignal | undefined;
+    let cancelled = false;
+    let release: () => void = () => {};
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/batchexecute")) return new Response(DECODE_RESPONSE);
+      pageSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream({
+          pull() {
+            release();
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const caller = new AbortController();
+    const pending = resolver.resolve(RSS_LINK(NEW_ID), caller.signal);
+    await reading;
+    expect(pageSignal?.aborted).toBe(false);
+    expect(cancelled).toBe(false);
+    caller.abort();
+    expect(pageSignal?.aborted).toBe(true);
+    expect(cancelled).toBe(true);
+    await expect(pending).resolves.toBeNull();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/batchexecute"))).toBe(
+      false,
+    );
+  });
+
+  it("annule la lecture du corps batchexecute sans la mettre en cache, puis réessaie", async () => {
+    let mode: "hang" | "ok" = "hang";
+    let decodeSignal: AbortSignal | undefined;
+    let cancelled = false;
+    let release: () => void = () => {};
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let decodeCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://news.google.com/articles/")) return new Response(PAGE_HTML);
+      decodeCalls += 1;
+      decodeSignal = init?.signal ?? undefined;
+      if (mode === "hang") {
+        return new Response(
+          new ReadableStream({
+            pull() {
+              release();
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+        );
+      }
+      return new Response(DECODE_RESPONSE);
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const caller = new AbortController();
+    const pending = resolver.resolve(RSS_LINK(NEW_ID), caller.signal);
+    await reading;
+    expect(decodeSignal?.aborted).toBe(false);
+    caller.abort();
+    expect(decodeSignal?.aborted).toBe(true);
+    expect(cancelled).toBe(true);
+    await expect(pending).resolves.toBeNull();
+    mode = "ok";
+    expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
+    expect(decodeCalls).toBe(2);
+    expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
+    expect(decodeCalls).toBe(2);
+  });
+
+  it("le délai de 8 secondes couvre la lecture du corps, pas seulement les en-têtes", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let signal: AbortSignal | undefined;
+    let cancelled = false;
+    let release: () => void = () => {};
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/batchexecute")) return new Response(DECODE_RESPONSE);
+      signal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream({
+          pull() {
+            release();
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    });
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    try {
+      const pending = resolver.resolve(RSS_LINK(NEW_ID));
+      await reading;
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(signal?.aborted).toBe(false);
+      expect(cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      expect(cancelled).toBe(true);
+      await expect(pending).resolves.toBeNull();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/batchexecute"))).toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("liens Google News : collecte", () => {
   beforeEach(() => setup());
-  afterEach(teardown);
+  afterEach(() => {
+    teardown();
+    vi.unstubAllGlobals();
+  });
 
   const outlet = {
     name: "Les Echos",
@@ -141,12 +384,27 @@ describe("liens Google News : collecte", () => {
     return urls;
   }
 
-  it("enregistre l'adresse de l'article quand la redirection se résout, la redirection sinon", async () => {
+  it("enregistre l'adresse quand la page confirme la date, et écarte une redirection non résolue", async () => {
+    const publishedAt = new Date(NOW.getTime() - 86_400_000).toISOString();
     const resolved = new Map([
       [RSS_LINK("ok1"), "https://www.lesechos.fr/pasqal-ouvre-un-centre"],
       [RSS_LINK("ok2"), "https://www.latribune.fr/pasqal-quantique-grenoble"],
     ]);
+    const pages = new Set(resolved.values());
     const asked: string[] = [];
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      fetched.push(url);
+      if (!pages.has(url)) return new Response("introuvable", { status: 404 });
+      return new Response(
+        `<script type="application/ld+json">${JSON.stringify({
+          "@type": "NewsArticle",
+          datePublished: publishedAt,
+        })}</script>`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    });
     setAdapters({
       links: {
         name: "stub",
@@ -170,12 +428,16 @@ describe("liens Google News : collecte", () => {
     });
     const src = await pasqalSource();
     const run = await call<CollectionRun>("POST", `/sources/${src.id}/collect`);
-    expect(run.body).toMatchObject({ status: "succes", newObservations: 4 });
+    expect(run.body).toMatchObject({ status: "succes", newObservations: 3 });
     expect(asked).toEqual([RSS_LINK("ok1"), RSS_LINK("ko"), RSS_LINK("ok2")]);
+    expect(fetched).toEqual([
+      "https://www.lesechos.fr/pasqal-ouvre-un-centre",
+      "https://www.latribune.fr/pasqal-quantique-grenoble",
+    ]);
     const urls = await observationUrls("Pasqal");
     expect(urls).toContain("https://www.lesechos.fr/pasqal-ouvre-un-centre");
     expect(urls).toContain("https://www.latribune.fr/pasqal-quantique-grenoble");
-    expect(urls).toContain(RSS_LINK("ko"));
+    expect(urls).not.toContain(RSS_LINK("ko"));
     expect(urls).toContain(RSS_LINK("pplx"));
     const signal = (await call<Paginated<Signal>>("GET", "/signals?q=centre quantique&status=tous"))
       .body.items[0]!;

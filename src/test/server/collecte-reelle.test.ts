@@ -385,6 +385,18 @@ describe("collecte : traçabilité et tri", () => {
   });
 
   it("trie « récent » par date de publication, pas par date de collecte", async () => {
+    const publishedAt = new Date(NOW.getTime() - 25 * DAY).toISOString();
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          `<script type="application/ld+json">${JSON.stringify({
+            "@type": "NewsArticle",
+            datePublished: publishedAt,
+          })}</script>`,
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        ),
+    );
     stubCollector({
       ok: true,
       items: [
@@ -393,13 +405,17 @@ describe("collecte : traçabilité et tri", () => {
           title: "Pasqal décroche un contrat avec un industriel allemand",
           html: "<p>Pasqal décroche un contrat avec un industriel allemand pour ses processeurs.</p>",
           outlet: outlet("Les Echos", "lesechos.fr"),
-          publishedAt: new Date(NOW.getTime() - 25 * DAY).toISOString(),
+          publishedAt,
           eventDate: null,
           via: "google_news",
         },
       ],
     });
-    await call("POST", `/sources/${(await pasqalSource()).id}/collect`);
+    try {
+      await call("POST", `/sources/${(await pasqalSource()).id}/collect`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
 
     const recent = await call<Paginated<Signal>>(
       "GET",

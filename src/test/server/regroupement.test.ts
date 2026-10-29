@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionRun, Paginated, Signal, SignalDetail, Source } from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
 import { looksLikeIndexPage, type RawItem } from "@/server/adapters/collector";
@@ -131,7 +131,10 @@ describe("pages de rubrique et de pagination", () => {
 
 describe("regroupement : collecte", () => {
   beforeEach(() => setup());
-  afterEach(teardown);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    teardown();
+  });
 
   const outlet = (name: string, domain: string) => ({
     name,
@@ -169,6 +172,18 @@ describe("regroupement : collecte", () => {
         via: "google_news",
       },
     ];
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const match = items.find((entry) => entry.url === url);
+      if (!match?.publishedAt) return new Response("introuvable", { status: 404 });
+      return new Response(
+        `<script type="application/ld+json">${JSON.stringify({
+          "@type": "NewsArticle",
+          datePublished: match.publishedAt,
+        })}</script>`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    });
     setAdapters({ collector: { name: "stub", collect: () => ({ ok: true, items }) } });
     const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
     const src = sources.body.find((s) => s.type === "communiques")!;

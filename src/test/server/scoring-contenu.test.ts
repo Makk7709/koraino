@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionRun, Paginated, Signal, Source } from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
 import type { RawItem } from "@/server/adapters/collector";
@@ -129,8 +129,25 @@ describe("nouveauté selon l'ancienneté de la publication", () => {
 });
 
 describe("évaluation du contenu : collecte", () => {
-  beforeEach(() => setup());
-  afterEach(teardown);
+  beforeEach(() => {
+    setup();
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const hours = url.includes("pasqal-50") ? 2 : Number(/pasqal-(\d+)/.exec(url)?.[1] ?? 1);
+      const publishedAt = new Date(NOW.getTime() - hours * 3_600_000).toISOString();
+      return new Response(
+        `<script type="application/ld+json">${JSON.stringify({
+          "@type": "NewsArticle",
+          datePublished: publishedAt,
+        })}</script>`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    teardown();
+  });
 
   async function pasqalSource(): Promise<Source> {
     const res = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
