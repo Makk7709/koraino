@@ -1332,7 +1332,7 @@ describe("dates de publication : pipeline Google News", () => {
       vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
         const url = String(input instanceof Request ? input.url : input);
         if (url.includes("news.google.com/rss/search")) return new Response(rss);
-        if (url.startsWith("https://news.google.com/articles/")) {
+        if (url.startsWith("https://news.google.com/rss/articles/")) {
           articleCalls += 1;
           const signal = init?.signal;
           if (signal) signals.push(signal);

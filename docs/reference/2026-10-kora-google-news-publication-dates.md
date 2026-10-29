@@ -3,7 +3,7 @@
 - **Projet :** KORA Newsroom / veille Inovallée
 - **Branche de travail :** `fix/kora-publication-dates`
 - **Date de rédaction :** 29 octobre 2026
-- **Statut :** modifications locales non commitées au moment de la rédaction ; validation CI et PR à venir
+- **Statut :** PR Draft #2 ouverte ; première CI réussie (638 tests). Correctif RSS testé localement (639 tests), en attente de push et de nouvelle CI.
 **Périmètre :** collecte Google News, confirmation des dates de publication, protections réseau et tests de régression
 
 > **Note de validation du 29 octobre 2026.** L'utilisatrice a **relancé elle-même les tests dans son terminal Mac** sur `fix/kora-publication-dates` : **46 fichiers et 638 tests réussis (code de sortie 0)**. Elle a aussi exécuté `bunx tsc --noEmit -p .` (aucune erreur affichée), `bun run lint` (**0 erreur, 6 avertissements préexistants dans `src/components/ui/`**) et `bun run build` (build client, SSR et Nitro réussi). Les réponses HTTP des tests restent majoritairement **simulées** : cela n'équivaut pas à une recette Google News réelle. GitHub Actions n'a pas encore été exécuté sur une PR, et la dernière version du code d'annulation du corps HTTP n'a pas été relue indépendamment après son dernier ajustement.
@@ -299,3 +299,83 @@ Ne pas oublier que `git diff --stat` **n'affiche pas les fichiers non suivis** (
 - [ ] La CI GitHub réussit sur la PR Draft avant toute décision de merge.
 
 **Protection opérationnelle :** ne modifier ni `main`, ni Lovable, ni le répertoire local `~/Projects/koraino` et sa base Supabase des trente entreprises lors de ces opérations.
+
+
+---
+
+## Addendum — validation réelle du 29 octobre 2026
+
+### Correctif complémentaire Google News
+
+L'ancien décodeur utilisait `news.google.com/articles/{id}`.
+Ce chemin a renvoyé HTTP 429 lors d'un test réel.
+
+Le nouveau chemin `news.google.com/rss/articles/{id}` a permis
+de résoudre les liens vers les pages originales des éditeurs.
+
+Un test automatisé de régression HTTP 429 a été ajouté.
+
+### Résultats des tests HTTP réels
+
+| Source | Lien récision |
+|---|---|---|---|
+| Boursier.com / Kalray Openchip | Oui | HTTP 403, non confirmée | Rejet |
+| Les Échos Investir / Kalray | Oui | Non confirmée | Rejet |
+| VIPress / Kalray | Oui | 29 septembre 2026 | Acceptation |
+| Boursorama / Kalray | Oui | 6 octobre 2026 | Acceptation |
+
+Bilan : 4 liens résolus sur 4 et 2 dates confirmées sur 4.
+
+Ces tests sont exploratoires et n'équivalent pas à une recette
+applicative complète.
+
+### Gestion des articles anciens
+
+Une date récente dans le flux Google News ne suffit plus.
+La publication originale doit être confirmée dans la fenêtre
+de fraîcheur de 30 jours.
+
+### Dates de publication et de modification
+
+Les métadonnées `datePublished`, `article:published_time`
+et `VideoObject.uploadDate` peuvent confirmer la publication.
+
+`dateModified` ne prouve pas une nouvelle publication.
+Les dates contradictoires ne sont pas acceptées arbitrairement.
+
+### Gestion des erreurs
+
+Une erreur HTTP, un lien non résolu ou une date absente
+entraîne le rejet de la nouvelle observation Google News.
+
+Les éditeurs inaccessibles peuvent donc provoquer des faux négatifs.
+
+### Limites de performance
+
+- Maximum 15 candidats Google News vérifiés par source.
+- Budget de vérification de 60 secondes.
+- Timeout de 8 secondes par opération du résolveur Google News.
+- Timeout de 15 secondes maximum par page éditeur.
+- HTML éditeur limité à 1 Mio sur la lecture en flux.
+- Maximum 5 nouvelles observations par source.
+
+### Validation technique
+
+- 639 tests automatisés réussis sur 46 fichiers en local.
+- TypeScript : OK.
+- ESLint : 0 erreur, 6 avertissements préexistants.
+- Build Vite / SSR / Nitro : réussi.
+- Première CI GitHub : 638 tests réussis.
+- Nouvelle CI à vérifier après push du correctif complémentaire.
+
+### Limites restantes
+
+Le contenu Google News analysé provient principalement du
+titre et de la description RSS, pas de l'article intégral.
+
+Les réessais automatiques, la recherche de sources alternatives
+et la détection de nouvelles annonces dans des articles anciens
+restent hors périmètre.
+
+Aucune modification des données historiques ou des 30 entreprises
+existantes. Aucun déploiement.

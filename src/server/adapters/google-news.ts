@@ -26,7 +26,7 @@ export class NoopLinkResolver implements LinkResolver {
 }
 
 const ARTICLE_PATH = /^\/(?:rss\/)?articles\/([A-Za-z0-9_-]+)/;
-const ARTICLE_PAGE = "https://news.google.com/articles/";
+const ARTICLE_PAGE = "https://news.google.com/rss/articles/";
 const DECODE_ENDPOINT = "https://news.google.com/_/DotsSplashUi/data/batchexecute";
 const TIMEOUT_MS = 8_000;
 

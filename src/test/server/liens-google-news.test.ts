@@ -73,7 +73,7 @@ describe("liens Google News : décodage", () => {
   it("résout sans réseau un ancien lien, avec deux requêtes un nouveau, et met en cache", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("https://news.google.com/articles/")) return new Response(PAGE_HTML);
+      if (url.startsWith("https://news.google.com/rss/articles/")) return new Response(PAGE_HTML);
       if (url.endsWith("/batchexecute") && init?.method === "POST") {
         expect(String(init.body)).toContain("garturlreq");
         return new Response(DECODE_RESPONSE);
@@ -111,7 +111,7 @@ describe("liens Google News : décodage", () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, signal: init?.signal ?? undefined });
-      if (url.startsWith("https://news.google.com/articles/")) {
+      if (url.startsWith("https://news.google.com/rss/articles/")) {
         return new Promise<Response>((_resolve, reject) => {
           const signal = init?.signal;
           if (signal?.aborted) {
@@ -129,7 +129,7 @@ describe("liens Google News : décodage", () => {
     const ctrl = new AbortController();
     const pending = resolver.resolve(RSS_LINK(NEW_ID), ctrl.signal);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url.startsWith("https://news.google.com/articles/")).toBe(true);
+    expect(calls[0]!.url.startsWith("https://news.google.com/rss/articles/")).toBe(true);
     expect(calls[0]!.signal?.aborted).toBe(false);
     ctrl.abort();
     await expect(pending).resolves.toBeNull();
@@ -139,7 +139,7 @@ describe("liens Google News : décodage", () => {
     fetchMock.mockImplementation(async (input: string | URL | Request) => {
       const url = String(input);
       calls.push({ url, signal: undefined });
-      if (url.startsWith("https://news.google.com/articles/")) return new Response(PAGE_HTML);
+      if (url.startsWith("https://news.google.com/rss/articles/")) return new Response(PAGE_HTML);
       return new Response(DECODE_RESPONSE);
     });
     expect(await resolver.resolve(RSS_LINK(NEW_ID))).toBe(ARTICLE);
@@ -269,7 +269,7 @@ describe("liens Google News : décodage", () => {
     let decodeCalls = 0;
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("https://news.google.com/articles/")) return new Response(PAGE_HTML);
+      if (url.startsWith("https://news.google.com/rss/articles/")) return new Response(PAGE_HTML);
       decodeCalls += 1;
       decodeSignal = init?.signal ?? undefined;
       if (mode === "hang") {
@@ -471,5 +471,39 @@ describe("liens Google News : collecte", () => {
     const run = await call<CollectionRun>("POST", `/sources/${src.id}/collect`);
     expect(run.body).toMatchObject({ status: "succes_sans_actualite", newObservations: 0 });
     expect(asked).toEqual([RSS_LINK("same")]);
+  });
+});
+
+describe("regression Google News sur HTTP 429", () => {
+  it("regression HTTP 429 : utilise le chemin RSS Google News", async () => {
+    const urls: string[] = [];
+
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+
+      if (url.startsWith("https://news.google.com/articles/")) {
+        return new Response("rate limited", { status: 429 });
+      }
+
+      if (url.startsWith("https://news.google.com/rss/articles/")) {
+        return new Response(PAGE_HTML);
+      }
+
+      if (url.endsWith("/batchexecute")) {
+        expect(init?.method).toBe("POST");
+        return new Response(DECODE_RESPONSE);
+      }
+
+      return new Response("introuvable", { status: 404 });
+    });
+
+    const resolver = new GoogleNewsLinkResolver(fetchMock as unknown as typeof fetch);
+    const resolved = await resolver.resolve(RSS_LINK(NEW_ID));
+
+    expect(resolved).toBe(ARTICLE);
+    expect(urls.some((u) => u.startsWith("https://news.google.com/rss/articles/"))).toBe(true);
+    expect(urls.some((u) => u.startsWith("https://news.google.com/articles/"))).toBe(false);
+    expect(urls.filter((u) => u.endsWith("/batchexecute"))).toHaveLength(1);
   });
 });
