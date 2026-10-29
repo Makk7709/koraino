@@ -379,3 +379,77 @@ restent hors périmètre.
 
 Aucune modification des données historiques ou des 30 entreprises
 existantes. Aucun déploiement.
+
+---
+
+## Addendum — recette applicative isolée Kalray
+
+**Date :** 29 octobre 2026
+**Branche :** `fix/kora-publication-dates`
+**Exécution :** Mac local, Bun 1.2.19, stockage en mémoire.
+
+### Collecte réelle
+
+Une collecte Kalray a été exécutée avec le véritable
+service `collectOne()`, Google News et des pages éditeurs.
+
+Résultats :
+- Statut : `succes`.
+- 4 observations créées et confirmées dans le stockage mémoire.
+- 3 signaux associés à Kalray.
+- 4 dates originales vérifiées dans la fenêtre de 30 jours.
+- Aucune erreur de collecte signalée.
+
+Les éditeurs des quatre observations acceptées étaient
+Boursorama (3 articles) et VIPress.net (1 article).
+
+### Déduplication
+
+Une seconde recette a rejoué un flux Google News figé,
+avec le même `MemoryRepository`.
+
+| Contrôle | Résultat |
+|---|---|
+| Première collecte | 4 observations |
+| Deuxième collecte | `succes_sans_actualite` |
+| Nouvelles observations au second passage | 0 |
+| URL uniques finales | 4 |
+| Doublons d'URL | 0 |
+| Relations observations-signaux | Cohérentes |
+
+Un essai exploratoire distinct avait créé 5 observations
+au premier passage et 1 au second. Ce résultat ne démontre
+pas un doublon : `MAX_ITEMS = 5` peut laisser des publications
+distinctes pour une collecte suivante.
+
+### Rejet des articles anciens
+
+La commande de test ciblée
+`bun --no-env-file run test src/test/server/dates-publication.test.ts`
+a réussi : **26 tests sur 26**.
+
+Elle couvre notamment :
+- une vidéo de 2019 réindexée par Google News ;
+- une publication vieille de 60 jours ;
+- une date de modification récente sans publication récente ;
+- les erreurs HTTP, redirections, budgets et dates contradictoires.
+
+Ces scénarios sont validés avec un réseau simulé ;
+ils ne constituent pas des mesures réseau réelles.
+
+### Protection des données
+
+La recette a utilisé un `MemoryRepository` temporaire,
+avec la configuration Supabase désactivée et sans API IA payante.
+
+Aucune écriture n'a été effectuée dans la base habituelle
+des 30 entreprises par ces scripts de recette.
+
+### Limites et prochaines validations
+
+- La cohérence technique des regroupements a été vérifiée,
+  mais leur pertinence éditoriale reste à examiner.
+- Les scénarios négatifs sont validés automatiquement
+  avec HTTP simulé, et non tous reproduits sur des éditeurs réels.
+- Les faux négatifs des éditeurs inaccessibles restent possibles.
+- Aucun déploiement ni fusion dans `main` n'a été effectué.
