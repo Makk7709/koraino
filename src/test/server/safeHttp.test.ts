@@ -294,3 +294,51 @@ describe("safeFetchText (SSRF collecteur)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("collecte réelle : temps de collecte (4a)", () => {
+  
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function slowRedirects(ms: number) {
+    return vi.fn((input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(
+          () =>
+            resolve(
+              new Response(null, {
+                status: 302,
+                headers: { location: `${String(input)}/suite` },
+              }),
+            ),
+          ms,
+        );
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t);
+            reject(init!.signal!.reason);
+          },
+          { once: true },
+        );
+      }),
+    );
+  }
+
+  it("interrompt toute la chaîne de redirections avec un seul délai (4a)", async () => {
+    const fetchMock = slowRedirects(60);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const t0 = performance.now();
+    await expect(
+      safeFetchText("https://www.exemple.fr/a", { timeoutMs: 100 }),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    const elapsed = performance.now() - t0;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(elapsed).toBeLessThan(150);
+  });
+});
+
