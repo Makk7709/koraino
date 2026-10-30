@@ -108,8 +108,8 @@ export async function safeFetchText(
   let current = rawUrl;
   let redirectsFollowed = 0;
 
+  const signal = AbortSignal.timeout(timeoutMs);
   for (;;) {
-    const signal = AbortSignal.timeout(timeoutMs);
     const check = validateSourceUrl(current);
     if (!check.ok) {
       throw httpError("URL_REFUSED", check.reason);
