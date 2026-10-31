@@ -122,7 +122,7 @@ export function BrandMark({
 }: {
   name: string;
   brand: Brand;
-  domain?: string;
+  domain?: string | undefined;
   size?: keyof typeof SIZES;
   className?: string;
 }) {
@@ -130,7 +130,7 @@ export function BrandMark({
   const hasGlyph = WITH_GLYPH.some((k) => n.startsWith(k));
   const transparent = TRANSPARENT.some((k) => n.startsWith(k));
   const serif = n === "les echos" || n === "le figaro";
-  const logoUrl = companyLogoUrl(domain, import.meta.env.VITE_BRANDFETCH_CLIENT_ID);
+  const logoUrl = companyLogoUrl(domain, import.meta.env["VITE_BRANDFETCH_CLIENT_ID"]);
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const activeUrl = logoUrl !== failedUrl ? logoUrl : null;
