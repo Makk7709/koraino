@@ -9,7 +9,7 @@ import {
   quotaExceeded,
 } from "../domain/budget";
 import { monthKey } from "../domain/dates";
-import type { QuotaKey, UsageKind } from "../store/records";
+import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
 import type { Repository } from "../store/repository";
 import { audit, notify } from "./journal";
@@ -143,27 +143,12 @@ export async function paidCall<T>(
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
-  const reservation = await withBudgetLock(repo, async () => {
-    const settings = await repo.getSettings();
-    const spent = monthTotals(await repo.usage.list(), month).costEur;
-    const decision = decideReservation({
-      settings,
-      spentEur: spent,
-      estimateEur: call.estimate,
-      month,
-    });
-    if (!decision.ok) {
-      const suspending = !settings.paidCallsSuspended || settings.suspendedMonth !== month;
-      if (suspending) {
-        settings.paidCallsSuspended = true;
-        settings.suspendedMonth = month;
-        await repo.saveSettings(settings);
-      }
-      return { ...decision, suspending };
-    }
-    settings.reservedEur += call.estimate;
-    await repo.saveSettings(settings);
-    return decision;
+  // Unique attempt per invocation. Persisted before any potentially paid work.
+  const id = repo.nextId("pat");
+  const reservation = await repo.paidAttempts.reserve({
+    id, workspaceId: repo.workspaceId, month,
+    kind: call.kind, estimateEur: call.estimate, units: call.units,
+    label: call.label, createdAt: now.toISOString(),
   });
   if (!reservation.ok) {
     if (reservation.suspending) {
@@ -178,31 +163,56 @@ export async function paidCall<T>(
     throw budgetExhausted(reservation.reason);
   }
 
+  // If this acknowledgement is lost, do not release: the DB may have entered in_flight.
+  await repo.paidAttempts.start(id);
   let result: T;
   try {
     result = await fn();
-    const lines = actual
-      ? actual(result)
-      : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
-    let remaining = call.estimate;
-    for (const line of lines) {
-      if (line.costEur <= 0 && line.units <= 0) continue;
-      const cost = Math.max(0, Math.min(line.costEur, remaining));
-      remaining -= cost;
-      await repo.usage.insert({
-        id: repo.nextId("use"),
-        at: now.toISOString(),
-        kind: line.kind,
-        units: line.units,
-        costEur: Math.round(cost * 10000) / 10000,
-        label: line.label,
-      });
-    }
-  } finally {
-    await releaseReservation(repo, call.estimate);
+  } catch (error: unknown) {
+    // Even if callback rejects, a supplier might already have billed the request.
+    await repo.paidAttempts.unknown(id, "provider_or_callback_error").catch((stateError: unknown) => {
+      console.error(JSON.stringify({
+        event: "kora.paid_attempt.unknown_persist_failed", attemptId: id,
+        errorType: stateError instanceof Error ? stateError.name : "unknown",
+      }));
+    });
+    throw error;
+  }
+
+  const usage = actual
+    ? actual(result)
+    : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
+  const lines: UsageEntry[] = [];
+  let remaining = call.estimate;
+  for (const line of usage) {
+    if (line.costEur <= 0 && line.units <= 0) continue;
+    if (!Number.isFinite(line.costEur) || !Number.isFinite(line.units) ||
+        line.costEur < 0 || line.units < 0) throw new Error("Invalid usage line");
+    const cost = Math.max(0, Math.min(line.costEur, remaining));
+    remaining -= cost;
+    lines.push({
+      id: `${id}:line:${lines.length}`, at: now.toISOString(), kind: line.kind,
+      units: line.units, costEur: Math.round(cost * 10000) / 10000, label: line.label,
+    });
+  }
+  try {
+    // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
+    await repo.paidAttempts.finish(id, lines, "settled");
+  } catch (error: unknown) {
+    // Keep the reservation; transaction may have committed despite a lost response.
+    await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
+      console.error(JSON.stringify({
+        event: "kora.paid_attempt.settlement_uncertain", attemptId: id,
+        errorType: stateError instanceof Error ? stateError.name : "unknown",
+      }));
+    });
+    throw error;
   }
   await checkAlerts(repo, now).catch((e: unknown) => {
-    console.error("[budget] alertes non vérifiées (revérifiées au prochain appel payant)", e);
+    console.error(JSON.stringify({
+      event: "kora.budget.alert_check_failed",
+      errorType: e instanceof Error ? e.name : "unknown",
+    }));
   });
   return result;
 }
