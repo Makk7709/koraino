@@ -1,13 +1,13 @@
 # KORA Newsroom — Correctifs IA A1/A2 et migration Haiku / GPT-4.1 mini
 
 **Version documentaire :** 1.2 — 31 octobre 2026
-**Statut :** correctifs locaux implémentés et validés par tests simulés ; **non homologué pour production**
+**Statut :** correctifs A1/A2 implémentés, validés localement sur mocks et publiés sur la branche de travail ; **non homologués pour production**
 **Branche de travail :** `fix/kora-classification-multilingue`
 **Périmètre :** classification FR/EN, réécriture éditoriale, résumés et garde budgétaire
 **Responsabilité de revue :** pilotage technique KORA
-**Décision :** documenter A1/A2 ; maintenir A3/A4 et la recette des API réelles ouverts.
+**Décision :** documenter A1/A2 et les rapprocher du registre historique ; maintenir A3/A4 et la recette des API réelles ouverts.
 
-> **Portée de la preuve.** Ce document synthétise le code de la migration préparée et les sorties de validation transmises le 31/10/2026. Il ne prétend ni que la facture des fournisseurs a été contrôlée, ni qu'une transaction réelle Anthropic/OpenAI a été testée, ni qu'un déploiement a eu lieu. La migration est encore **locale, non commitée et non poussée** au moment de la rédaction.
+> **Portée de la preuve.** Ce document synthétise le code de la migration préparée et les sorties de validation transmises le 31/10/2026. Il ne prétend ni que la facture des fournisseurs a été contrôlée, ni qu'une transaction réelle Anthropic/OpenAI a été testée, ni qu'un déploiement a eu lieu. Au moment de la première rédaction, la migration était locale, non commitée et non poussée. **Actualisation du suivi le 31/10/2026 :** les commits de code `b38ff57` et de documentation `f264ae8` ont été poussés sur `fix/kora-classification-multilingue`. Cette publication de branche ne vaut ni fusion dans `main`, ni déploiement, ni recette API réelle.
 
 ## 1. Historique et traçabilité
 
@@ -16,6 +16,19 @@
 - **Preuve d'exécution locale :** 644 tests Vitest réussis dans 53 fichiers ; TypeScript sans erreur affichée ; ESLint ciblé sans diagnostic après formatage ; build Vite client, SSR et Nitro terminé ; `git diff --check` sans diagnostic final. Ces validations portent sur la version locale **après** la migration et la correction des assertions de test.
 
 Les résultats proviennent de journaux locaux transmis par l'équipe, non d'une CI indépendante. Ils ne remplacent pas la revue du diff, les tests avec fournisseur réel ou une recette de production.
+
+### Correspondance avec les anomalies historiques de `main`
+
+La référence historique fait foi pour le registre des anomalies ; les identifiants A1/A2 servent au suivi de ce jalon. Les correspondances ont été vérifiées dans [`docs/11-anomalies-connues.md`](11-anomalies-connues.md) sur `main`.
+
+| Identifiant du jalon | Identifiant historique | Correspondance | Statut |
+|---|---|---|---|
+| **A1 — Résumés IA hors garde budgétaire** | **P1-03** | **Directe** : améliorations post-collecte et après défusion hors `paidCall()` | Corrigé et testé localement sur mocks ; recette réelle restant à faire |
+| **A2 — Fallback HTTP 429 financier ou ambigu** | **Aucun identifiant historique exact** | **Nouveau constat** du routage fournisseur ; ne pas l'assimiler à **P1-05**, qui traite des garde-fous éditoriaux | Corrigé pour les scénarios ciblés et testé sur mocks ; recette réelle restant à faire |
+
+Le registre de la branche de travail classe déjà **P1-03 / A1** et **A2** dans « Corrigées depuis la consolidation ». Cela désigne la **clôture fonctionnelle locale**, pas une homologation de production.
+
+**Hors périmètre de cette clôture :** **A3** prolonge partiellement **P1-11** (opérations non transactionnelles et réservation orpheline) ; **A4** recoupe **P1-11** et le contexte historique de **P2-20** (amélioration antérieure par verrou, sans atomicité transactionnelle démontrée). A3/A4 demeurent **ouverts, non corrigés** et ne doivent pas être comptés comme des anomalies nouvelles indépendantes de ces recouvrements. Aucun rapport de correction A3/A4 n'est déclaré ici.
 
 ## 2. Routage des modèles
 
@@ -31,7 +44,7 @@ Les résultats proviennent de journaux locaux transmis par l'équipe, non d'une 
 
 Le secours exige `KORA_AI_FALLBACK_ENABLED="true"`, une clé serveur OpenAI et une réserve positive configurée. Sans clé Anthropic, la génération éditoriale conserve le gabarit et **ne bascule pas directement sur OpenAI**. L'activation en environnement réel reste une décision distincte.
 
-## 3. A1 — Appels de résumé hors garde budgétaire
+## 3. A1 / P1-03 — Appels de résumé hors garde budgétaire
 
 ### Anomalie initiale
 
@@ -51,7 +64,7 @@ Les quatre tests de `src/test/server/ia-resumes-budget.test.ts` vérifient la r�
 
 **État A1 :** chemin de résumé local corrigé et testé sur mocks ; clôture **fonctionnelle locale uniquement**, sous réserve de revue et de recette.
 
-## 4. A2 — Repli abusif lors d'un HTTP 429
+## 4. A2 — Repli abusif lors d'un HTTP 429 (sans équivalence historique exacte)
 
 ### Anomalie initiale
 
