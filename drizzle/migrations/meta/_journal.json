@@ -29,6 +29,13 @@
       "when": 1793563200000,
       "tag": "0003_kora_settings_safe_write",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793653200000,
+      "tag": "0004_kora_paid_reconcile",
+      "breakpoints": true
     }
   ]
 }
