@@ -633,6 +633,17 @@ export function FailingSourcesCard({ sources }: { sources: Source[] }) {
 }
 ```
 
+### Récupération automatique des logos des entreprises
+
+`BrandMark` accepte désormais `domain` (facultatif). Pour les entreprises, il utilise le domaine du registre et un identifiant public `VITE_BRANDFETCH_CLIENT_ID` pour charger, depuis le navigateur, le logo via Brandfetch Logo API. Sans identifiant ou sans domaine valide, le rendu historique (monogramme/glyphe) reste inchangé. Aucune migration ni import manuel requis.
+
+- Configurer le **Client ID public** de [Brandfetch](https://brandfetch.com/developers/logo-api) dans `VITE_BRANDFETCH_CLIENT_ID` lors du build ; ne jamais utiliser une clé API secrète. Redéployer après configuration.
+- Les images sont intégrées directement par `<img>` depuis `cdn.brandfetch.io`, conformément aux conditions de hotlinking : pas de téléchargement, proxy ni cache applicatif.
+- La politique `strict-origin-when-cross-origin` transmet uniquement l’**origine** de l’application dans l’en-tête Referer, requis par Brandfetch ; ne pas utiliser `no-referrer`.
+- `fallback/404` permet de conserver le monogramme local pour les entreprises inconnues du fournisseur. Les erreurs d’image et les attentes supérieures à dix secondes utilisent également le repli.
+- Les médias (sources de presse) restent inchangés. Le logo d’entreprise n’est pas une preuve d’identité ; ne pas réutiliser automatiquement ces images dans des publications.
+- Avant activation en production : vérifier conditions d’utilisation, politique de confidentialité, disponibilité réelle sur un échantillon, politique CSP `img-src` et coût/quota effectifs.
+
 ### Logos d'entreprises et de médias
 
 [`BrandMark`](../src/components/kora/BrandMark.tsx) affiche le logo d'une entreprise ou d'un média à partir de son nom et de son objet `brand` (`initials`, `bg`, `fg`, fourni par l'API) :

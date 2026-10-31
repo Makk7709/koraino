@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { companyLogoUrl } from "@/lib/branding/companyLogo";
 import { cn } from "@/lib/utils";
 
 type Brand = { initials: string; bg: string; fg: string };
@@ -114,11 +116,13 @@ const TRANSPARENT = ["wattpark", "sinano", "araymond", "verkor"];
 export function BrandMark({
   name,
   brand,
+  domain,
   size = "md",
   className,
 }: {
   name: string;
   brand: Brand;
+  domain?: string;
   size?: keyof typeof SIZES;
   className?: string;
 }) {
@@ -126,26 +130,55 @@ export function BrandMark({
   const hasGlyph = WITH_GLYPH.some((k) => n.startsWith(k));
   const transparent = TRANSPARENT.some((k) => n.startsWith(k));
   const serif = n === "les echos" || n === "le figaro";
+  const logoUrl = companyLogoUrl(domain, import.meta.env.VITE_BRANDFETCH_CLIENT_ID);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const activeUrl = logoUrl !== failedUrl ? logoUrl : null;
+  const imageLoaded = activeUrl !== null && activeUrl === loadedUrl;
+
+  useEffect(() => {
+    if (!activeUrl || imageLoaded) return;
+    const timer = window.setTimeout(() => setFailedUrl(activeUrl), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [activeUrl, imageLoaded]);
+
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden font-bold leading-none",
+        "relative inline-flex shrink-0 items-center justify-center overflow-hidden font-bold leading-none",
         SIZES[size],
         className,
       )}
       style={transparent ? undefined : { background: brand.bg, color: brand.fg }}
+      role="img"
       aria-label={name}
       title={name}
     >
-      {hasGlyph ? (
-        <SpecialGlyph name={name} />
-      ) : (
-        <span
-          className={cn(serif && "font-serif text-[1.35em]")}
-          style={serif ? { fontFamily: "Georgia, serif" } : undefined}
-        >
-          {brand.initials}
-        </span>
+      {!imageLoaded &&
+        (hasGlyph ? (
+          <SpecialGlyph name={name} />
+        ) : (
+          <span
+            className={cn(serif && "font-serif text-[1.35em]")}
+            style={serif ? { fontFamily: "Georgia, serif" } : undefined}
+          >
+            {brand.initials}
+          </span>
+        ))}
+      {activeUrl && (
+        <img
+          src={activeUrl}
+          alt=""
+          aria-hidden="true"
+          referrerPolicy="strict-origin-when-cross-origin"
+          decoding="async"
+          className={cn(
+            "absolute inset-0 h-full w-full bg-white object-contain p-0.5",
+            !imageLoaded && "opacity-0",
+          )}
+          onLoad={() => setLoadedUrl(activeUrl)}
+          onError={() => setFailedUrl(activeUrl)}
+        />
       )}
     </span>
   );
