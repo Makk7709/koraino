@@ -353,7 +353,20 @@ async function assessItems(
     const title = sanitizeText(item.title, 300);
     const text = sanitizeText(item.html, 1200);
     if (!title || !text) return item;
-    const assessment = await ai.classify({ title, text, companyName: company?.name ?? null });
+    const input = { title, text, companyName: company?.name ?? null };
+    if (ai.classifyWithUsage) {
+      const measured = await ai.classifyWithUsage(input);
+      return {
+        ...item,
+        ...(measured.assessment ? { assessment: measured.assessment } : {}),
+        classificationUsage: {
+          primaryCalls: measured.primaryCalls,
+          fallbackCalls: measured.fallbackCalls,
+        },
+      };
+    }
+    // Compatibilité avec les adaptateurs simulés ne disposant pas de compteur.
+    const assessment = await ai.classify(input);
     return assessment ? { ...item, assessment } : item;
   });
   const byOriginal = new Map([...picked].map((item, i) => [item, assessed[i]!]));
@@ -388,11 +401,33 @@ async function fetchOutcome(
   return { result, attempts: attempt };
 }
 
-/** Coût réel d'une source : une requête, les nouvelles publications retenues, les lectures par le modèle. */
+/** Estimation forfaitaire retenue dans le budget global pour un appel de secours. */
+function fallbackCostEstimate(): number {
+  const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
+  const value = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw budgetExhausted("Réserve de repli IA absente ou invalide.");
+  }
+  return value;
+}
+
+/**
+ * Consommation estimée du budget API KORA, distincte de toute facturation client.
+ * Un appel peut être compté même si la classification n'a pas abouti.
+ */
 function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome): UsageLine[] {
   const items = outcome.result.ok ? outcome.result.items : [];
-  const units = Math.min(items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS);
-  const assessed = items.filter((i) => i.assessment).length;
+  const candidates = items.filter((item) => !isKnown(state, item)).slice(0, MAX_ITEMS);
+  const units = candidates.length;
+  const primaryCalls = candidates.reduce(
+    (sum, item) => sum + (item.classificationUsage?.primaryCalls ?? (item.assessment ? 1 : 0)),
+    0,
+  );
+  const fallbackCalls = candidates.reduce(
+    (sum, item) => sum + (item.classificationUsage?.fallbackCalls ?? 0),
+    0,
+  );
+
   return [
     { kind: "search_query", costEur: COSTS.search, units: 1, label: `Collecte ${source.label}` },
     ...(units
@@ -405,13 +440,23 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
           },
         ]
       : []),
-    ...(assessed
+    ...(primaryCalls
       ? [
           {
             kind: "classification" as const,
-            costEur: assessed * COSTS.classification,
-            units: assessed,
-            label: `Lecture par le modèle ${source.label}`,
+            costEur: primaryCalls * COSTS.classification,
+            units: primaryCalls,
+            label: `Classification IA principale ${source.label}`,
+          },
+        ]
+      : []),
+    ...(fallbackCalls
+      ? [
+          {
+            kind: "classification" as const,
+            costEur: fallbackCalls * fallbackCostEstimate(),
+            units: fallbackCalls,
+            label: `Classification IA de secours ${source.label}`,
           },
         ]
       : []),
@@ -420,7 +465,28 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
 
 /** Coût estimé d'une source, réservé avant l'appel : requête, publications, lectures par le modèle. */
 function estimatePerSource(): number {
-  const perItem = COSTS.observation + (adapters().ai ? COSTS.classification : 0);
+  const aiEnabled = Boolean(adapters().ai);
+  let fallbackReserve = 0;
+
+  const fallbackConfigured =
+    aiEnabled &&
+    process.env["KORA_AI_FALLBACK_ENABLED"] === "true" &&
+    Boolean(process.env["ANTHROPIC_API_KEY"]?.trim()) &&
+    Boolean(process.env["AI_API_KEY"]?.trim());
+
+  if (fallbackConfigured) {
+    const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
+    const reserve = Number(raw);
+
+    if (!raw || !Number.isFinite(reserve) || reserve <= 0) {
+      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenRouter absente ou invalide.");
+    }
+
+    fallbackReserve = reserve;
+  }
+
+  const perItem = COSTS.observation + (aiEnabled ? COSTS.classification : 0) + fallbackReserve;
+
   return COSTS.search + MAX_ITEMS * perItem;
 }
 

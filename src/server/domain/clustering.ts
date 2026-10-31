@@ -30,6 +30,9 @@ const CATEGORY_RULES: CategoryRule[] = [
   {
     category: "financement",
     strong: [
+      /\bfunding rounds?\b/,
+      /\bseries [abc]\b/,
+      /\brais(?:e|es|ed)\b.{0,35}\b(?:million|billion)\b/,
       /\blevee de fonds\b/,
       /\bleve\b[^.]{0,40}\b(?:millions?|m€|meur|k€)/,
       /\btour de table\b/,
@@ -44,6 +47,9 @@ const CATEGORY_RULES: CategoryRule[] = [
   {
     category: "acquisition",
     strong: [
+      /\bacquir(?:e|es|ed|ing)\b/,
+      /\bacquisitions?\b/,
+      /\btakeovers?\b/,
       /\brachete\b/,
       /\brachat\b/,
       /\bacquisition\b/,
@@ -56,6 +62,8 @@ const CATEGORY_RULES: CategoryRule[] = [
   {
     category: "contrat",
     strong: [
+      /\b(?:supply|service|commercial|procurement|customer)\s+contracts?\b/,
+      /\b(?:wins?|awarded)\s+(?:a|an|the)\s+contracts?\b/,
       /\bcontrats?\b/,
       /\bremporte\b/,
       /\bappel d'offres\b/,
@@ -67,6 +75,9 @@ const CATEGORY_RULES: CategoryRule[] = [
   {
     category: "partenariat",
     strong: [
+      /\bpartnerships?\b/,
+      /\bstrategic alliances?\b/,
+      /\bpartner(?:s|ed|ing)?\s+with\b/,
       /\bpartenariats?\b/,
       /\baccords?\b/,
       /\bs'associent?\b/,
@@ -84,7 +95,16 @@ const CATEGORY_RULES: CategoryRule[] = [
   },
   {
     category: "recrutement",
-    strong: [/\brecrute\b/, /\brecrutements?\b/, /\bembauches?\b/, /\bemplois\b/, /\bpostes\b/],
+    strong: [
+      /\b(?:hires?|hired|hiring)\b/,
+      /\brecruit(?:s|ed|ing|ment)?\b/,
+      /\bjob openings?\b/,
+      /\brecrute\b/,
+      /\brecrutements?\b/,
+      /\bembauches?\b/,
+      /\bemplois\b/,
+      /\bpostes\b/,
+    ],
     weak: [/\btalents\b/, /\beffectifs\b/, /\bequipe s'agrandit\b/],
   },
   {

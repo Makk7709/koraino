@@ -204,7 +204,7 @@ describe("évaluation du contenu : collecte", () => {
 
     const entries = (await repo.usage.list()).slice(entriesBefore);
     const lecture = entries.find((u) => u.kind === "classification")!;
-    expect(lecture).toMatchObject({ units: 2, label: `Lecture par le modèle ${src.label}` });
+    expect(lecture).toMatchObject({ units: 2, label: `Classification IA principale ${src.label}` });
     expect(lecture.costEur).toBeCloseTo(2 * COSTS.classification, 6);
   });
 
