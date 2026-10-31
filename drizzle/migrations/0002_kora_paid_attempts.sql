@@ -21,7 +21,6 @@ DECLARE
 BEGIN
   IF v_id IS NULL OR length(v_id) < 5 OR v_month !~ '^[0-9]{4}-[0-9]{2}$'
      OR v_estimate IS NULL OR v_estimate <= 0 OR v_estimate > 100000 THEN
-     OR v_estimate IS NULL OR v_estimate <= 0 OR v_estimate > 100000 THEN
     RAISE EXCEPTION 'invalid paid attempt';
   END IF;
   SELECT data INTO STRICT v_settings FROM public.kora_settings
