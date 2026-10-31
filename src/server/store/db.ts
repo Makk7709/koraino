@@ -226,12 +226,13 @@ export class DbRepository implements Repository {
       });
       if (error && error.code !== UNIQUE_VIOLATION) throw new Error(error.message);
     }
-    const { error } = await client.from("kora_settings").upsert({
-      workspace_id: WORKSPACE,
-      data: rest as never,
-      updated_at: new Date().toISOString(),
-    });
-    if (error) throw new Error(error.message);
+    // A3: database-owned financial fields must survive stale application snapshots.
+    // Fail closed if the migration is absent instead of falling back to a full-row upsert.
+    const { data, error } = await client.rpc("kora_settings_save" as never, {
+      p_data: rest,
+    } as never);
+    if (error || data !== true)
+      throw new Error(error?.message ?? "Settings save RPC returned an invalid response");
   }
 
   async getWordPressSettings() {
