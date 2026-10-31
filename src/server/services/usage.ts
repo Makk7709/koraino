@@ -145,11 +145,11 @@ export async function paidCall<T>(
   const month = monthKey(now);
   // Unique attempt per invocation. Persisted before any potentially paid work.
   const id = repo.nextId("pat");
-  const reservation = await repo.paidAttempts.reserve({
+  const reservation = await withBudgetLock(repo, () => repo.paidAttempts.reserve({
     id, workspaceId: repo.workspaceId, month,
     kind: call.kind, estimateEur: call.estimate, units: call.units,
     label: call.label, createdAt: now.toISOString(),
-  });
+  }));
   if (!reservation.ok) {
     if (reservation.suspending) {
       await audit(ctx, "quota.suspension", "quota", "api_budget_eur", reservation.reason, "KORA");
@@ -179,6 +179,7 @@ export async function paidCall<T>(
     throw error;
   }
 
+  try {
   const usage = actual
     ? actual(result)
     : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
@@ -195,9 +196,9 @@ export async function paidCall<T>(
       units: line.units, costEur: Math.round(cost * 10000) / 10000, label: line.label,
     });
   }
-  try {
     // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
-    await repo.paidAttempts.finish(id, lines, "settled");
+    // The budget lock also protects legacy settings writes during A3 transition.
+    await withBudgetLock(repo, () => repo.paidAttempts.finish(id, lines, "settled"));
   } catch (error: unknown) {
     // Keep the reservation; transaction may have committed despite a lost response.
     await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
