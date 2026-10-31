@@ -26,6 +26,22 @@ class FakeTables {
     return this.records.get(`${collection}|${id}`);
   }
 
+  rpc(name: string, args: { p_data: Settings }) {
+    expect(name).toBe("kora_settings_save");
+    this.log.push("settings.rpc");
+    const existing = (this.settings ?? {}) as Record<string, unknown>;
+    const { wordpress: _unused, ...next } = args.p_data;
+    const previousAlerts = Array.isArray(existing["notifiedAlerts"])
+      ? existing["notifiedAlerts"] as string[] : [];
+    this.settings = {
+      ...existing,
+      quotaLimits: structuredClone(next.quotaLimits),
+      storageBaseGb: next.storageBaseGb,
+      notifiedAlerts: [...new Set([...previousAlerts, ...next.notifiedAlerts])].sort(),
+    };
+    return Promise.resolve({ data: true, error: null });
+  }
+
   from(table: string) {
     if (table === "kora_settings") return this.settingsTable();
     expect(table).toBe("kora_records");
@@ -98,9 +114,12 @@ class FakeTables {
   }
 }
 
-const fake = vi.hoisted(() => ({ current: null as { from(table: string): unknown } | null }));
+const fake = vi.hoisted(() => ({ current: null as FakeTables | null }));
 vi.mock("@/integrations/supabase/client.server", () => ({
-  supabaseAdmin: { from: (table: string) => fake.current!.from(table) },
+  supabaseAdmin: {
+    from: (table: string) => fake.current!.from(table),
+    rpc: (name: string, args: { p_data: Settings }) => fake.current!.rpc(name, args),
+  },
 }));
 
 const DEFAULTS: WordPressSettings = { categoryMap: {}, defaultCategory: null };
@@ -239,7 +258,7 @@ describe("Correspondance des catégories WordPress hors des réglages partagés 
     await db.saveWordPressSettings(MAPPING);
     await db.saveSettings({ ...stale, reservedEur: 2 });
     expect(await db.getWordPressSettings()).toEqual(MAPPING);
-    expect(tables.settings).toEqual({ ...legacy, reservedEur: 2 });
+    expect(tables.settings).toEqual({ ...legacy });
   });
 
   it("migration : l'ancienne correspondance est recopiée au prochain enregistrement des réglages, puis retirée", async () => {
@@ -248,10 +267,27 @@ describe("Correspondance des catégories WordPress hors des réglages partagés 
     const current = await db.getSettings();
     tables.log = [];
     await db.saveSettings({ ...current, reservedEur: 1 });
-    expect(tables.log).toEqual(["records.insert", "settings.upsert"]);
+    expect(tables.log).toEqual(["records.insert", "settings.rpc"]);
     expect(tables.record("config", "wordpress")).toEqual(OLD);
-    expect(tables.settings).toEqual({ ...legacy, reservedEur: 1 });
+    expect(tables.settings).toEqual({ ...legacy });
     expect(await db.getWordPressSettings()).toEqual(OLD);
+  });
+
+  it("une sauvegarde obsolète ne supprime pas la réserve, la suspension ni les alertes", async () => {
+    tables.settings = { ...legacy, reservedEur: 0, notifiedAlerts: [] };
+    const stale = await db.getSettings();
+    tables.settings = {
+      ...legacy, reservedEur: 0.02, paidCallsSuspended: true,
+      suspendedMonth: "2026-10", notifiedAlerts: ["2026-10:api_budget_eur:atteint"],
+    };
+    await db.saveSettings({
+      ...stale, reservedEur: 0, notifiedAlerts: ["2026-10:articles:seuil_80"],
+    });
+    expect(tables.settings).toMatchObject({
+      reservedEur: 0.02, paidCallsSuspended: true, suspendedMonth: "2026-10",
+      notifiedAlerts: ["2026-10:api_budget_eur:atteint", "2026-10:articles:seuil_80"],
+    });
+    expect(tables.log).toContain("settings.rpc");
   });
 
   it("recopie en échec : la ligne de réglages n'est pas réécrite et garde l'ancienne correspondance", async () => {
