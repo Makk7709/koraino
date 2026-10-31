@@ -10,7 +10,7 @@
 2. `src/components/kora/BrandMark.tsx` accepte le domaine **optionnel** d'une entreprise et affiche une image distante si elle charge. Les monogrammes et glyphes précédents restent visibles sans Client ID, en cas de domaine incorrect, de 404/erreur réseau ou après **10 secondes**.
 3. Les écrans entreprises (grille/table/fichier), veille, signaux, articles, LinkedIn et newsletter transmettent `Company.domain` à `BrandMark`. Les logos de **médias/sources de presse** sont hors périmètre.
 4. `src/test/company-logo.test.tsx` couvre génération d'URL, valeurs invalides, configuration absente, échec de chargement, changement de domaine, timeout et non-régression médias.
-5. `.github/workflows/company-logos-ci.yml` exécute installation verrouillée, typecheck, lint sur les TS/TSX modifiés, tests Vitest et build.
+5. `.github/workflows/company-logos-ci.yml` exécute installation verrouillée, typecheck, lint sur les TS/TSX modifiés, tests Vitest, build, installation de Chromium et tests E2E Playwright sur la démonstration isolée.
 6. `docs/06-securite-et-flux-tiers.md` et `docs/07-frontend.md` décrivent le flux externe, la configuration, les règles de repli et les exigences avant production.
 
 **Aucune migration de données et aucun stockage des logos**. Les images sont chargées directement par le navigateur depuis Brandfetch, en conservant la possibilité de changer de source d'images plus tard.
@@ -44,7 +44,18 @@ VITE_BRANDFETCH_CLIENT_ID=<client-id-public>
 | `bun run test` | **622/622 réussis ; 46 fichiers de tests** | Événements d'image simulés, sans appel réel Brandfetch |
 | `bun run build` | Réussi | N'équivaut pas à une recette Lovable |
 
-Après l'ajout du présent document, la CI doit être revérifiée sur le nouveau commit de tête avant de déclarer la PR verte.
+La CI du commit documentaire `7db98f0` est validée ([run #41249978453](https://github.com/Makk7709/koraino/actions/runs/41249978453)). Les deux nouveaux tests navigateur ont réussi sur `b3db7c1` ([run #41251217681](https://github.com/Makk7709/koraino/actions/runs/41251217681)). Réexaminer la CI après chaque nouveau commit.
+
+### Tests E2E Playwright (automatisés, Chromium)
+
+- Fichiers : `playwright.config.ts`, `e2e/company-logos.spec.ts`, `bun.lock` (dépendance `@playwright/test`), `package.json` (script `test:e2e`).
+- Environnement : application de démonstration isolée sur `127.0.0.1:8765`, `SUPABASE_URL` explicitement vide, Client ID Brandfetch fictif et réponses du CDN interceptées. Aucune connexion à la base locale des 30 entreprises, à la production ou à l'API réelle Brandfetch.
+- **Succès** : navigation vers `/entreprises`, recherche de Pasqal, réponse CDN 200 simulée avec un SVG synthétique, image chargée et visible, domaine `pasqal.com` vérifié.
+- **Échec** : recherche d'Allevard Analytics (données de démonstration), réponse CDN 404 simulée, initiales `AA` présentes et image retirée.
+- **Résultat** : 2/2 tests Chromium réussis sur `b3db7c1`, [exécution #41251217681](https://github.com/Makk7709/koraino/actions/runs/41251217681).
+- **Rejouer** : `bun install --frozen-lockfile`, `bunx playwright install chromium`, `bun run test:e2e`. Le port 8765 doit être libre.
+
+Ces tests vérifient le parcours d'affichage dans un navigateur réel avec un CDN simulé. La recette manuelle sur les 30 entreprises est une preuve distincte de fonctionnement avec Brandfetch réel.
 
 ### Recette manuelle (observations du pilote, non exhaustives)
 
@@ -75,7 +86,7 @@ Les prix, quotas et conditions d'utilisation du fournisseur sont externes et peu
 3. **Timeout fixe de 10 s** : un logo chargé très lentement peut ne pas s'afficher ; nouvelle tentative non garantie tant que le composant reste monté.
 4. **Chargement non différé** : les éléments `img` ne portent pas actuellement `loading="lazy"`; l'écran peut déclencher plusieurs requêtes simultanées. Performance et impact sur les quotas à surveiller si le registre augmente.
 5. **Pas de monitoring des échecs Brandfetch** : le fallback protège l'UI, mais ne donne pas de pourcentage de couverture en exploitation.
-6. **Tests d'intégration manquants** : aucun test E2E automatisé sur navigateur réel, aucun essai d'environnement Lovable, aucune validation exhaustive mobile/accessibilité.
+6. **Tests navigateur E2E ajoutés** : deux scénarios Playwright Chromium vérifient l'affichage d'un logo et le fallback HTTP 404 sur l'interface réelle, avec données de démonstration et réponses CDN interceptées. Ils ne vérifient ni le vrai fournisseur, ni Supabase locale avec les 30 entreprises, ni Lovable, ni tous les navigateurs. Aucune validation exhaustive mobile/accessibilité.
 7. **Lint global** : non conforme dans des fichiers historiques de `main`; ce chantier ne doit pas entraîner de reformatage hors périmètre dans cette PR.
 8. **Branches parallèles** : cette branche part de `main` ; elle n'inclut **pas** les changements de `fix/kora-publication-dates` ou `fix/kora-classification-multilingue`. Le plan d'intégration doit tenir compte de ces travaux avant fusion.
 9. **Rattachement domaine → marque** : une réponse Brandfetch ne garantit pas que le logo correspond à l'entité juridique attendue ; l'utilisation éditoriale requiert une vérification distincte.
@@ -87,7 +98,7 @@ Les prix, quotas et conditions d'utilisation du fournisseur sont externes et peu
 - [x] Branche isolée avec modifications ciblées.
 - [x] Fonctionnalité désactivée sans Client ID.
 - [x] Repli sur image indisponible et tests associés.
-- [x] CI verte sur le code avant ce rapport ; relancer/vérifier après commit de documentation.
+- [x] CI verte sur le code avant ce rapport ; nouveaux tests Playwright réussis sur `b3db7c1` ; vérifier la dernière tête de branche.
 - [x] Recette manuelle sur la base locale des 30 entreprises (couverture partielle explicitement acceptée).
 - [x] Documentation des modifications, de la configuration, des preuves et des risques.
 
