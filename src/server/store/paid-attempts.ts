@@ -27,14 +27,46 @@ export const paidAttemptSchema = z.object({
 }).strict();
 
 export type PaidAttemptInput = z.infer<typeof paidAttemptSchema>;
-export type PaidAttemptStatus = "reserved" | "in_flight" | "settled" | "not_sent" | "unknown";
+export type PaidAttemptStatus =
+  | "reserved"
+  | "in_flight"
+  | "settled"
+  | "not_sent"
+  | "unknown"
+  | "reconciled_billed"
+  | "reconciled_not_billed";
+
+export const reconciliationEvidenceSchema = z.object({
+  source: z.enum(["provider_invoice", "provider_usage_export", "provider_support_confirmation"]),
+  reference: z.string().min(6).max(256),
+  operator: z.string().min(3).max(128),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  currency: z.literal("EUR"),
+  checkedAt: z.string().datetime({ offset: true }),
+}).strict();
+
+export type PaidReconciliationEvidence = z.infer<typeof reconciliationEvidenceSchema>;
+export type PaidReconciliation = {
+  resolution: "billed" | "not_billed";
+  billedEur: number;
+  evidence: PaidReconciliationEvidence;
+};
+
 export type PaidAttemptRecord = PaidAttemptInput & {
   status: PaidAttemptStatus;
-  billingStatus: "not_sent" | "not_charged" | "estimate_unverified" | "unknown";
+  billingStatus:
+    | "not_sent"
+    | "not_charged"
+    | "estimate_unverified"
+    | "unknown"
+    | "provider_confirmed"
+    | "confirmed_not_charged";
   startedAt?: string;
   completedAt?: string;
   failureCode?: string;
   usageLines: UsageEntry[];
+  reconciliation?: PaidReconciliation;
+  budgetOverrunAtReconciliation?: boolean;
 };
 
 export type ReserveResult =
