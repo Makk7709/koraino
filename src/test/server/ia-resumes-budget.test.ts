@@ -106,7 +106,7 @@ describe("KORA — réserve budgétaire des résumés IA", () => {
     ).toHaveLength(0);
   });
 
-  it("un échec d'amélioration n'annule pas la collecte ni ne bloque la réserve", async () => {
+  it("un échec d'amélioration conserve l'exposition inconnue sans annuler la collecte", async () => {
     const enhance = vi.fn(async (): Promise<string> => {
       throw new Error("simulation");
     });
@@ -116,6 +116,8 @@ describe("KORA — réserve budgétaire des résumés IA", () => {
     expect(response.status).toBe(200);
     expect(response.body.newObservations).toBe(1);
     expect(enhance).toHaveBeenCalledTimes(1);
-    expect((await repo.getSettings()).reservedEur).toBe(0);
+    // La fonction simulée échoue : l'orchestrateur ne peut pas prouver
+    // que la requête fournisseur n'a pas été facturée.
+    expect((await repo.getSettings()).reservedEur).toBeCloseTo(COSTS.summary);
   });
 });
