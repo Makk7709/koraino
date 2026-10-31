@@ -34,7 +34,7 @@ class FakeTables {
     const previousAlerts = Array.isArray(existing["notifiedAlerts"])
       ? existing["notifiedAlerts"] as string[] : [];
     this.settings = {
-      ...existing,
+      ...Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'wordpress')),
       quotaLimits: structuredClone(next.quotaLimits),
       storageBaseGb: next.storageBaseGb,
       notifiedAlerts: [...new Set([...previousAlerts, ...next.notifiedAlerts])].sort(),
