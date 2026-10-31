@@ -107,7 +107,7 @@ export function ArticleHeader({
     <section className="kora-card p-4">
       <div className="flex items-start gap-3.5">
         {company ? (
-          <BrandMark name={company.name} brand={company.brand} size="lg" />
+          <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="lg" />
         ) : (
           <IconTile
             icon={isImport ? UserPen : FileText}

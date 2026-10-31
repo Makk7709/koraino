@@ -53,7 +53,7 @@ function CompanyCard({
       )}
     >
       <div className="flex items-start gap-3">
-        <BrandMark name={c.name} brand={c.brand} size="lg" />
+        <BrandMark name={c.name} brand={c.brand} domain={c.domain} size="lg" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-bold text-kora-ink group-hover:text-kora-teal-dark">
             {c.name}
