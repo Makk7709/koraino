@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { paidAttemptSchema, validateUsageLines, type PaidAttemptInput, type PaidAttemptRecord, type ReserveResult } from "./paid-attempts";
+import type { UsageEntry } from "./records";
 import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
@@ -117,6 +119,42 @@ export class DbRepository implements Repository {
   examples = new DbCollection<any>("examples");
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
+  paidAttempts = {
+    reserve: async (attempt: PaidAttemptInput): Promise<ReserveResult> => {
+      paidAttemptSchema.parse(attempt);
+      const { data, error } = await (await db()).rpc("kora_paid_reserve" as never, { p_attempt: attempt } as never);
+      if (error) throw new Error(`Budget reservation failed: ${error.code ?? "database_error"}`);
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid reservation response");
+      const result = data as unknown as ReserveResult;
+      if (result.ok === true) return { ok: true };
+      if (result.ok === false && typeof result.reason === "string" && typeof result.suspending === "boolean") return result;
+      throw new Error("Invalid reservation response");
+    },
+    start: async (id: string): Promise<void> => {
+      const { data, error } = await (await db()).rpc("kora_paid_start" as never, { p_id: id } as never);
+      if (error || data !== true) throw new Error(`Paid attempt start failed: ${error?.code ?? "invalid_response"}`);
+    },
+    unknown: async (id: string, code: "provider_or_callback_error" | "persist_error"): Promise<void> => {
+      const { data, error } = await (await db()).rpc("kora_paid_unknown" as never, { p_id: id, p_code: code } as never);
+      if (error || data !== true) throw new Error(`Paid attempt unknown-state failed: ${error?.code ?? "invalid_response"}`);
+    },
+    finish: async (id: string, lines: UsageEntry[], status: "settled" | "not_sent"): Promise<void> => {
+      const existing = await this.paidAttempts.get(id);
+      if (!existing) throw new Error("Paid attempt not found");
+      validateUsageLines(lines, id, existing.estimateEur);
+      const { data, error } = await (await db()).rpc("kora_paid_finish" as never, {
+        p_id: id, p_lines: lines, p_status: status,
+      } as never);
+      if (error || data !== true) throw new Error(`Paid attempt finish failed: ${error?.code ?? "invalid_response"}`);
+    },
+    get: async (id: string): Promise<PaidAttemptRecord | undefined> => {
+      const { data, error } = await (await db()).from("kora_records").select("data")
+        .eq("collection", "paid_attempts").eq("id", id).maybeSingle();
+      if (error) throw new Error("Paid attempt lookup failed");
+      return (data?.data as unknown as PaidAttemptRecord | undefined) ?? undefined;
+    },
+  };
+
   audit = new DbCollection<any>("audit");
   notifications = new DbCollection<any>("notifications");
 
