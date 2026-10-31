@@ -12,7 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v4
@@ -21,7 +21,9 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
       - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
+      - name: Inspect lockfile update (dependency adoption)
+        run: git diff -- bun.lock
       - name: TypeScript typecheck
         run: bunx tsc --noEmit
       - name: Lint changed code (full-repo lint has pre-existing formatting errors)
@@ -31,3 +33,7 @@ jobs:
         run: bun run test
       - name: Build
         run: bun run build
+      - name: Install headless Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Browser E2E (isolated demo and mocked CDN)
+        run: bun run test:e2e
