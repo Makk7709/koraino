@@ -29,7 +29,7 @@ BEGIN
   ) AS combined
  ) AS a;
  UPDATE public.kora_settings
- SET data = v_current || jsonb_build_object(
+ SET data = (v_current - 'wordpress') || jsonb_build_object(
     'quotaLimits', p_data->'quotaLimits',
     'storageBaseGb', p_data->'storageBaseGb',
     'notifiedAlerts', v_alerts
