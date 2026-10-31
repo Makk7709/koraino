@@ -172,7 +172,12 @@ export function SourceRegistry({
                     <Td className="max-w-[230px]">
                       <div className="flex items-center gap-2.5">
                         {company ? (
-                          <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="md" />
+                          <BrandMark
+                            name={company.name}
+                            brand={company.brand}
+                            domain={company.domain}
+                            size="md"
+                          />
                         ) : (
                           <span className="size-10 shrink-0 rounded-lg bg-muted" />
                         )}
