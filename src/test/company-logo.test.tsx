@@ -19,6 +19,8 @@ describe("Brandfetch company logos", () => {
     "",
     "localhost",
     "127.0.0.1",
+    "192.168.1.1",
+    "example.123",
     "http://example.com",
     "foo/bar.com",
     "example..com",

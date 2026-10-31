@@ -9,6 +9,8 @@ export function companyLogoUrl(
 ): string | null {
   const host = domain?.trim().toLowerCase();
   const id = clientId?.trim();
-  if (!host || !DOMAIN_PATTERN.test(host) || !id || !CLIENT_ID_PATTERN.test(id)) return null;
+  // A numeric top-level label is not a public DNS TLD; reject dotted IP addresses too.
+  if (!host || !DOMAIN_PATTERN.test(host) || /\.\d+$/.test(host)) return null;
+  if (!id || !CLIENT_ID_PATTERN.test(id)) return null;
   return `https://cdn.brandfetch.io/domain/${host}/fallback/404?c=${encodeURIComponent(id)}`;
 }
