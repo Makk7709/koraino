@@ -44,7 +44,7 @@ function PostCard({
       </div>
       <div className="mt-2 flex gap-2.5">
         {company ? (
-          <BrandMark name={company.name} brand={company.brand} size="md" />
+          <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="md" />
         ) : (
           <span className="size-10 shrink-0 overflow-hidden rounded-lg">
             <LandscapeThumb className="block size-full" />

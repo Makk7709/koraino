@@ -333,7 +333,7 @@ export function PostDetail({
           <Meta icon={Clock}>Modifié {formatRelative(post.updatedAt)}</Meta>
           {company && (
             <span className="inline-flex items-center gap-1.5">
-              <BrandMark name={company.name} brand={company.brand} size="xs" />
+              <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="xs" />
               {company.name}
             </span>
           )}

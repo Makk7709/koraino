@@ -119,7 +119,7 @@ export function AddTopicsPanel({
                 return (
                   <li key={s.id} className={cn(rowClass, added && "bg-muted/40")}>
                     {company ? (
-                      <BrandMark name={company.name} brand={company.brand} size="sm" />
+                      <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="sm" />
                     ) : (
                       <span className="size-8 shrink-0 rounded-lg bg-muted" />
                     )}
