@@ -1,3 +1,4 @@
+import type { PaidAttemptsRepository } from "./paid-attempts";
 import type { WordPressSettings } from "@/lib/api/types";
 import type {
   ArticleRecord,
@@ -52,6 +53,7 @@ export interface Repository {
   examples: Collection<EditorialExample>;
   ruleProposals: Collection<RuleProposalRecord>;
   usage: Collection<UsageEntry>;
+  paidAttempts: PaidAttemptsRepository;
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;
   getSettings(): Promise<Settings>;
