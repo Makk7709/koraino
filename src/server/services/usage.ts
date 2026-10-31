@@ -180,22 +180,32 @@ export async function paidCall<T>(
   }
 
   try {
-  const usage = actual
-    ? actual(result)
-    : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
-  const lines: UsageEntry[] = [];
-  let remaining = call.estimate;
-  for (const line of usage) {
-    if (line.costEur <= 0 && line.units <= 0) continue;
-    if (!Number.isFinite(line.costEur) || !Number.isFinite(line.units) ||
-        line.costEur < 0 || line.units < 0) throw new Error("Invalid usage line");
-    const cost = Math.max(0, Math.min(line.costEur, remaining));
-    remaining -= cost;
-    lines.push({
-      id: `${id}:line:${lines.length}`, at: now.toISOString(), kind: line.kind,
-      units: line.units, costEur: Math.round(cost * 10000) / 10000, label: line.label,
-    });
-  }
+    const usage = actual
+      ? actual(result)
+      : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
+    const lines: UsageEntry[] = [];
+    let remaining = call.estimate;
+    for (const line of usage) {
+      if (line.costEur <= 0 && line.units <= 0) continue;
+      if (
+        !Number.isFinite(line.costEur) ||
+        !Number.isFinite(line.units) ||
+        line.costEur < 0 ||
+        line.units < 0
+      ) {
+        throw new Error("Invalid usage line");
+      }
+      const cost = Math.max(0, Math.min(line.costEur, remaining));
+      remaining -= cost;
+      lines.push({
+        id: `${id}:line:${lines.length}`,
+        at: now.toISOString(),
+        kind: line.kind,
+        units: line.units,
+        costEur: Math.round(cost * 10000) / 10000,
+        label: line.label,
+      });
+    }
     // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
     // The budget lock also protects legacy settings writes during A3 transition.
     await withBudgetLock(repo, () => repo.paidAttempts.finish(id, lines, "settled"));
