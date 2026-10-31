@@ -9,6 +9,7 @@ import {
 import { LINKEDIN_CONNECTOR_ID } from "./connectors";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
+import { estimatedTextAiCost } from "../services/ai-estimate";
 import { renderNewsletterHtml, renderNewsletterText } from "../domain/newsletter";
 import { assertCan } from "../domain/permissions";
 import { isoDay } from "../domain/dates";
@@ -127,7 +128,7 @@ async function generateLinkedIn(
     ctx,
     {
       kind: "generation_linkedin",
-      estimate: COSTS.linkedin,
+      estimate: estimatedTextAiCost(COSTS.linkedin),
       units: 1,
       label: `Post LinkedIn : ${title}`,
     },

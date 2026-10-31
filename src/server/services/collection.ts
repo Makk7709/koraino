@@ -29,6 +29,7 @@ import type {
 import { notify } from "./journal";
 import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
+import { improveSummary } from "./summary-ai";
 import { paidCall, type UsageLine } from "./usage";
 
 /** Nombre maximal d'essais par exécution (§6 : tentatives bornées), sur erreur transitoire seulement. */
@@ -292,16 +293,20 @@ function replaceSignal(
  * critique de l'ingestion. Sans clé IA, rien n'est appelé ni réécrit.
  */
 async function enhanceSummaries(
-  repo: Pick<Ctx, "repo">["repo"],
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
   pending: CollectState["pendingSummaries"],
 ): Promise<void> {
-  const ai = adapters().ai;
-  if (!ai || pending.length === 0) return;
+  if (!adapters().ai || pending.length === 0) return;
   await parallel(pending, CONCURRENCY, async (p) => {
-    const summary = await ai.enhanceSummary({ title: p.title, text: p.text }, p.base);
+    const summary = await improveSummary(ctx, { title: p.title, text: p.text }, p.base);
     if (summary === p.base) return;
-    const current = await repo.signals.get(p.signalId);
-    if (current) await repo.signals.update({ ...current, summary });
+    // Failure to persist an optional improvement must not invalidate ingested signals.
+    try {
+      const current = await ctx.repo.signals.get(p.signalId);
+      if (current) await ctx.repo.signals.update({ ...current, summary });
+    } catch {
+      console.warn(JSON.stringify({ event: "kora.summary.persist_failed" }));
+    }
   });
 }
 
@@ -479,7 +484,7 @@ function estimatePerSource(): number {
     const reserve = Number(raw);
 
     if (!raw || !Number.isFinite(reserve) || reserve <= 0) {
-      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenRouter absente ou invalide.");
+      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide.");
     }
 
     fallbackReserve = reserve;
@@ -645,7 +650,7 @@ async function runBatch(
   for (const [i, source] of sources.entries()) {
     runs.push(await settle(ctx, state, source, outcomes[i]!, bases.get(source.id)!));
   }
-  await enhanceSummaries(repo, state.pendingSummaries.splice(0));
+  await enhanceSummaries(ctx, state.pendingSummaries.splice(0));
   return runs;
 }
 

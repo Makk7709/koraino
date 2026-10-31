@@ -3,7 +3,7 @@ import { CATEGORIES } from "../validation";
 
 /** La classification seule est orchestrée ici ; la génération éditoriale reste inchangée. */
 export const PRIMARY_CLASSIFICATION_MODEL = "claude-haiku-5-5";
-export const FALLBACK_CLASSIFICATION_MODEL = "gpt-4o-mini";
+export const FALLBACK_CLASSIFICATION_MODEL = "gpt-4.1-mini";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -61,16 +61,37 @@ function parseObject(raw: string | null): Partial<ContentAssessment> | null {
   }
 }
 
-/** Pas de bascule sur crédits épuisés, facturation, authentification ou erreur de requête. */
-function isRetryable(status: number, payload: unknown): boolean {
+/**
+ * Fail-closed: rate_limit_error alone does not prove a temporary limit.
+ * Financial and ambiguous 429 errors must not trigger a secondary paid provider.
+ */
+export function isRetryable(status: number, payload: unknown): boolean {
   if (status === 408 || status >= 500) return true;
-  if (status !== 429 || !payload || typeof payload !== "object") return false;
-  const error = (payload as { error?: { type?: string; code?: string } }).error;
-  return (
-    error?.type === "rate_limit_error" ||
-    error?.code === "rate_limit_exceeded" ||
-    error?.code === "slow_down"
+  if (status !== 429 || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const raw = (payload as Record<string, unknown>)["error"];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const error = raw as Record<string, unknown>;
+  if (error["type"] !== "rate_limit_error") return false;
+  const details = error["details"];
+  const detailCode =
+    details && typeof details === "object" && !Array.isArray(details)
+      ? (details as Record<string, unknown>)["error_code"]
+      : null;
+  const fields = [error["code"], detailCode, error["message"]].filter(
+    (v): v is string => typeof v === "string",
   );
+  if (
+    fields.some((v) =>
+      /spend|credit|billing|payment|balance|budget|financial|exhausted|quota|limit_reached/i.test(
+        v,
+      ),
+    )
+  ) {
+    return false;
+  }
+  return error["code"] === "rate_limit_exceeded" || error["code"] === "slow_down";
 }
 
 async function anthropic(input: ClassificationInput): Promise<ProviderResponse> {

@@ -2,6 +2,7 @@ import type { NewsletterItem } from "@/lib/api/types";
 import { adapters } from "../adapters";
 import type { Ctx } from "../context";
 import { COSTS } from "../domain/budget";
+import { estimatedTextAiCost } from "./ai-estimate";
 import { addDays, dayStart, HOUR, mondayOf } from "../domain/dates";
 import { invalidateApproval, MODIFIED_AFTER_APPROVAL } from "../domain/workflow";
 import { conflict, notFound } from "../http";
@@ -157,7 +158,7 @@ async function insertItem(
     ctx,
     {
       kind: "generation_summary",
-      estimate: COSTS.summary,
+      estimate: estimatedTextAiCost(COSTS.summary),
       units: 1,
       label: `Résumé newsletter : ${title}`,
     },

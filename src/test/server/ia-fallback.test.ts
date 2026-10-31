@@ -25,7 +25,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
+describe("KORA — Claude Haiku 5.5 principal, GPT-4.1 mini en repli", () => {
   it("utilise Haiku en premier et pas OpenAI s'il répond", async () => {
     configure();
     const mock = vi.fn(async (..._args: unknown[]) => haikuSuccess());
@@ -39,7 +39,7 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
     expect(body.output_config.format.type).toBe("json_schema");
   });
 
-  it("bascule sur GPT-4o mini après un HTTP 503 de Haiku", async () => {
+  it("bascule sur GPT-4.1 mini après un HTTP 503 de Haiku", async () => {
     configure();
     const mock = vi
       .fn()
@@ -47,11 +47,11 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
       .mockResolvedValueOnce(openaiSuccess());
     vi.stubGlobal("fetch", mock);
     const assessment = await new OpenAiEnhancer().classify(input);
-    expect(assessment).toMatchObject({ category: "partenariat", model: "gpt-4o-mini" });
+    expect(assessment).toMatchObject({ category: "partenariat", model: "gpt-4.1-mini" });
     expect(mock).toHaveBeenCalledTimes(2);
     expect(String(mock.mock.calls[1]?.[0])).toContain("api.openai.com");
     const body = JSON.parse(String((mock.mock.calls[1]?.[1] as RequestInit).body));
-    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.model).toBe("gpt-4.1-mini");
   });
 
   it("retourne null si les deux fournisseurs échouent", async () => {
@@ -78,17 +78,51 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
-  it("bascule sur un HTTP 429 correspondant à rate_limit_error", async () => {
+  it("bloque le repli sur rate_limit_error ambigu", async () => {
+    configure();
+    const mock = vi.fn(async () =>
+      Response.json({ error: { type: "rate_limit_error" } }, { status: 429 }),
+    );
+    vi.stubGlobal("fetch", mock);
+    expect(await new OpenAiEnhancer().classify(input)).toBeNull();
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("autorise le repli sur un 429 explicitement transitoire", async () => {
     configure();
     const mock = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({ error: { type: "rate_limit_error" } }, { status: 429 }),
+        Response.json(
+          {
+            error: { type: "rate_limit_error", code: "rate_limit_exceeded" },
+          },
+          { status: 429, headers: { "retry-after": "2" } },
+        ),
       )
       .mockResolvedValueOnce(openaiSuccess());
     vi.stubGlobal("fetch", mock);
-    expect((await new OpenAiEnhancer().classify(input))?.model).toBe("gpt-4o-mini");
+    expect((await new OpenAiEnhancer().classify(input))?.model).toBe("gpt-4.1-mini");
     expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("interdit le repli sur un plafond financier 429", async () => {
+    configure();
+    const mock = vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            type: "rate_limit_error",
+            code: "rate_limit_exceeded",
+            details: { error_code: "enforced_spend_limit_reached" },
+          },
+        },
+        { status: 429 },
+      ),
+    );
+    vi.stubGlobal("fetch", mock);
+    expect(await new OpenAiEnhancer().classify(input)).toBeNull();
+    expect(mock).toHaveBeenCalledTimes(1);
   });
 
   it("ne bascule pas sur un HTTP 429 de crédits épuisés", async () => {
@@ -119,7 +153,7 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
-  it("ne contacte pas GPT-4o mini sans clé Haiku", async () => {
+  it("ne contacte pas GPT-4.1 mini sans clé Haiku", async () => {
     configure();
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     const mock = vi.fn(async () => openaiSuccess());
@@ -135,7 +169,7 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4o mini en repli", () => {
       .mockResolvedValueOnce(Response.json({ content: [{ type: "text", text: "invalid" }] }))
       .mockResolvedValueOnce(openaiSuccess());
     vi.stubGlobal("fetch", mock);
-    expect((await new OpenAiEnhancer().classify(input))?.model).toBe("gpt-4o-mini");
+    expect((await new OpenAiEnhancer().classify(input))?.model).toBe("gpt-4.1-mini");
     expect(mock).toHaveBeenCalledTimes(2);
   });
 });

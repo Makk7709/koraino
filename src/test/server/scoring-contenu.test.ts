@@ -55,7 +55,7 @@ describe("évaluation du contenu par le modèle", () => {
       category: "contrat",
       importance: 77,
       reason: "Contrat cadre",
-      model: "gpt-4o-mini",
+      model: "claude-haiku-5-5",
     });
     expect(toAssessment({ category: "autre" as never, importance: 50, reason: "x" })).toBeNull();
     expect(toAssessment({ category: "contrat", importance: 140, reason: "x" })).toBeNull();

@@ -8,7 +8,7 @@ import { TemplateTextModel, type TextModel } from "./text-model";
 /** Adaptateurs tiers : remplaçables sans toucher au domaine (modèle, collecte, canaux). */
 export interface Adapters {
   textModel: TextModel;
-  /** Amélioration IA des textes (OpenAI) — absente sans clé AI_API_KEY. */
+  /** Amélioration IA des textes (Haiku 5.5 ; GPT-4.1 mini en repli explicite). */
   ai: AiTextEnhancer | null;
   collector: Collector;
   /** Résolution des redirections Google News vers l'adresse de l'article (jamais sous Vitest). */
@@ -48,10 +48,4 @@ export function setAdapters(partial: Partial<Adapters>): void {
 
 export function resetAdapters(): void {
   (globalThis as Record<string, unknown>)[KEY] = defaults();
-}
-
-/** Résumé : gabarit par défaut, amélioré par l'IA quand une clé est configurée. */
-export async function enhanceSummary(input: { title: string; text: string }): Promise<string> {
-  const base = adapters().textModel.summarize(input);
-  return (await adapters().ai?.enhanceSummary(input, base)) ?? base;
 }
