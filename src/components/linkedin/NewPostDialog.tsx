@@ -86,7 +86,12 @@ function NewPostForm({
                     {selected && <Check className="size-3" strokeWidth={3} />}
                   </span>
                   {company ? (
-                    <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="sm" />
+                    <BrandMark
+                      name={company.name}
+                      brand={company.brand}
+                      domain={company.domain}
+                      size="sm"
+                    />
                   ) : (
                     <span className="size-8 shrink-0 rounded-lg bg-muted" />
                   )}
