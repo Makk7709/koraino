@@ -1,5 +1,7 @@
 # KORA Newsroom — Jalon classification multilingue FR/EN et routage IA
 
+> **Archive du 30/10/2026 — ne pas utiliser comme état courant de l'architecture.** Ce jalon v1.1 décrit la classification seule avec GPT-4o mini en secours. La migration locale du 31/10/2026 vers Haiku 5.5 principal / GPT-4.1 mini en secours pour les chemins éditoriaux, ainsi que les correctifs A1/A2, sont décrits dans [le jalon v1.2](2026-10-31-correctifs-ia-a1-a2-v1.2.md). Le texte historique ci-dessous est conservé sans réécriture ; v1.2 n'est pas une homologation production.
+
 **Version documentaire :** 1.1 — 30 octobre 2026
 **Statut :** jalon technique intermédiaire ; **38 tests ciblés réussis**, **non homologué pour production**
 **Branche locale :** `fix/kora-classification-multilingue`
