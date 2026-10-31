@@ -217,19 +217,6 @@ export async function paidCall<T>(
   return result;
 }
 
-/** Libérée après l'enregistrement du coût réel : à aucun moment l'appel n'échappe au plafond. */
-async function releaseReservation(repo: Repository, amount: number): Promise<void> {
-  const release = async () => {
-    const s = await repo.getSettings();
-    s.reservedEur = Math.max(0, s.reservedEur - amount);
-    await repo.saveSettings(s);
-  };
-  await withBudgetLock(repo, release).catch(async (e: unknown) => {
-    console.error("[budget] réservation libérée hors verrou", e);
-    await release();
-  });
-}
-
 /** Les appels payants sont-ils suspendus ce mois-ci ? */
 export async function paidCallsSuspended(repo: Repository, now: Date): Promise<boolean> {
   return (await usageSnapshot(repo, now)).paidCallsSuspended;
