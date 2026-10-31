@@ -15,6 +15,13 @@
       "when": 1791842259799,
       "tag": "0001_app_user_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793476800000,
+      "tag": "0002_kora_paid_attempts",
+      "breakpoints": true
     }
   ]
 }
