@@ -183,4 +183,62 @@ describe("KORA A3 / P1-11 — tentatives payantes", () => {
     expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(COSTS.summary);
   });
 
+  it("persiste un dépassement estimatif intégral et conserve la réserve sans usage", async () => {
+    const c = await ctx();
+    const before = (await c.repo.usage.list()).length;
+    const result = await paidCall(
+      c,
+      { kind: "generation_summary", estimate: 0.02, units: 1, label: "Overrun test" },
+      async () => "result available",
+      () => [{ kind: "generation_summary", costEur: 0.03, units: 1, label: "Estimate 0.03" }],
+    );
+    expect(result).toBe("result available");
+    expect((await c.repo.usage.list()).length).toBe(before);
+    expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(0.02);
+    // The reservation is held and the estimate is persisted, not silently clipped.
+    const attempted = await c.repo.paidAttempts.get("pat_n1001");
+    expect(attempted).toMatchObject({
+      status: "unknown", failureCode: "estimated_overrun",
+      estimateEur: 0.02, estimatedCostEur: 0.03,
+      estimatedOverrunEur: 0.01,
+    });
+    expect(attempted?.estimatedUsageLines?.[0]?.costEur).toBe(0.03);
+  });
+
+  it("persiste les coûts inférieurs à la réserve sans troncature", async () => {
+    const c = await ctx();
+    const before = (await c.repo.usage.list()).length;
+    await paidCall(
+      c,
+      { kind: "generation_summary", estimate: 0.02, units: 1, label: "Under reserve" },
+      async () => "ok",
+      () => [{ kind: "generation_summary", costEur: 0.015, units: 1, label: "Estimate 0.015" }],
+    );
+    const newLines = (await c.repo.usage.list()).slice(before);
+    expect(newLines).toHaveLength(1);
+    expect(newLines[0]!.costEur).toBe(0.015);
+    expect((await c.repo.getSettings()).reservedEur).toBe(0);
+  });
+
+  it("n'accepte ni rejeu contradictoire ni écriture de dépassement sur settled", async () => {
+    const c = await ctx();
+    const { monthKey } = await import("@/server/domain/dates");
+    const id = c.repo.nextId("pat");
+    await c.repo.paidAttempts.reserve({
+      id, workspaceId: c.repo.workspaceId, month: monthKey(NOW),
+      kind: "generation_summary", estimateEur: 0.02, units: 1,
+      label: "Replay overrun", createdAt: NOW.toISOString(),
+    });
+    await c.repo.paidAttempts.start(id);
+    const lines = [{
+      id: `${id}:line:0`, at: NOW.toISOString(),
+      kind: "generation_summary" as const, units: 1, costEur: 0.03, label: "Replay",
+    }];
+    await c.repo.paidAttempts.overrun(id, lines);
+    await c.repo.paidAttempts.overrun(id, lines);
+    expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(0.02);
+    await expect(c.repo.paidAttempts.overrun(id, [{ ...lines[0]!, costEur: 0.04 }]))
+      .rejects.toThrow();
+  });
+
 });
