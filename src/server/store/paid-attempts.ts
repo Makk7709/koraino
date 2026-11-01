@@ -1,6 +1,18 @@
 import { z } from "zod";
 import type { UsageEntry, UsageKind } from "./records";
 
+/** Monetary precision is strict and shared by RPC callers and the HTTP/server boundary. */
+export function isFourDecimalMoney(value: number): boolean {
+  const scaled = value * 10_000;
+  return (
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= 100_000 &&
+    Number.isSafeInteger(Math.round(scaled)) &&
+    Math.abs(scaled - Math.round(scaled)) <= 1e-7
+  );
+}
+
 const kinds = z.enum([
   "generation_article",
   "generation_linkedin",
@@ -27,7 +39,7 @@ export const paidAttemptSchema = z
     workspaceId: z.string().min(1),
     month: z.string().regex(/^\d{4}-\d{2}$/),
     kind: kinds,
-    estimateEur: z.number().finite().positive(),
+    estimateEur: z.number().finite().positive().refine(isFourDecimalMoney, "Invalid estimated cost precision"),
     units: z.number().finite().nonnegative(),
     label: z.string().min(1).max(500),
     createdAt: z.string().datetime({ offset: true }),

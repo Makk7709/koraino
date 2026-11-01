@@ -12,7 +12,7 @@ import { monthKey } from "../domain/dates";
 import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
 import type { Repository } from "../store/repository";
-import { validateEstimatedUsageLines } from "../store/paid-attempts";
+import { isFourDecimalMoney, validateEstimatedUsageLines } from "../store/paid-attempts";
 import { audit, notify } from "./journal";
 import { withLock } from "./locks";
 
@@ -145,6 +145,9 @@ export async function paidCall<T>(
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
+  if (!isFourDecimalMoney(call.estimate)) {
+    throw new Error("Invalid paid attempt estimate precision");
+  }
   // Unique attempt per invocation. Persisted before any potentially paid work.
   const id = repo.nextId("pat");
   const reservation = await withBudgetLock(repo, () =>
@@ -254,6 +257,9 @@ export async function paidCall<T>(
     return result;
   }
 
+  let finishAttempted = false;
+  let expectedSettlementLines: UsageEntry[] | undefined;
+  let settlementConfirmedAfterLostAck = false;
   try {
     const usage = actual
       ? actual(result)
@@ -302,12 +308,15 @@ export async function paidCall<T>(
     }
     // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
     // The budget lock also protects legacy settings writes during A3 transition.
+    expectedSettlementLines = lines;
+    finishAttempted = true;
     await withBudgetLock(repo, () => repo.paidAttempts.finish(id, lines, "settled"));
   } catch (error: unknown) {
-    // Keep the reservation; transaction may have committed despite a lost response.
-    let persistedStatus: string | undefined;
+    // A committed finish() can lose its HTTP acknowledgement. Accept only an
+    // independently read, *exactly matching* settled ledger for this attempt.
+    let persisted: Awaited<ReturnType<typeof repo.paidAttempts.get>>;
     try {
-      persistedStatus = (await repo.paidAttempts.get(id))?.status;
+      persisted = await repo.paidAttempts.get(id);
     } catch (readError: unknown) {
       console.error(
         JSON.stringify({
@@ -317,19 +326,45 @@ export async function paidCall<T>(
         }),
       );
     }
-    if (!persistedStatus || persistedStatus === "in_flight") {
-      await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
-        console.error(
-          JSON.stringify({
-            event: "kora.paid_attempt.settlement_uncertain",
-            attemptId: id,
-            errorType: stateError instanceof Error ? stateError.name : "unknown",
-          }),
+    const matchesCommittedLines =
+      finishAttempted &&
+      expectedSettlementLines !== undefined &&
+      persisted?.status === "settled" &&
+      persisted.usageLines.length === expectedSettlementLines.length &&
+      persisted.usageLines.every((line, index) => {
+        const expected = expectedSettlementLines?.[index];
+        return (
+          expected !== undefined &&
+          line.id === expected.id &&
+          line.at === expected.at &&
+          line.kind === expected.kind &&
+          line.units === expected.units &&
+          line.costEur === expected.costEur &&
+          line.label === expected.label
         );
       });
+    if (matchesCommittedLines) {
+      settlementConfirmedAfterLostAck = true;
+      console.warn(JSON.stringify({ event: "kora.paid_attempt.finish_ack_recovered", attemptId: id }));
+    } else {
+      if (!persisted || persisted.status === "in_flight") {
+        await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
+          console.error(
+            JSON.stringify({
+              event: "kora.paid_attempt.settlement_uncertain",
+              attemptId: id,
+              errorType: stateError instanceof Error ? stateError.name : "unknown",
+            }),
+          );
+        });
+      }
+      // Unknown or mismatched state is never promoted to success.
+      throw error;
     }
-    // Never overwrite an already durable estimated_overrun with a generic persistence code.
-    throw error;
+  }
+  if (settlementConfirmedAfterLostAck) {
+    // Acknowledgement was lost, but the matching durable outcome was verified.
+    // Cross-request idempotency still requires a stable business key (A4).
   }
   await checkAlerts(repo, now).catch((e: unknown) => {
     console.error(

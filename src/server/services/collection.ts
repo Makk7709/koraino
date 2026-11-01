@@ -31,6 +31,7 @@ import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
 import { improveSummary } from "./summary-ai";
 import { paidCall, type UsageLine } from "./usage";
+import { isFourDecimalMoney } from "../store/paid-attempts";
 
 /** Nombre maximal d'essais par exécution (§6 : tentatives bornées), sur erreur transitoire seulement. */
 export const MAX_ATTEMPTS = 3;
@@ -411,8 +412,8 @@ async function fetchOutcome(
 function fallbackCostEstimate(): number {
   const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
   const value = raw ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(value) || value <= 0) {
-    throw budgetExhausted("Réserve de repli IA absente ou invalide.");
+  if (!isFourDecimalMoney(value)) {
+    throw budgetExhausted("Réserve de repli IA absente ou invalide (quatre décimales maximum).");
   }
   return value;
 }
@@ -484,16 +485,21 @@ function estimatePerSource(): number {
     const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
     const reserve = Number(raw);
 
-    if (!raw || !Number.isFinite(reserve) || reserve <= 0) {
-      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide.");
+    if (!raw || !isFourDecimalMoney(reserve)) {
+      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide (quatre décimales maximum).");
     }
 
     fallbackReserve = reserve;
   }
 
-  const perItem = COSTS.observation + (aiEnabled ? COSTS.classification : 0) + fallbackReserve;
-
-  return COSTS.search + MAX_ITEMS * perItem;
+  // Exact budget unit: each configured component must already have four-decimal precision.
+  const perItemUnits =
+    Math.round(COSTS.observation * 10_000) +
+    (aiEnabled ? Math.round(COSTS.classification * 10_000) : 0) +
+    Math.round(fallbackReserve * 10_000);
+  const estimate = (Math.round(COSTS.search * 10_000) + MAX_ITEMS * perItemUnits) / 10_000;
+  if (!isFourDecimalMoney(estimate)) throw budgetExhausted("Réserve de collecte invalide.");
+  return estimate;
 }
 
 /** Suite d'une exécution après l'appel réseau : état de la source, ingestion, exécution consignée. */

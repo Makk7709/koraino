@@ -3,6 +3,7 @@ import type { ApiErrorBody, CollectionRun, Source, UsageSnapshot } from "@/lib/a
 import { setAdapters } from "@/server/adapters";
 import { OpenAiEnhancer } from "@/server/adapters/openai";
 import { COSTS } from "@/server/domain/budget";
+import { estimatedTextAiCost } from "@/server/services/ai-estimate";
 import { getRepository } from "@/server/store/memory";
 import { call, setup, teardown } from "./helpers";
 
@@ -12,6 +13,22 @@ describe("KORA — budget de la bascule IA", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     teardown();
+  });
+
+  it("refuse une réserve de secours avec cinq décimales", () => {
+    vi.stubEnv("KORA_AI_FALLBACK_ENABLED", "true");
+    vi.stubEnv("ANTHROPIC_API_KEY", "fake-haiku");
+    vi.stubEnv("AI_API_KEY", "fake-openai");
+    vi.stubEnv("KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL", "0.00001");
+    expect(() => estimatedTextAiCost(COSTS.summary)).toThrow();
+  });
+
+  it("accepte une réserve exacte sur quatre décimales", () => {
+    vi.stubEnv("KORA_AI_FALLBACK_ENABLED", "true");
+    vi.stubEnv("ANTHROPIC_API_KEY", "fake-haiku");
+    vi.stubEnv("AI_API_KEY", "fake-openai");
+    vi.stubEnv("KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL", "0.0001");
+    expect(estimatedTextAiCost(COSTS.summary)).toBe(0.0201);
   });
 
   it("refuse la collecte si le budget ne couvre pas deux modèles", async () => {

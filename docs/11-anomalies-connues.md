@@ -221,3 +221,8 @@ Ces points ne sont pas des bugs mais des choix que le code fait implicitement et
 | Score affiché | Avec un point (« 9.2 »), comme la maquette, et non au format français (« 9,2 »). | Garder la maquette ou passer au format français ? |
 | Quotas `search_queries` et `observations` | Mesurés, avec alertes, mais non bloquants. | Doivent-ils bloquer la collecte à 100 % ? |
 | Poids de la grille de score | Grille v1 : importance 30, nouveauté 20, territoire 20, lecteurs 20, diffusion 10. Sur le pilote, `territoire` vaut 95 pour toutes les entreprises (toutes à Inovallée) et `lecteurs` ne dépend que du thème : 40 % du score ne discriminent rien, et les scores se concentrent entre 72 et 82 autour du seuil « prioritaire ». | Créer une grille v2 depuis Paramètres → Grille de score, par exemple importance 40, nouveauté 20, territoire 5, lecteurs 15, diffusion 20, tant que le registre reste à Inovallée ; revoir `territoire` si des entreprises hors bassin entrent. |
+
+
+## Revue PR #4 — 01/11/2026 : suivi des durcissements A3
+
+Sur la branche A3 uniquement, la migration additive `0006_kora_paid_accounting_guards.sql` refuse les estimations monétaires non multiples de 0,0001 € et interdit le remplacement du motif d'un état `unknown`. `paidCall` peut reconnaître une finalisation `settled` avec ledger exactement identique après perte de son accusé, sans produire une erreur trompeuse. Tests unitaires et du banc PostgreSQL ajoutés ; résultats de la nouvelle CI à vérifier après commit. **Réserve résiduelle :** l'idempotence entre requêtes HTTP métier différentes reste hors de ce correctif, notamment en cas de timeout côté client. A4/A5 et P1-11 pour les autres opérations composées restent ouverts.

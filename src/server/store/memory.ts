@@ -112,6 +112,10 @@ export class MemoryRepository implements Repository {
       const a = this.attempts.get(id);
       if (!a || !["in_flight", "unknown"].includes(a.status))
         throw new Error("Paid attempt not in flight");
+      if (a.status === "unknown") {
+        if (a.failureCode === code) return;
+        throw new Error("Conflicting unknown-state replay");
+      }
       this.attempts.set(id, {
         ...a,
         status: "unknown",

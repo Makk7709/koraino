@@ -80,9 +80,30 @@ async function main(): Promise<void> {
   assert.equal(attempt?.estimatedUsageLines?.[0]?.costEur, 0.03);
   assert.equal(attempt?.usageLines.length, 0);
   await repo.paidAttempts.overrun(id, attempt.estimatedUsageLines!);
+  await assert.rejects(repo.paidAttempts.unknown(id, "persist_error"));
+  assert.equal((await repo.paidAttempts.get(id))?.failureCode, "estimated_overrun");
   await assert.rejects(
     repo.paidAttempts.overrun(id, [{ ...attempt.estimatedUsageLines![0]!, costEur: 0.04 }]),
   );
+
+  // SQL must reject fractional-cent reservations even from a direct service_role RPC.
+  const fractional = await supabaseAdmin.rpc(
+    "kora_paid_reserve" as never,
+    {
+      p_attempt: {
+        id: repo.nextId("pat"),
+        workspaceId: "kora",
+        month: now.toISOString().slice(0, 7),
+        kind,
+        estimateEur: 0.02001,
+        units: 1,
+        label: "fractional-cent SQL attempt",
+        createdAt: now.toISOString(),
+      },
+    } as never,
+  );
+  assert.ok(fractional.error, "SQL accepted a reserve with five decimal places");
+  assert.equal((await repo.getSettings()).reservedEur, 0.02);
 
   // service_role may not perform administrator-only reconciliation.
   const denied = await supabaseAdmin.rpc(

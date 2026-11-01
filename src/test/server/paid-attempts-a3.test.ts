@@ -121,6 +121,101 @@ describe("KORA A3 / P1-11 — tentatives payantes", () => {
     ).rejects.toThrow("Paid attempt replay conflict");
   });
 
+  it("récupère la finalisation lorsque son accusé est perdu et que le ledger correspond", async () => {
+    const c = await ctx();
+    const originalFinish = c.repo.paidAttempts.finish;
+    let supplierCalls = 0;
+    c.repo.paidAttempts.finish = async (id, lines, status) => {
+      await originalFinish(id, lines, status);
+      throw new Error("finish acknowledgement lost");
+    };
+    try {
+      const value = await paidCall(
+        c,
+        { kind: "generation_summary", estimate: 0.02, units: 1, label: "Lost finish ACK" },
+        async () => {
+          supplierCalls++;
+          return "provider result";
+        },
+      );
+      expect(value).toBe("provider result");
+      expect(supplierCalls).toBe(1);
+      expect(await c.repo.paidAttempts.get("pat_n1001")).toMatchObject({ status: "settled" });
+      expect((await c.repo.getSettings()).reservedEur).toBe(0);
+      expect((await c.repo.usage.list()).filter((v) => v.id === "pat_n1001:line:0")).toHaveLength(1);
+    } finally {
+      c.repo.paidAttempts.finish = originalFinish;
+    }
+  });
+
+  it("refuse une fausse confirmation de finalisation si le ledger diffère", async () => {
+    const c = await ctx();
+    const originalFinish = c.repo.paidAttempts.finish;
+    c.repo.paidAttempts.finish = async (id, lines) => {
+      await originalFinish(id, [{ ...lines[0]!, label: "Different committed ledger" }], "settled");
+      throw new Error("settled but contradictory ledger");
+    };
+    try {
+      await expect(
+        paidCall(
+          c,
+          { kind: "generation_summary", estimate: 0.02, units: 1, label: "Contradictory" },
+          async () => "result",
+        ),
+      ).rejects.toThrow("settled but contradictory ledger");
+      expect(await c.repo.paidAttempts.get("pat_n1001")).toMatchObject({ status: "settled" });
+    } finally {
+      c.repo.paidAttempts.finish = originalFinish;
+    }
+  });
+
+  it("refuse la réserve de précision supérieure à quatre décimales avant appel fournisseur", async () => {
+    const c = await ctx();
+    let invoked = false;
+    await expect(
+      paidCall(
+        c,
+        { kind: "generation_summary", estimate: 0.02001, units: 1, label: "Invalid reserve" },
+        async () => {
+          invoked = true;
+          return "unexpected";
+        },
+      ),
+    ).rejects.toThrow("Invalid paid attempt estimate precision");
+    expect(invoked).toBe(false);
+    expect((await c.repo.getSettings()).reservedEur).toBe(0);
+    await expect(
+      c.repo.paidAttempts.reserve({
+        id: "pat_invalid",
+        workspaceId: c.repo.workspaceId,
+        month: NOW.toISOString().slice(0, 7),
+        kind: "generation_summary",
+        estimateEur: 0.02001,
+        units: 1,
+        label: "Invalid direct reserve",
+        createdAt: NOW.toISOString(),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("ne modifie pas le motif estimated_overrun sur rejeu unknown contradictoire", async () => {
+    const c = await ctx();
+    await paidCall(
+      c,
+      { kind: "generation_summary", estimate: 0.02, units: 1, label: "Overrun immutable" },
+      async () => "ok",
+      () => [{ kind: "generation_summary", units: 1, costEur: 0.03, label: "Overrun" }],
+    );
+    await expect(c.repo.paidAttempts.unknown("pat_n1001", "persist_error")).rejects.toThrow(
+      "Conflicting unknown-state replay",
+    );
+    expect(await c.repo.paidAttempts.get("pat_n1001")).toMatchObject({
+      status: "unknown",
+      failureCode: "estimated_overrun",
+      estimatedCostEur: 0.03,
+    });
+  });
+
   it("un appel jamais envoyé peut être libéré explicitement avec preuve", async () => {
     const c = await ctx();
     const id = c.repo.nextId("pat");
