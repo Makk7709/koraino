@@ -20,6 +20,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 | [08 — Guide utilisateur](08-guide-utilisateur.md) | Mode d'emploi écran par écran et parcours types. | Équipe éditoriale, ingénieurs en recette |
 | [09 — Exploitation](09-exploitation.md) | Tests, déploiement, supervision, procédures d'incident, sauvegarde, exports, rétention. | Ingénieurs, exploitation |
 | [10 — Couverture du cahier des charges](10-couverture-cahier-des-charges.md) | Statut de chaque exigence, préparation des épreuves R01 à R13, reste à faire. | Chef de projet, ingénieurs |
+| [A3 / P1-11 — Validation financière (01/11/2026)](2026-11-01-a3-p1-11-validation.md) | Flux payants, migrations 0002–0005, tests d'intégration, CI, rapprochement et risques résiduels. | Ingénieurs, sécurité, exploitation |
 | [11 — Anomalies connues](11-anomalies-connues.md) | Bugs, incohérences et écarts relevés dans le code, classés par priorité, avec emplacement et piste de correction. | Ingénieurs, chef de projet |
 
 ## Parcours de lecture conseillés

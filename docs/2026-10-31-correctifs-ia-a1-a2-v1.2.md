@@ -129,3 +129,8 @@ Les prompts considèrent les textes collectés comme des données non fiables. L
 - Tests : `src/test/server/ia-fallback.test.ts`, `src/test/server/ia-haiku-editorial.test.ts`, `src/test/server/ia-resumes-budget.test.ts`.
 
 **Changement documenté, non déployé.** Aucune fusion dans `main` n'est couverte par ce document.
+
+
+## Addendum du 01/11/2026 — A3
+
+La mention « A3 ouvert » ci-dessus décrit la situation au 31 octobre et demeure une **information historique**. Le correctif A3/P1-11 a depuis été implémenté et publié sur `fix/kora-a3-tracabilite-appels-payants`, commit de référence `2a5c1b3`, avec conservation des réservations inconnues, journalisation des dépassements (`0005`) et réconciliation DBA (`0004`). 664 tests Vitest réussis localement ; tests SQL isolés et lecture réelle PostgreSQL locale réussis. Des jobs GitHub Actions et un banc de mutation isolé sont ajoutés et restent à confirmer par leurs exécutions. Les risques A4/A5 et la validation production restent ouverts. Voir [le rapport A3](2026-11-01-a3-p1-11-validation.md).
