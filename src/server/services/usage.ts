@@ -12,6 +12,7 @@ import { monthKey } from "../domain/dates";
 import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
 import type { Repository } from "../store/repository";
+import { validateEstimatedUsageLines } from "../store/paid-attempts";
 import { audit, notify } from "./journal";
 import { withLock } from "./locks";
 
@@ -230,7 +231,24 @@ export async function paidCall<T>(
 
   // A usable fallback result does not prove that an earlier timeout was free.
   // Retain the full reservation for administrator reconciliation.
-  if (billingUncertain?.(result)) {
+  let hasBillingUncertainty = false;
+  try {
+    hasBillingUncertainty = billingUncertain?.(result) ?? false;
+  } catch (error: unknown) {
+    await repo.paidAttempts
+      .unknown(id, "provider_or_callback_error")
+      .catch((stateError: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "kora.paid_attempt.billing_uncertainty_persist_failed",
+            attemptId: id,
+            errorType: stateError instanceof Error ? stateError.name : "unknown",
+          }),
+        );
+      });
+    throw error;
+  }
+  if (hasBillingUncertainty) {
     await repo.paidAttempts.unknown(id, "provider_or_callback_error");
     console.warn(JSON.stringify({ event: "kora.paid_attempt.billing_uncertain", attemptId: id }));
     return result;
@@ -241,7 +259,6 @@ export async function paidCall<T>(
       ? actual(result)
       : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
     const lines: UsageEntry[] = [];
-    let remaining = call.estimate;
     for (const line of usage) {
       if (line.costEur <= 0 && line.units <= 0) continue;
       if (
@@ -252,8 +269,14 @@ export async function paidCall<T>(
       ) {
         throw new Error("Invalid usage line");
       }
-      const cost = Math.max(0, Math.min(line.costEur, remaining));
-      remaining -= cost;
+      const cost = line.costEur;
+      const costUnits = cost * 10000;
+      if (
+        !Number.isSafeInteger(Math.round(costUnits)) ||
+        Math.abs(costUnits - Math.round(costUnits)) > 1e-7
+      ) {
+        throw new Error("Invalid usage cost precision");
+      }
       lines.push({
         id: `${id}:line:${lines.length}`,
         at: now.toISOString(),
@@ -263,20 +286,49 @@ export async function paidCall<T>(
         label: line.label,
       });
     }
+    const total = validateEstimatedUsageLines(lines, id);
+    if (total > call.estimate + 1e-9) {
+      await repo.paidAttempts.overrun(id, lines);
+      console.warn(
+        JSON.stringify({
+          event: "kora.paid_attempt.estimated_overrun",
+          attemptId: id,
+          reservedEur: call.estimate,
+          estimatedCostEur: total,
+          overrunEur: Math.round((total - call.estimate) * 10000) / 10000,
+        }),
+      );
+      return result;
+    }
     // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
     // The budget lock also protects legacy settings writes during A3 transition.
     await withBudgetLock(repo, () => repo.paidAttempts.finish(id, lines, "settled"));
   } catch (error: unknown) {
     // Keep the reservation; transaction may have committed despite a lost response.
-    await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
+    let persistedStatus: string | undefined;
+    try {
+      persistedStatus = (await repo.paidAttempts.get(id))?.status;
+    } catch (readError: unknown) {
       console.error(
         JSON.stringify({
-          event: "kora.paid_attempt.settlement_uncertain",
+          event: "kora.paid_attempt.settlement_state_read_failed",
           attemptId: id,
-          errorType: stateError instanceof Error ? stateError.name : "unknown",
+          errorType: readError instanceof Error ? readError.name : "unknown",
         }),
       );
-    });
+    }
+    if (!persistedStatus || persistedStatus === "in_flight") {
+      await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "kora.paid_attempt.settlement_uncertain",
+            attemptId: id,
+            errorType: stateError instanceof Error ? stateError.name : "unknown",
+          }),
+        );
+      });
+    }
+    // Never overwrite an already durable estimated_overrun with a generic persistence code.
     throw error;
   }
   await checkAlerts(repo, now).catch((e: unknown) => {
