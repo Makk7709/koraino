@@ -32,9 +32,10 @@ class FakeTables {
     const existing = (this.settings ?? {}) as Record<string, unknown>;
     const { wordpress: _unused, ...next } = args.p_data;
     const previousAlerts = Array.isArray(existing["notifiedAlerts"])
-      ? existing["notifiedAlerts"] as string[] : [];
+      ? (existing["notifiedAlerts"] as string[])
+      : [];
     this.settings = {
-      ...Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'wordpress')),
+      ...Object.fromEntries(Object.entries(existing).filter(([key]) => key !== "wordpress")),
       quotaLimits: structuredClone(next.quotaLimits),
       storageBaseGb: next.storageBaseGb,
       notifiedAlerts: [...new Set([...previousAlerts, ...next.notifiedAlerts])].sort(),
@@ -277,14 +278,21 @@ describe("Correspondance des catégories WordPress hors des réglages partagés 
     tables.settings = { ...legacy, reservedEur: 0, notifiedAlerts: [] };
     const stale = await db.getSettings();
     tables.settings = {
-      ...legacy, reservedEur: 0.02, paidCallsSuspended: true,
-      suspendedMonth: "2026-10", notifiedAlerts: ["2026-10:api_budget_eur:atteint"],
+      ...legacy,
+      reservedEur: 0.02,
+      paidCallsSuspended: true,
+      suspendedMonth: "2026-10",
+      notifiedAlerts: ["2026-10:api_budget_eur:atteint"],
     };
     await db.saveSettings({
-      ...stale, reservedEur: 0, notifiedAlerts: ["2026-10:articles:seuil_80"],
+      ...stale,
+      reservedEur: 0,
+      notifiedAlerts: ["2026-10:articles:seuil_80"],
     });
     expect(tables.settings).toMatchObject({
-      reservedEur: 0.02, paidCallsSuspended: true, suspendedMonth: "2026-10",
+      reservedEur: 0.02,
+      paidCallsSuspended: true,
+      suspendedMonth: "2026-10",
       notifiedAlerts: ["2026-10:api_budget_eur:atteint", "2026-10:articles:seuil_80"],
     });
     expect(tables.log).toContain("settings.rpc");

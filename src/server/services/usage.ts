@@ -146,11 +146,18 @@ export async function paidCall<T>(
   const month = monthKey(now);
   // Unique attempt per invocation. Persisted before any potentially paid work.
   const id = repo.nextId("pat");
-  const reservation = await withBudgetLock(repo, () => repo.paidAttempts.reserve({
-    id, workspaceId: repo.workspaceId, month,
-    kind: call.kind, estimateEur: call.estimate, units: call.units,
-    label: call.label, createdAt: now.toISOString(),
-  }));
+  const reservation = await withBudgetLock(repo, () =>
+    repo.paidAttempts.reserve({
+      id,
+      workspaceId: repo.workspaceId,
+      month,
+      kind: call.kind,
+      estimateEur: call.estimate,
+      units: call.units,
+      label: call.label,
+      createdAt: now.toISOString(),
+    }),
+  );
   if (!reservation.ok) {
     if (reservation.suspending) {
       await audit(ctx, "quota.suspension", "quota", "api_budget_eur", reservation.reason, "KORA");
@@ -184,18 +191,22 @@ export async function paidCall<T>(
         disposition = "unknown";
       }
     } catch (recoveryError: unknown) {
-      console.error(JSON.stringify({
-        event: "kora.paid_attempt.start_recovery_failed",
-        attemptId: id,
-        errorType: recoveryError instanceof Error ? recoveryError.name : "unknown",
-      }));
+      console.error(
+        JSON.stringify({
+          event: "kora.paid_attempt.start_recovery_failed",
+          attemptId: id,
+          errorType: recoveryError instanceof Error ? recoveryError.name : "unknown",
+        }),
+      );
     }
-    console.error(JSON.stringify({
-      event: "kora.paid_attempt.start_failed",
-      attemptId: id,
-      disposition,
-      errorType: error instanceof Error ? error.name : "unknown",
-    }));
+    console.error(
+      JSON.stringify({
+        event: "kora.paid_attempt.start_failed",
+        attemptId: id,
+        disposition,
+        errorType: error instanceof Error ? error.name : "unknown",
+      }),
+    );
     throw error;
   }
   let result: T;
@@ -203,12 +214,17 @@ export async function paidCall<T>(
     result = await fn();
   } catch (error: unknown) {
     // Even if callback rejects, a supplier might already have billed the request.
-    await repo.paidAttempts.unknown(id, "provider_or_callback_error").catch((stateError: unknown) => {
-      console.error(JSON.stringify({
-        event: "kora.paid_attempt.unknown_persist_failed", attemptId: id,
-        errorType: stateError instanceof Error ? stateError.name : "unknown",
-      }));
-    });
+    await repo.paidAttempts
+      .unknown(id, "provider_or_callback_error")
+      .catch((stateError: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "kora.paid_attempt.unknown_persist_failed",
+            attemptId: id,
+            errorType: stateError instanceof Error ? stateError.name : "unknown",
+          }),
+        );
+      });
     throw error;
   }
 
@@ -253,18 +269,23 @@ export async function paidCall<T>(
   } catch (error: unknown) {
     // Keep the reservation; transaction may have committed despite a lost response.
     await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
-      console.error(JSON.stringify({
-        event: "kora.paid_attempt.settlement_uncertain", attemptId: id,
-        errorType: stateError instanceof Error ? stateError.name : "unknown",
-      }));
+      console.error(
+        JSON.stringify({
+          event: "kora.paid_attempt.settlement_uncertain",
+          attemptId: id,
+          errorType: stateError instanceof Error ? stateError.name : "unknown",
+        }),
+      );
     });
     throw error;
   }
   await checkAlerts(repo, now).catch((e: unknown) => {
-    console.error(JSON.stringify({
-      event: "kora.budget.alert_check_failed",
-      errorType: e instanceof Error ? e.name : "unknown",
-    }));
+    console.error(
+      JSON.stringify({
+        event: "kora.budget.alert_check_failed",
+        errorType: e instanceof Error ? e.name : "unknown",
+      }),
+    );
   });
   return result;
 }

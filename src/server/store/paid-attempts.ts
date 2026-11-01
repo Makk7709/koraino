@@ -2,29 +2,37 @@ import { z } from "zod";
 import type { UsageEntry, UsageKind } from "./records";
 
 const kinds = z.enum([
-  "generation_article", "generation_linkedin", "generation_summary",
-  "classification", "search_query", "observation",
+  "generation_article",
+  "generation_linkedin",
+  "generation_summary",
+  "classification",
+  "search_query",
+  "observation",
 ]);
 
-export const usageEntrySchema = z.object({
-  id: z.string().min(1),
-  at: z.string().datetime({ offset: true }),
-  kind: kinds,
-  units: z.number().finite().nonnegative(),
-  costEur: z.number().finite().nonnegative(),
-  label: z.string().min(1).max(500),
-}).strict();
+export const usageEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    at: z.string().datetime({ offset: true }),
+    kind: kinds,
+    units: z.number().finite().nonnegative(),
+    costEur: z.number().finite().nonnegative(),
+    label: z.string().min(1).max(500),
+  })
+  .strict();
 
-export const paidAttemptSchema = z.object({
-  id: z.string().min(5),
-  workspaceId: z.string().min(1),
-  month: z.string().regex(/^\d{4}-\d{2}$/),
-  kind: kinds,
-  estimateEur: z.number().finite().positive(),
-  units: z.number().finite().nonnegative(),
-  label: z.string().min(1).max(500),
-  createdAt: z.string().datetime({ offset: true }),
-}).strict();
+export const paidAttemptSchema = z
+  .object({
+    id: z.string().min(5),
+    workspaceId: z.string().min(1),
+    month: z.string().regex(/^\d{4}-\d{2}$/),
+    kind: kinds,
+    estimateEur: z.number().finite().positive(),
+    units: z.number().finite().nonnegative(),
+    label: z.string().min(1).max(500),
+    createdAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
 
 export type PaidAttemptInput = z.infer<typeof paidAttemptSchema>;
 export type PaidAttemptStatus =
@@ -36,14 +44,16 @@ export type PaidAttemptStatus =
   | "reconciled_billed"
   | "reconciled_not_billed";
 
-export const reconciliationEvidenceSchema = z.object({
-  source: z.enum(["provider_invoice", "provider_usage_export", "provider_support_confirmation"]),
-  reference: z.string().min(6).max(256),
-  operator: z.string().min(3).max(128),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  currency: z.literal("EUR"),
-  checkedAt: z.string().datetime({ offset: true }),
-}).strict();
+export const reconciliationEvidenceSchema = z
+  .object({
+    source: z.enum(["provider_invoice", "provider_usage_export", "provider_support_confirmation"]),
+    reference: z.string().min(6).max(256),
+    operator: z.string().min(3).max(128),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    currency: z.literal("EUR"),
+    checkedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
 
 export type PaidReconciliationEvidence = z.infer<typeof reconciliationEvidenceSchema>;
 export type PaidReconciliation = {
@@ -69,9 +79,7 @@ export type PaidAttemptRecord = PaidAttemptInput & {
   budgetOverrunAtReconciliation?: boolean;
 };
 
-export type ReserveResult =
-  | { ok: true }
-  | { ok: false; suspending: boolean; reason: string };
+export type ReserveResult = { ok: true } | { ok: false; suspending: boolean; reason: string };
 
 export interface PaidAttemptsRepository {
   reserve(attempt: PaidAttemptInput): Promise<ReserveResult>;
@@ -81,7 +89,11 @@ export interface PaidAttemptsRepository {
   get(id: string): Promise<PaidAttemptRecord | undefined>;
 }
 
-export function validateUsageLines(lines: UsageEntry[], id: string, estimate: number): UsageEntry[] {
+export function validateUsageLines(
+  lines: UsageEntry[],
+  id: string,
+  estimate: number,
+): UsageEntry[] {
   let total = 0;
   for (const [index, line] of lines.entries()) {
     usageEntrySchema.parse(line);

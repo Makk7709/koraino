@@ -134,7 +134,9 @@ async function anthropic(input: ClassificationInput): Promise<ProviderResponse> 
         }
       }
       return {
-        raw: null, retryable: isRetryable(response.status, payload), attempted: true,
+        raw: null,
+        retryable: isRetryable(response.status, payload),
+        attempted: true,
         billingUncertain: response.status === 408 || response.status >= 500,
       };
     }
@@ -174,10 +176,13 @@ async function openaiFallback(input: ClassificationInput): Promise<ProviderRespo
       }),
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) return {
-      raw: null, retryable: false, attempted: true,
-      billingUncertain: response.status === 408 || response.status >= 500,
-    };
+    if (!response.ok)
+      return {
+        raw: null,
+        retryable: false,
+        attempted: true,
+        billingUncertain: response.status === 408 || response.status >= 500,
+      };
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return {
       raw: data.choices?.[0]?.message?.content?.trim() || null,
@@ -209,7 +214,12 @@ export async function classifyHaikuWithFallback(
   const assessment = validate(parseObject(primary.raw), PRIMARY_CLASSIFICATION_MODEL);
   const primaryCalls = Number(primary.attempted);
   if (assessment || !primary.retryable || !fallbackAuthorized()) {
-    return { assessment, primaryCalls, fallbackCalls: 0, billingUncertain: primary.billingUncertain };
+    return {
+      assessment,
+      primaryCalls,
+      fallbackCalls: 0,
+      billingUncertain: primary.billingUncertain,
+    };
   }
   const backup = await openaiFallback(input);
   return {
