@@ -27,7 +27,12 @@ function fakeAi(enhanceSummary: AiTextEnhancer["enhanceSummary"]): AiTextEnhance
     enhanceLinkedInVariants: async (_input, base) => base,
     enhanceSummary,
     classify: async () => null,
-    classifyWithUsage: async () => ({ assessment: null, primaryCalls: 1, fallbackCalls: 0 }),
+    classifyWithUsage: async () => ({
+      assessment: null,
+      primaryCalls: 1,
+      fallbackCalls: 0,
+      billingUncertain: false,
+    }),
   };
 }
 
