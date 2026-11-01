@@ -163,8 +163,40 @@ export async function paidCall<T>(
     throw budgetExhausted(reservation.reason);
   }
 
-  // If this acknowledgement is lost, do not release: the DB may have entered in_flight.
-  await repo.paidAttempts.start(id);
+  // A failed acknowledgement is ambiguous: the database may have committed start().
+  // The provider callback has NOT run. Resolve only from a confirmed durable state.
+  try {
+    await repo.paidAttempts.start(id);
+  } catch (error: unknown) {
+    let disposition = "unresolved";
+    try {
+      const attempt = await repo.paidAttempts.get(id);
+      if (attempt?.status === "reserved") {
+        // DB confirms the attempt never entered in_flight; no provider work was started.
+        await repo.paidAttempts.finish(id, [], "not_sent");
+        disposition = "not_sent";
+      } else if (attempt?.status === "in_flight") {
+        // The write committed but its acknowledgement was lost. Preserve exposure.
+        await repo.paidAttempts.unknown(id, "persist_error");
+        disposition = "unknown";
+      } else if (attempt?.status === "unknown") {
+        disposition = "unknown";
+      }
+    } catch (recoveryError: unknown) {
+      console.error(JSON.stringify({
+        event: "kora.paid_attempt.start_recovery_failed",
+        attemptId: id,
+        errorType: recoveryError instanceof Error ? recoveryError.name : "unknown",
+      }));
+    }
+    console.error(JSON.stringify({
+      event: "kora.paid_attempt.start_failed",
+      attemptId: id,
+      disposition,
+      errorType: error instanceof Error ? error.name : "unknown",
+    }));
+    throw error;
+  }
   let result: T;
   try {
     result = await fn();
