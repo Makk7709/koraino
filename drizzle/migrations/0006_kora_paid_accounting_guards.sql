@@ -74,7 +74,7 @@ RETURNS boolean
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_count integer;
   v_attempt jsonb;
