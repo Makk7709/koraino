@@ -41,7 +41,8 @@ async function main(): Promise<void> {
 
   // Settled: only measured cost is journalized, reservation released.
   const settled = await paidCall(
-    ctx, { kind, estimate: 0.02, units: 1, label: "A3 settlement" },
+    ctx,
+    { kind, estimate: 0.02, units: 1, label: "A3 settlement" },
     async () => "ok",
     () => [{ kind, costEur: 0.015, units: 1, label: "A3 settlement" }],
   );
@@ -54,14 +55,18 @@ async function main(): Promise<void> {
 
   // Overrun: persist the FULL estimate, hold reservation and do not write usage.
   const value = await paidCall(
-    ctx, { kind, estimate: 0.02, units: 1, label: "A3 overrun" },
+    ctx,
+    { kind, estimate: 0.02, units: 1, label: "A3 overrun" },
     async () => "result",
     () => [{ kind, costEur: 0.03, units: 1, label: "A3 overrun" }],
   );
   assert.equal(value, "result");
   assert.equal((await repo.usage.list()).length, 1);
   assert.equal((await repo.getSettings()).reservedEur, 0.02);
-  const rows = await supabaseAdmin.from("kora_records").select("id,data").eq("collection", "paid_attempts");
+  const rows = await supabaseAdmin
+    .from("kora_records")
+    .select("id,data")
+    .eq("collection", "paid_attempts");
   assert.equal(rows.error, null);
   const unknown = (rows.data ?? []).filter(
     (r) => (r.data as Record<string, unknown>)["failureCode"] === "estimated_overrun",
@@ -88,11 +93,16 @@ async function main(): Promise<void> {
 
   // Two concurrent reservations: spent .015 + held .02 leaves .015 of .05 budget.
   const base = {
-    workspaceId: "kora", month: now.toISOString().slice(0, 7),
-    kind, estimateEur: 0.01, units: 1,
-    label: "A3 concurrency", createdAt: now.toISOString(),
+    workspaceId: "kora",
+    month: now.toISOString().slice(0, 7),
+    kind,
+    estimateEur: 0.01,
+    units: 1,
+    label: "A3 concurrency",
+    createdAt: now.toISOString(),
   };
-  const a = repo.nextId("pat"), b = repo.nextId("pat");
+  const a = repo.nextId("pat"),
+    b = repo.nextId("pat");
   const results = await Promise.all([
     repo.paidAttempts.reserve({ ...base, id: a }),
     repo.paidAttempts.reserve({ ...base, id: b }),
@@ -102,11 +112,15 @@ async function main(): Promise<void> {
   await repo.paidAttempts.finish(results[0]!.ok ? a : b, [], "not_sent");
   assert.equal((await repo.getSettings()).reservedEur, 0.02);
   assert.equal((await repo.usage.list()).length, 1);
-  console.log(JSON.stringify({
-    event: "a3.db_repository.integration_pass",
-    settledCostEur: 0.015, overrunCostEur: 0.03,
-    retainedReserveEur: 0.02, concurrentReservationsAccepted: 1,
-    reconciliationViaHttpDenied: true,
-  }));
+  console.log(
+    JSON.stringify({
+      event: "a3.db_repository.integration_pass",
+      settledCostEur: 0.015,
+      overrunCostEur: 0.03,
+      retainedReserveEur: 0.02,
+      concurrentReservationsAccepted: 1,
+      reconciliationViaHttpDenied: true,
+    }),
+  );
 }
 await main();
