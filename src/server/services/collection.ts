@@ -367,6 +367,7 @@ async function assessItems(
         classificationUsage: {
           primaryCalls: measured.primaryCalls,
           fallbackCalls: measured.fallbackCalls,
+          billingUncertain: measured.billingUncertain,
         },
       };
     }
@@ -619,6 +620,9 @@ async function runBatch(
       },
       () => parallel(sources, CONCURRENCY, (s) => fetchOutcome(ctx, state, s, companyOf(s))),
       (outs) => outs.flatMap((o, i) => usageLines(state, sources[i]!, o)),
+      (outs) => outs.some((o) => o.result.ok && o.result.items.some(
+        (item) => item.classificationUsage?.billingUncertain === true,
+      )),
     );
   } catch (e) {
     if (!(e instanceof HttpError)) throw e;
