@@ -34,6 +34,7 @@ export interface RawItem {
   classificationUsage?: {
     primaryCalls: number;
     fallbackCalls: number;
+    billingUncertain?: boolean;
   };
 }
 
