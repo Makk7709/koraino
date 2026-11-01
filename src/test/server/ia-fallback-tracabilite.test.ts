@@ -103,6 +103,9 @@ describe("KORA — traçabilité du repli IA", () => {
 
     const estimatedCost = entries.reduce((total, entry) => total + entry.costEur, 0);
 
-    expect(estimatedCost).toBeCloseTo(COSTS.classification * 2, 6);
+    // An ambiguous 503 can be billed despite a successful OpenAI fallback.
+    // Do not settle estimated usage until an administrator reconciles the provider evidence.
+    expect(estimatedCost).toBe(0);
+    expect((await repo.getSettings()).reservedEur).toBeGreaterThan(0);
   });
 });
