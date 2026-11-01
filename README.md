@@ -35,7 +35,7 @@ La collecte est réelle et se lance à la main (« Lancer la collecte » sur la 
 - Le marqueur « [À vérifier] » suit un fait non corroboré jusque dans l'extrait WordPress, les variantes LinkedIn et les résumés de newsletter ; une réécriture par le modèle qui le perdrait est ignorée.
 - Une nouvelle grille de score s'applique aussitôt aux signaux en cours ; les signaux traités ou rejetés gardent le score de leur décision.
 - Un même événement titré différemment par plusieurs médias est réuni en un signal (fenêtre de 7 jours autour de la date de publication, marqueurs communs : partenaire, sigle, montant) ; les pages de rubrique, de liste ou de pagination renvoyées par Perplexity sont écartées.
-- Avec une clé `AI_API_KEY`, chaque publication nouvelle est lue par le modèle à la collecte (catégorie, importance de 0 à 100, motif), lecture comptée dans le budget et resservie à chaque recalcul du score ; sans clé ou sans réponse, la catégorie vient d'indices lexicaux pondérés et l'importance de la catégorie.
+- Avec `ANTHROPIC_API_KEY`, le modèle principal Haiku 5.5 peut classer les nouvelles publications et améliorer les textes (classification, importance et motif) ; le modèle OpenAI GPT-4.1 mini est un secours explicitement conditionnel. En l'absence d'évaluation exploitable, le repli lexical ou les gabarits subsistent. Chaque tentative payante est soumise à la réservation et à la traçabilité A3 ([rapport technique](docs/2026-11-01-a3-p1-11-validation.md)).
 - La provenance de chaque publication (flux, Google News, Perplexity) est visible dans la fiche du signal et dans l'export des observations.
 
 ## Stack
@@ -98,7 +98,8 @@ Les variables publiques sont dans `.env` (versionné). Les secrets sont lus côt
 | `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY` | Connecteur LinkedIn de la passerelle (OAuth et publication au nom de l'utilisateur). **Secret.** |
 | `PERPLEXITY_API_KEY` | Facultative. Clé de la connexion Perplexity de la passerelle, pour enrichir les recherches presse. Sans elle, la collecte se fait avec Google News seul et l'historique des collectes indique « Non configuré ». **Secret.** |
 | `APP_USER_CONNECTION_KEY_SECRET` | Chiffrement des connexions LinkedIn stockées en base. **Secret, à ne jamais changer** : les connexions existantes deviendraient illisibles. |
-| `AI_API_KEY` | Facultative. Clé OpenAI pour réécrire les textes générés. **Secret.** |
+| `ANTHROPIC_API_KEY` | Facultative. Clé serveur Anthropic pour la classification et la réécriture principales (Haiku 5.5). **Secret.** |
+| `AI_API_KEY` | Facultative. Clé serveur OpenAI pour le secours GPT-4.1 mini, uniquement si le repli est explicitement configuré. **Secret.** |
 | `WORDPRESS_URL` | Adresse du site WordPress (`https://`, avec le sous-dossier d'installation éventuel). Les brouillons y sont envoyés par l'API REST. |
 | `WORDPRESS_USERNAME` | Identifiant du compte WordPress dédié à KORA, de rôle **Contributeur** : il crée des brouillons et ne peut rien publier. |
 | `WORDPRESS_APP_PASSWORD` | Mot de passe d'application de ce compte (Profil > Mots de passe d'application), pas son mot de passe de connexion. **Secret.** |

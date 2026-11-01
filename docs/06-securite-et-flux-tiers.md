@@ -37,7 +37,7 @@
 | Validation des entrées | Schémas zod, tailles bornées |
 | Filtrage SSRF | Sur les URL déclarées et les liens collectés ; ni sur les redirections ni sur les flux découverts |
 | Contenus externes | Nettoyage HTML, texte brut uniquement |
-| Base de données | Supabase de Lovable Cloud, accès serveur par clé de service, RLS sans policy, sans transaction, verrous applicatifs à expiration |
+| Base de données | Supabase de Lovable Cloud, accès serveur par clé de service, RLS sans policy, fonctions SQL transactionnelles pour appels payants A3, autres écritures composées sous verrous applicatifs à expiration |
 | Séparation de l'espace | Un seul espace, sans filtrage |
 | Journal d'audit | Écritures métier tracées, persistantes en base, sans protection en écriture |
 | En-têtes de sécurité | Absents, sauf `nosniff` sur les fichiers |
@@ -209,7 +209,7 @@ Hors tests, dès que `SUPABASE_URL` est définie, `getRepository()` ([`store/mem
 
 **Client navigateur réservé à l'authentification.** Lovable a généré un client Supabase pour le navigateur ([`client.ts`](../src/integrations/supabase/client.ts)), fondé sur la clé publique. Il ne sert qu'à Supabase Auth (connexion, mot de passe, rafraîchissement du jeton, voir [Session et identité](#session-et-identité)) : le navigateur ne lit ni n'écrit aucune table. Le middleware d'authentification Supabase généré ([`auth-middleware.ts`](../src/integrations/supabase/auth-middleware.ts)) n'est importé par aucun module.
 
-**Intégrité.** Chaque lecture ou écriture est une requête HTTP distincte vers l'API Supabase, sans transaction. Une opération qui modifie plusieurs enregistrements, comme la suppression d'une entreprise, une fusion de signaux ou une publication, peut s'arrêter à mi-chemin et laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des verrous à expiration : `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) insère une ligne de la collection `locks` de `kora_records`, et la clé primaire garantit un seul détenteur. Ces verrous couvrent la collecte, les générations d'articles et de posts LinkedIn, les newsletters, les conversions d'imports, les propositions de règles, le budget, les publications WordPress et LinkedIn, et la gestion des utilisateurs (voir [Architecture](02-architecture.md#persistance)). `saveSettings` réécrit tout le document de réglages, mais ses appels passent par le verrou `budget` (voir [Réservation avant l'appel](05-regles-metier.md#réservation-avant-lappel)). `list()` lit toute une collection par pages de 1 000 lignes triées par `created_at`, sans critère de départage : des lignes de même date situées en limite de page peuvent être omises ou lues deux fois.
+**Intégrité.** Les accès au Repository général passent par des requêtes HTTP indépendantes ; la sous-partie A3 des tentatives financières appelle toutefois des RPC SQL atomiques sur PostgreSQL (voir [A3/P1-11](2026-11-01-a3-p1-11-validation.md)). Une opération qui modifie plusieurs enregistrements, comme la suppression d'une entreprise, une fusion de signaux ou une publication, peut s'arrêter à mi-chemin et laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des verrous à expiration : `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) insère une ligne de la collection `locks` de `kora_records`, et la clé primaire garantit un seul détenteur. Ces verrous couvrent la collecte, les générations d'articles et de posts LinkedIn, les newsletters, les conversions d'imports, les propositions de règles, le budget, les publications WordPress et LinkedIn, et la gestion des utilisateurs (voir [Architecture](02-architecture.md#persistance)). `saveSettings` réécrit tout le document de réglages, mais ses appels passent par le verrou `budget` (voir [Réservation avant l'appel](05-regles-metier.md#réservation-avant-lappel)). `list()` lit toute une collection par pages de 1 000 lignes triées par `created_at`, sans critère de départage : des lignes de même date situées en limite de page peuvent être omises ou lues deux fois.
 
 ### Séparation de l'espace ws_inovallee
 
@@ -287,7 +287,8 @@ flowchart LR
 |---|---|---|---|---|---|
 | Supabase | Réel dès que `SUPABASE_URL` est définie, hors tests | Toutes les données métier et les réglages | `SUPABASE_SERVICE_ROLE_KEY` | Aucun fixé par le code | Hors budget KORA |
 | Supabase Auth | Réel en mode supabase | Adresses e-mail et mots de passe (navigateur) ; jetons à vérifier et adresses invitées (serveur) | `SUPABASE_PUBLISHABLE_KEY` (publique) ; `SUPABASE_SERVICE_ROLE_KEY` pour les invitations | Aucun fixé par le code | Hors budget KORA |
-| OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons ; à la collecte, titre et extrait nettoyés de chaque publication nouvelle avec le nom de l'entreprise (classification) | `AI_API_KEY` | 30 s par appel (15 s pour une classification) | Estimé par `COSTS` |
+| Anthropic (principal) | Prévu si `ANTHROPIC_API_KEY` est définie côté serveur | Classification FR/EN et réécriture éditoriale : titres et extraits/texte métier utiles | `ANTHROPIC_API_KEY` | Timeout borné dans les adaptateurs | Estimé dans KORA, non vérifié contre facture |
+| OpenAI (secours conditionnel) | Prévu si le repli est activé, clé `AI_API_KEY` présente et requête admissible | Même contexte d'édition ou de classification nécessaire à la reprise | `AI_API_KEY` | Timeout borné dans les adaptateurs | Estimé, rapprochement requis si incertain |
 | Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |
 | Perplexity | Réel si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, hors tests | Nom de l'entreprise, dans la requête de recherche | `LOVABLE_API_KEY`, `PERPLEXITY_API_KEY` | 20 s par requête | Coût réel non lu ; compris dans l'estimation de la collecte |
 | Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |
@@ -321,17 +322,11 @@ Sur Cloudflare Workers, chaque requête vers Supabase, Supabase Auth, OpenAI, Go
 
 **Données personnelles.** Supabase Auth détient les comptes : adresse e-mail, mot de passe défini par l'utilisateur, dates d'invitation et de confirmation. Il relève des mêmes conditions de sous-traitance que la base.
 
-### OpenAI
+### Fournisseurs IA : Anthropic principal et OpenAI de secours
 
-**Statut.** Réel dès que `AI_API_KEY` est définie côté serveur au premier appel des adaptateurs, hors tests ([`adapters/index.ts`](../src/server/adapters/index.ts)). Sans clé, aucun appel n'est émis et les gabarits produisent tous les textes.
+**État du code sur A3, non déployé :** la classification et la réécriture utilisent `claude-haiku-5-5` (Anthropic, `ANTHROPIC_API_KEY`) comme fournisseur principal. `gpt-4.1-mini` (OpenAI, `AI_API_KEY`) n'est un secours qu'en présence de sa clé, du drapeau explicite et d'une réservation suffisante ; un HTTP 429 financier ou ambigu bloque le repli. Sans clé principale, la voie de secours ne remplace pas automatiquement le principal : le classement lexical ou les gabarits restent disponibles.
 
-**Requête.** `POST https://api.openai.com/v1/chat/completions` ([`adapters/openai.ts`](../src/server/adapters/openai.ts)), avec l'en-tête `Authorization: Bearer <AI_API_KEY>`. Le corps contient le modèle `gpt-4o-mini`, une consigne système, un message utilisateur et une température de 0,4. Aucun identifiant d'utilisateur, aucun paramètre de conservation ni de région n'est transmis.
-
-**Réponse.** Seul le texte du premier choix est lu. Pour le dossier et LinkedIn, un objet JSON en est extrait ; pour les résumés, le texte est pris tel quel.
-
-**Délai et erreurs.** Chaque appel est interrompu après 30 secondes (`AbortSignal.timeout`). Les appels sont séquentiels : une collecte qui crée plusieurs signaux attend un résumé après l'autre. Toute erreur (réseau, délai, statut non 2xx, réponse vide ou mal formée) renvoie `null` et le texte du gabarit est conservé. Rien n'est journalisé.
-
-**Coût.** Le budget est réservé par unité selon `COSTS`, que le texte vienne d'OpenAI ou des gabarits. Le coût réel en jetons n'est ni lu ni enregistré (voir [Quotas et budget](05-regles-metier.md#quotas-et-budget)).
+**Protocole et données :** les adaptateurs `classification-providers.ts` et `openai.ts` appellent les API fournisseurs en HTTPS avec des contenus éditoriaux (titres, extraits, brouillons selon la fonction). Les clés sont serveur uniquement. Les délais explicites et les validations de réponses sont implémentés dans les adaptateurs ; les erreurs sont traitées selon leur classe. Les coûts sont réservés et enregistrés comme estimations, et non factures. En cas de facturation incertaine, A3 conserve la réserve dans une tentative `unknown`; toute réconciliation exige une preuve et le rôle DBA PostgreSQL (pas `service_role`). Les tests sont sur mocks et PostgreSQL jetable, **pas sur les API réelles**. Voir [A1/A2](2026-10-31-correctifs-ia-a1-a2-v1.2.md) et [A3/P1-11](2026-11-01-a3-p1-11-validation.md).
 
 **Données transmises.** Elles relèvent du §7 (RGPD, sous-traitants) :
 

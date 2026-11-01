@@ -134,3 +134,8 @@ Les prompts considèrent les textes collectés comme des données non fiables. L
 ## Addendum du 01/11/2026 — A3
 
 La mention « A3 ouvert » ci-dessus décrit la situation au 31 octobre et demeure une **information historique**. Le correctif A3/P1-11 a depuis été implémenté et publié sur `fix/kora-a3-tracabilite-appels-payants`, commit de référence `2a5c1b3`, avec conservation des réservations inconnues, journalisation des dépassements (`0005`) et réconciliation DBA (`0004`). 664 tests Vitest réussis localement ; tests SQL isolés et lecture réelle PostgreSQL locale réussis. Des jobs GitHub Actions et un banc de mutation isolé sont ajoutés et restent à confirmer par leurs exécutions. Les risques A4/A5 et la validation production restent ouverts. Voir [le rapport A3](2026-11-01-a3-p1-11-validation.md).
+
+
+## Addendum de suivi au 01/11/2026 — validation avant PR
+
+Les statuts « A3 ouvert » et « lint ciblé » dans le corps daté du 31/10/2026 conservent leur valeur historique mais ne reflètent **pas** le HEAD A3. Sur la branche `fix/kora-a3-tracabilite-appels-payants`, le commit `7a3211b` a passé [exécution GitHub Actions 41322429515](https://github.com/Makk7709/koraino/actions/runs/41322429515) : ESLint **global**, TypeScript, Vitest, build et tests réels `DbRepository` sur PostgreSQL isolé. La sous-partie A3 de P1-11 est corrigée sur branche ; les autres opérations composées, les verrous (A4), la mesure des factures fournisseurs (A5), les migrations distantes et la recette des API réelles demeurent ouverts. Voir [rapport A3/P1-11](2026-11-01-a3-p1-11-validation.md). Aucun déploiement ni fusion dans `main` n'est attesté.

@@ -20,7 +20,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 | [08 — Guide utilisateur](08-guide-utilisateur.md) | Mode d'emploi écran par écran et parcours types. | Équipe éditoriale, ingénieurs en recette |
 | [09 — Exploitation](09-exploitation.md) | Tests, déploiement, supervision, procédures d'incident, sauvegarde, exports, rétention. | Ingénieurs, exploitation |
 | [10 — Couverture du cahier des charges](10-couverture-cahier-des-charges.md) | Statut de chaque exigence, préparation des épreuves R01 à R13, reste à faire. | Chef de projet, ingénieurs |
-| [A3 / P1-11 — Validation financière (01/11/2026)](2026-11-01-a3-p1-11-validation.md) | Flux payants, migrations 0002–0005, tests d'intégration, CI, rapprochement et risques résiduels. | Ingénieurs, sécurité, exploitation |
+| [A3 / P1-11 — Validation financière (01/11/2026)](2026-11-01-a3-p1-11-validation.md) | Flux payants, migrations 0002–0005, CI et lint global validés sur 7a3211b, rapprochement, risques résiduels et périmètre de PR. | Ingénieurs, sécurité, exploitation |
 | [11 — Anomalies connues](11-anomalies-connues.md) | Bugs, incohérences et écarts relevés dans le code, classés par priorité, avec emplacement et piste de correction. | Ingénieurs, chef de projet |
 
 ## Parcours de lecture conseillés
@@ -37,7 +37,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 2. Contrat front/back figé dans `src/lib/api/` (types, client, hooks).
 3. API dans `src/server/` : routeur, handlers, services, domaine pur, repository, adaptateurs.
 4. Données **persistantes** dans la base Supabase (PostgreSQL) de Lovable Cloud, en JSONB ; la production démarre vide. Le jeu de démonstration qui reproduit la maquette ne sert plus qu'aux tests et à la démonstration locale (`SUPABASE_URL= bun run dev`).
-5. Textes générés par gabarits, réécrits par OpenAI (`gpt-4o-mini`) si `AI_API_KEY` est définie, avec repli automatique.
+5. Classification et réécriture IA : Claude Haiku 5.5 principal (`ANTHROPIC_API_KEY`), OpenAI GPT-4.1 mini en secours conditionnel (`AI_API_KEY`), et gabarits/classification lexicale en cas de refus ; aucune activation automatique du secours sans prérequis.
 6. Collecte **réelle** par flux RSS et Google News, complétée par une recherche Perplexity pour la presse ; publications de moins de 30 jours seulement, au plus 3 nouvelles par source ; déclenchée à la main, une collecte à la fois. Brouillons WordPress **réels** (compte Contributeur), simulés en démonstration ; newsletter en export ; LinkedIn publié par le compte relié de l'utilisateur, ou exporté. Le flux Google News est réservé par ses conditions à un usage personnel et non commercial : à faire valider avant production.
 7. Score éditorial 0–100 (affiché sur 10) issu d'une grille versionnée ; indicateur documentaire distinct.
 8. Toute diffusion exige une approbation valide de la version courante ; une modification l'invalide ; publication idempotente.

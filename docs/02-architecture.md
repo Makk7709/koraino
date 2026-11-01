@@ -48,7 +48,7 @@ flowchart LR
   C -- "fetch /api/*<br/>JSON + x-kora-request + jeton Bearer" --> R
   UI -. "connexion (mode supabase)" .-> SBA[(Supabase Auth)]
   RT -- "vérification du jeton" --> SBA
-  A -- "HTTPS (si AI_API_KEY)" --> OAI[(OpenAI)]
+  A -- "HTTPS, Haiku principal (si ANTHROPIC_API_KEY)" --> OAI[(Anthropic / OpenAI en secours)]
   A -- "HTTPS : flux RSS, Google News" --> WEB[(Sites des sources)]
   A -- "passerelle de connexion : Perplexity, LinkedIn" --> GW[(Passerelle de la plateforme)]
   A -- "HTTPS : API REST (si WORDPRESS_*)" --> WPX[(WordPress)]
@@ -175,7 +175,7 @@ Au premier usage, `ensureReady()` installe les grilles de score, les règles éd
 
 Limites à connaître :
 
-- **Pas de transactions** : chaque opération du `Repository` est une requête indépendante, et une opération composée interrompue (fusion de signaux, suppression d'une entreprise, publication) peut laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des **verrous à expiration** : `acquireLock` insère une ligne `locks` sans écraser, la clé primaire garantissant un seul détenteur, et `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) exécute l'opération puis libère le verrou. Un verrou déjà pris répond 409 tout de suite, ou après quelques secondes d'attente pour les sections courtes. Sont ainsi protégés : la collecte (un verrou global de 15 minutes, 409 `collection_in_progress`), les générations d'articles et de variantes LinkedIn (409 `generation_in_progress`), l'ajout de sujets aux newsletters (`generation_in_progress` ou `newsletter_busy`), la conversion d'un import (`conversion_in_progress`), la décision sur une proposition de règle (`already_decided`), le budget (verrou `budget`, `budget_busy`), les publications WordPress et LinkedIn (`publication_in_progress`) et la gestion des utilisateurs (`users_busy`). `saveSettings` réécrit tout le JSON des réglages, mais tous ses appels passent par le verrou `budget`.
+- **Pas de transactions pour les opérations générales** : les opérations du `Repository` hors fonctions SQL financières A3 restent des requêtes indépendantes, et une opération composée interrompue (fusion de signaux, suppression d'une entreprise, publication) peut laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des **verrous à expiration** : `acquireLock` insère une ligne `locks` sans écraser, la clé primaire garantissant un seul détenteur, et `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) exécute l'opération puis libère le verrou. Un verrou déjà pris répond 409 tout de suite, ou après quelques secondes d'attente pour les sections courtes. Sont ainsi protégés : la collecte (un verrou global de 15 minutes, 409 `collection_in_progress`), les générations d'articles et de variantes LinkedIn (409 `generation_in_progress`), l'ajout de sujets aux newsletters (`generation_in_progress` ou `newsletter_busy`), la conversion d'un import (`conversion_in_progress`), la décision sur une proposition de règle (`already_decided`), le budget (verrou `budget`, `budget_busy`), les publications WordPress et LinkedIn (`publication_in_progress`) et la gestion des utilisateurs (`users_busy`). `saveSettings` réécrit tout le JSON des réglages, mais tous ses appels passent par le verrou `budget`.
 - **`list()` charge toute la collection**, par pages de 1 000 lignes : chaque liste, chaque compteur du dashboard et chaque contrôle de doublon relit toutes les lignes de la collection concernée. Insuffisant pour l'épreuve de charge R13 (100 000 signaux).
 - **Fichiers importés dans le JSON** : l'original d'un import (`bytes`, un `Uint8Array`) est sérialisé dans `data`. `JSON.stringify` transforme un `Uint8Array` en objet `{"0": …, "1": …}` : le fichier occupe environ dix fois sa taille et ne se relit pas comme un `Uint8Array`.
 - **Requêtes non filtrées par espace** : la colonne d'espace du schéma cible n'existe pas dans `kora_records`.
@@ -254,10 +254,7 @@ Voir [le jalon A1/A2 v1.2](2026-10-31-correctifs-ia-a1-a2-v1.2.md).
 ## Budget et appels payants
 
 `paidCall()` ([`services/usage.ts`](../src/server/services/usage.ts)) réserve une
-**estimation** avant une opération susceptible d'engager des coûts, et journalise une
-consommation conventionnelle lorsque l'opération aboutit. Les réservations et leur
-libération utilisent le verrou `budget`, avec des limites de concurrence et de durée.
-Ces montants ne constituent pas la facture Anthropic, OpenAI ou Perplexity.
+**estimation** avant toute opération susceptible d'engager des coûts. Depuis A3, la voie PostgreSQL utilise les fonctions SQL atomiques `kora_paid_reserve`, `kora_paid_start`, `kora_paid_finish`, `kora_paid_unknown` et `kora_paid_overrun` via `DbRepository`. La tentative et son état restent durables. Lors d'une réponse ambiguë ou d'un dépassement estimé, la réservation est conservée ; aucune consommation fictive n'est insérée dans le ledger avant réconciliation. Les tests PostgreSQL isolés l'ont confirmé sur la branche A3. Ces montants sont **estimatifs**, pas les factures Anthropic/OpenAI/Perplexity. Voir le [rapport A3/P1-11](2026-11-01-a3-p1-11-validation.md).
 
 **Correctif A1 (local, 31/10/2026) :** les résumés post-collecte et les résumés de
 défusion passent désormais par `improveSummary()` et `paidCall()`. Le service
@@ -273,10 +270,7 @@ réserve positive. [`ai-estimate.ts`](../src/server/services/ai-estimate.ts)
 ajoute une estimation forfaitaire du secours potentiel pour la génération
 éditoriale lorsque la configuration le permet.
 
-**Limites non levées :** une exception après transmission d'une requête peut
-laisser une facturation fournisseur inconnue alors que `paidCall()` libère la
-réservation (A3) ; les appels concurrents et l'expiration des verrous restent à
-auditer (A4). Les forfaits KORA ne sont pas des coûts de facture vérifiés (A5).
+**État au 01/11/2026 :** A3 conserve désormais la réservation en état `unknown` et permet un rapprochement administratif `billed/not_billed` sur preuve via `kora_paid_reconcile` (PostgreSQL seulement). La fonction de rapprochement est inaccessible au rôle HTTP `service_role` et doit être appelée par un administrateur PostgreSQL habilité. Les appels concurrents hors de ce périmètre et l'expiration des verrous restent à auditer (A4). Les forfaits KORA ne sont pas des coûts de facture vérifiés (A5).
 Le coût conventionnel attribué à certaines collectes RSS/Google News ne doit
 pas être assimilé à une dépense fournisseur réelle.
 
