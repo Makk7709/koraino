@@ -65,6 +65,9 @@ export type PaidAttemptRecord = PaidAttemptInput & {
   completedAt?: string;
   failureCode?: string;
   usageLines: UsageEntry[];
+  estimatedUsageLines?: UsageEntry[];
+  estimatedCostEur?: number;
+  estimatedOverrunEur?: number;
   reconciliation?: PaidReconciliation;
   budgetOverrunAtReconciliation?: boolean;
 };
@@ -77,6 +80,7 @@ export interface PaidAttemptsRepository {
   reserve(attempt: PaidAttemptInput): Promise<ReserveResult>;
   start(id: string): Promise<void>;
   unknown(id: string, code: "provider_or_callback_error" | "persist_error"): Promise<void>;
+  overrun(id: string, lines: UsageEntry[]): Promise<void>;
   finish(id: string, lines: UsageEntry[], status: "settled" | "not_sent"): Promise<void>;
   get(id: string): Promise<PaidAttemptRecord | undefined>;
 }
@@ -96,4 +100,20 @@ export function validateUsageLines(lines: UsageEntry[], id: string, estimate: nu
 
 export function usageKind(value: UsageKind): UsageKind {
   return kinds.parse(value);
+}
+
+/** Exact 4-decimal monetary units for the estimated-cost ledger. */
+export function validateEstimatedUsageLines(lines: UsageEntry[], id: string): number {
+  let units = 0;
+  if (lines.length === 0) throw new Error("Empty estimated usage");
+  for (const [index, line] of lines.entries()) {
+    usageEntrySchema.parse(line);
+    if (line.id !== `${id}:line:${index}`) throw new Error("Estimated usage line id mismatch");
+    const scaled = line.costEur * 10000;
+    if (!Number.isSafeInteger(Math.round(scaled)) || Math.abs(scaled - Math.round(scaled)) > 1e-7)
+      throw new Error("Invalid estimated cost precision");
+    units += Math.round(scaled);
+    if (!Number.isSafeInteger(units)) throw new Error("Estimated cost overflow");
+  }
+  return units / 10000;
 }
