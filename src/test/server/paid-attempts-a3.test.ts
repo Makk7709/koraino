@@ -168,4 +168,19 @@ describe("KORA A3 / P1-11 — tentatives payantes", () => {
     }
   });
 
+  it("retient la réserve et renvoie le résultat si un secours suit un coût incertain", async () => {
+    const c = await ctx();
+    const before = (await c.repo.usage.list()).length;
+    const result = await paidCall(
+      c,
+      { kind: "generation_summary", estimate: COSTS.summary, units: 1, label: "Fallback usable" },
+      async () => ({ text: "repli valide", billingUncertain: true }),
+      undefined,
+      (value) => value.billingUncertain,
+    );
+    expect(result.text).toBe("repli valide");
+    expect((await c.repo.usage.list()).length).toBe(before);
+    expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(COSTS.summary);
+  });
+
 });
