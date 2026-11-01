@@ -140,6 +140,7 @@ export async function paidCall<T>(
   call: PaidCall,
   fn: () => T | Promise<T>,
   actual?: (result: T) => UsageLine[],
+  billingUncertain?: (result: T) => boolean,
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
@@ -209,6 +210,14 @@ export async function paidCall<T>(
       }));
     });
     throw error;
+  }
+
+  // A usable fallback result does not prove that an earlier timeout was free.
+  // Retain the full reservation for administrator reconciliation.
+  if (billingUncertain?.(result)) {
+    await repo.paidAttempts.unknown(id, "provider_or_callback_error");
+    console.warn(JSON.stringify({ event: "kora.paid_attempt.billing_uncertain", attemptId: id }));
+    return result;
   }
 
   try {
