@@ -138,6 +138,15 @@ export class DbRepository implements Repository {
       const { data, error } = await (await db()).rpc("kora_paid_unknown" as never, { p_id: id, p_code: code } as never);
       if (error || data !== true) throw new Error(`Paid attempt unknown-state failed: ${error?.code ?? "invalid_response"}`);
     },
+    overrun: async (id: string, lines: UsageEntry[]): Promise<void> => {
+      const { validateEstimatedUsageLines } = await import("./paid-attempts");
+      validateEstimatedUsageLines(lines, id);
+      const { data, error } = await (await db()).rpc("kora_paid_overrun" as never, {
+        p_id: id, p_lines: lines,
+      } as never);
+      if (error || data !== true)
+        throw new Error(`Paid attempt overrun failed: ${error?.code ?? "invalid_response"}`);
+    },
     finish: async (id: string, lines: UsageEntry[], status: "settled" | "not_sent"): Promise<void> => {
       const existing = await this.paidAttempts.get(id);
       if (!existing) throw new Error("Paid attempt not found");
