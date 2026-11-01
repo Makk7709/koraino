@@ -22,17 +22,8 @@ jobs:
           bun-version: "1.2.19"
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit -p .
-      - name: ESLint A3 source and integration (excluding generated code)
-        run: >-
-          bunx eslint
-          src/server/services/usage.ts
-          src/server/domain/budget.ts
-          src/server/store/db.ts
-          src/server/store/memory.ts
-          src/server/store/paid-attempts.ts
-          src/test/server/budget.test.ts
-          src/test/server/paid-attempts-a3.test.ts
-          tests/integration/a3/db-repository.ts
+      - name: ESLint global (application et code genere)
+        run: bun run lint
       - run: bun run test
       - run: bun --no-env-file run build
       - run: git diff --check

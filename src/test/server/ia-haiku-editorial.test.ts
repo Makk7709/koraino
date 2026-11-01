@@ -47,8 +47,9 @@ describe("KORA — Haiku editorial, GPT-4.1 mini backup", () => {
       .mockResolvedValueOnce(new Response("Service unavailable", { status: 503 }))
       .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: improved } }] }));
     vi.stubGlobal("fetch", mock);
-    await expect(new OpenAiEnhancer().enhanceSummary(input, base))
-      .rejects.toThrow("AI_PROVIDER_BILLING_UNCERTAIN");
+    await expect(new OpenAiEnhancer().enhanceSummary(input, base)).rejects.toThrow(
+      "AI_PROVIDER_BILLING_UNCERTAIN",
+    );
     expect(mock).toHaveBeenCalledTimes(2);
     expect(String(mock.mock.calls[1]?.[0])).toContain("api.openai.com");
     const body = JSON.parse(String((mock.mock.calls[1]?.[1] as RequestInit).body)) as Record<
@@ -88,24 +89,33 @@ describe("KORA — Haiku editorial, GPT-4.1 mini backup", () => {
   it("ne masque pas un timeout si aucun fournisseur ne répond", async () => {
     credentials();
     vi.stubEnv("KORA_AI_FALLBACK_ENABLED", "false");
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network timeout"); }));
-    await expect(new OpenAiEnhancer().enhanceSummary(input, base))
-      .rejects.toThrow("AI_PROVIDER_BILLING_UNCERTAIN");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network timeout");
+      }),
+    );
+    await expect(new OpenAiEnhancer().enhanceSummary(input, base)).rejects.toThrow(
+      "AI_PROVIDER_BILLING_UNCERTAIN",
+    );
   });
 
   it("conserve une incertitude quand Haiku et OpenAI échouent après envoi", async () => {
     credentials();
     const mock = vi.fn(async () => new Response("Unavailable", { status: 503 }));
     vi.stubGlobal("fetch", mock);
-    await expect(new OpenAiEnhancer().enhanceSummary(input, base))
-      .rejects.toThrow("AI_PROVIDER_BILLING_UNCERTAIN");
+    await expect(new OpenAiEnhancer().enhanceSummary(input, base)).rejects.toThrow(
+      "AI_PROVIDER_BILLING_UNCERTAIN",
+    );
     expect(mock).toHaveBeenCalledTimes(2);
   });
 
   it("conserve le repli éditorial pour un refus financier explicite", async () => {
     credentials();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("Payment required", { status: 402 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Payment required", { status: 402 })),
+    );
     expect(await new OpenAiEnhancer().enhanceSummary(input, base)).toBe(base);
   });
-
 });

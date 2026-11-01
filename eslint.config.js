@@ -37,4 +37,10 @@ export default tseslint.config(
     },
   },
   eslintPluginPrettier,
+  // Supabase/Lovable generated sources are still linted for semantic rules.
+  // Only Prettier formatting is disabled for code managed by the generator.
+  {
+    files: ["src/integrations/supabase/**/*.{ts,tsx}"],
+    rules: { "prettier/prettier": "off" },
+  },
 );
