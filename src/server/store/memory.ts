@@ -96,6 +96,24 @@ export class MemoryRepository implements Repository {
       if (!a || !["in_flight", "unknown"].includes(a.status)) throw new Error("Paid attempt not in flight");
       this.attempts.set(id, { ...a, status: "unknown", billingStatus: "unknown", failureCode: code });
     },
+    overrun: async (id: string, lines: UsageEntry[]): Promise<void> => {
+      const { validateEstimatedUsageLines } = await import("./paid-attempts");
+      const total = validateEstimatedUsageLines(lines, id);
+      const a = this.attempts.get(id);
+      if (!a) throw new Error("Paid attempt not found");
+      if (total <= a.estimateEur) throw new Error("Not an overrun");
+      if (a.status === "unknown" && a.failureCode === "estimated_overrun" &&
+          JSON.stringify(a.estimatedUsageLines) === JSON.stringify(lines) &&
+          a.estimatedCostEur === total) return;
+      if (a.status !== "in_flight") throw new Error("Invalid overrun transition or replay");
+      if (this.settings.reservedEur + 1e-9 < a.estimateEur)
+        throw new Error("Reservation missing");
+      this.attempts.set(id, {
+        ...a, status: "unknown", billingStatus: "unknown",
+        failureCode: "estimated_overrun", estimatedUsageLines: structuredClone(lines),
+        estimatedCostEur: total, estimatedOverrunEur: Math.round((total - a.estimateEur) * 10000) / 10000,
+      });
+    },
     finish: async (id: string, lines: UsageEntry[], status: "settled" | "not_sent"): Promise<void> => {
       const a = this.attempts.get(id);
       if (!a) throw new Error("Paid attempt not found");
