@@ -47,7 +47,8 @@ describe("KORA — Haiku editorial, GPT-4.1 mini backup", () => {
       .mockResolvedValueOnce(new Response("Service unavailable", { status: 503 }))
       .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: improved } }] }));
     vi.stubGlobal("fetch", mock);
-    expect(await new OpenAiEnhancer().enhanceSummary(input, base)).toBe(improved);
+    await expect(new OpenAiEnhancer().enhanceSummary(input, base))
+      .rejects.toThrow("AI_PROVIDER_BILLING_UNCERTAIN");
     expect(mock).toHaveBeenCalledTimes(2);
     expect(String(mock.mock.calls[1]?.[0])).toContain("api.openai.com");
     const body = JSON.parse(String((mock.mock.calls[1]?.[1] as RequestInit).body)) as Record<
