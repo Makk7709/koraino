@@ -48,6 +48,7 @@ interface ChatOptions {
 interface ChatAttempt {
   raw: string | null;
   retryable: boolean;
+  uncertain: boolean;
 }
 
 async function chatProvider(
@@ -58,7 +59,7 @@ async function chatProvider(
   user: string,
   opts: ChatOptions = {},
 ): Promise<ChatAttempt> {
-  if (!key) return { raw: null, retryable: false };
+  if (!key) return { raw: null, retryable: false, uncertain: false };
 
   try {
     const res = await fetch(url, {
@@ -100,6 +101,7 @@ async function chatProvider(
         raw: null,
         retryable:
           res.status === 404 || res.status === 408 || temporaryRateLimit || res.status >= 500,
+        uncertain: res.status === 408 || res.status >= 500,
       };
     }
 
@@ -110,9 +112,10 @@ async function chatProvider(
     return {
       raw: data.choices?.[0]?.message?.content?.trim() || null,
       retryable: true,
+      uncertain: false,
     };
   } catch {
-    return { raw: null, retryable: true };
+    return { raw: null, retryable: true, uncertain: true };
   }
 }
 
@@ -133,6 +136,7 @@ async function chat(system: string, user: string, opts: ChatOptions = {}): Promi
   const key = process.env["ANTHROPIC_API_KEY"]?.trim();
   if (!key) return null; // Never silently use OpenAI as the primary provider.
   let retryable = false;
+  let uncertain = false;
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -172,11 +176,16 @@ async function chat(system: string, user: string, opts: ChatOptions = {}): Promi
       }
     }
     retryable = isRetryable(res.status, error);
+    uncertain = res.status === 408 || res.status >= 500;
   } catch {
-    // Timeout or network failure. Do not log untrusted input or secrets.
+    // Timeout or network failure. A provider may have billed an unanswered request.
     retryable = true;
+    uncertain = true;
   }
-  if (!retryable || !editorialFallbackEnabled()) return null;
+  if (!retryable || !editorialFallbackEnabled()) {
+    if (uncertain) throw new Error("AI_PROVIDER_BILLING_UNCERTAIN");
+    return null;
+  }
   const attempt = await chatProvider(
     OPENAI_URL,
     process.env["AI_API_KEY"],
@@ -185,7 +194,9 @@ async function chat(system: string, user: string, opts: ChatOptions = {}): Promi
     user,
     opts,
   );
-  return attempt.raw;
+  if (attempt.raw) return attempt.raw;
+  if (uncertain || attempt.uncertain) throw new Error("AI_PROVIDER_BILLING_UNCERTAIN");
+  return null;
 }
 
 /** Extrait un objet JSON d'une réponse (tolère le texte autour). */
