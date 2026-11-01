@@ -194,8 +194,9 @@ async function chat(system: string, user: string, opts: ChatOptions = {}): Promi
     user,
     opts,
   );
-  if (attempt.raw) return attempt.raw;
+  // Even a successful fallback cannot prove the earlier primary request was free.
   if (uncertain || attempt.uncertain) throw new Error("AI_PROVIDER_BILLING_UNCERTAIN");
+  if (attempt.raw) return attempt.raw;
   return null;
 }
 
