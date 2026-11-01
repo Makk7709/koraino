@@ -114,4 +114,58 @@ describe("KORA A3 / P1-11 — tentatives payantes", () => {
     });
     expect(invoked).toBe(false);
   });
+  it("ne lance pas le fournisseur si start échoue avant la transition et libère not_sent", async () => {
+    const c = await ctx();
+    const originalStart = c.repo.paidAttempts.start;
+    let invoked = false;
+    c.repo.paidAttempts.start = async () => { throw new Error("start RPC unavailable"); };
+    try {
+      await expect(paidCall(c, {
+        kind: "generation_summary", estimate: COSTS.summary, units: 1, label: "Start refused",
+      }, async () => { invoked = true; return "unexpected"; })).rejects.toThrow("start RPC unavailable");
+      expect(invoked).toBe(false);
+      expect((await c.repo.getSettings()).reservedEur).toBe(0);
+    } finally {
+      c.repo.paidAttempts.start = originalStart;
+    }
+  });
+
+  it("conserve l'exposition si start a commité mais son accusé est perdu", async () => {
+    const c = await ctx();
+    const originalStart = c.repo.paidAttempts.start;
+    let invoked = false;
+    c.repo.paidAttempts.start = async (id) => {
+      await originalStart(id);
+      throw new Error("start acknowledgement lost");
+    };
+    try {
+      await expect(paidCall(c, {
+        kind: "generation_summary", estimate: COSTS.summary, units: 1, label: "Lost start ack",
+      }, async () => { invoked = true; return "unexpected"; })).rejects.toThrow("start acknowledgement lost");
+      expect(invoked).toBe(false);
+      expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(COSTS.summary);
+    } finally {
+      c.repo.paidAttempts.start = originalStart;
+    }
+  });
+
+  it("conserve la réserve en l'absence de lecture fiable après l'échec de start", async () => {
+    const c = await ctx();
+    const originalStart = c.repo.paidAttempts.start;
+    const originalGet = c.repo.paidAttempts.get;
+    let invoked = false;
+    c.repo.paidAttempts.start = async () => { throw new Error("start uncertain"); };
+    c.repo.paidAttempts.get = async () => { throw new Error("read unavailable"); };
+    try {
+      await expect(paidCall(c, {
+        kind: "generation_summary", estimate: COSTS.summary, units: 1, label: "Unknown start state",
+      }, async () => { invoked = true; return "unexpected"; })).rejects.toThrow("start uncertain");
+      expect(invoked).toBe(false);
+      expect((await c.repo.getSettings()).reservedEur).toBeCloseTo(COSTS.summary);
+    } finally {
+      c.repo.paidAttempts.start = originalStart;
+      c.repo.paidAttempts.get = originalGet;
+    }
+  });
+
 });
