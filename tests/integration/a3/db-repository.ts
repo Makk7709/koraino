@@ -15,6 +15,19 @@ async function main(): Promise<void> {
   assert.ok(!["54321", "55321"].includes(url.port), "Protected Supabase port");
   assert.ok(process.env.SUPABASE_SERVICE_ROLE_KEY, "Missing disposable JWT");
 
+  // Supabase-js targets /rest/v1; standalone PostgREST exposes the same routes at /.
+  // Rewrite only requests to this disposable loopback server.
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    const target = new URL(input instanceof Request ? input.url : String(input));
+    assert.equal(target.origin, url.origin, "Unexpected external request");
+    assert.ok(target.pathname.startsWith("/rest/v1/"), "Unexpected API path");
+    target.pathname = target.pathname.slice("/rest/v1".length);
+    if (input instanceof Request) {
+      return nativeFetch(new Request(target, input), init);
+    }
+    return nativeFetch(target, init);
+  };
   const repo = new DbRepository();
   await repo.ensureReady();
   const settings = await repo.getSettings();
