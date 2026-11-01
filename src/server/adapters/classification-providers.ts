@@ -154,7 +154,7 @@ async function anthropic(input: ClassificationInput): Promise<ProviderResponse> 
 
 async function openaiFallback(input: ClassificationInput): Promise<ProviderResponse> {
   const key = process.env["AI_API_KEY"]?.trim();
-  if (!key) return { raw: null, retryable: false, attempted: false };
+  if (!key) return { raw: null, retryable: false, attempted: false, billingUncertain: false };
   try {
     const response = await fetch(OPENAI_URL, {
       method: "POST",
