@@ -456,9 +456,9 @@ export async function perplexitySearch(
   }
 }
 
-/** 
+/**
  * Définit si une erreur de collecte est transitoire, c'est-à-dire si elle peut être réessayée.
- *  
+ *
  * */
 function isTransientCollectError(code: string | undefined): boolean {
   if (!code || code === "HTTP_403" || code === "HTTP_404") return false;
@@ -477,7 +477,6 @@ function isTransientCollectError(code: string | undefined): boolean {
   if (/^HTTP_5\d\d$/.test(code)) return true;
   return false;
 }
-
 
 /**
  * Collecte réelle : lit le flux RSS/Atom de la source (ou le découvre depuis la page HTML),

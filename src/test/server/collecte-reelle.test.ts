@@ -606,7 +606,7 @@ describe("collecte réelle : flux des entreprises", () => {
     const siteUrl = "https://www.kalray.eu/";
     const feedUrl = "https://www.kalray.eu/feed.xml";
     const date = (d: number) => new Date(NOW.getTime() - d * DAY).toUTCString();
-  
+
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === siteUrl) {
@@ -632,7 +632,7 @@ describe("collecte réelle : flux des entreprises", () => {
       throw new Error(`URL inattendue : ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-  
+
     const result = await new RealCollector({}).collect({
       source: ownSite,
       company,
@@ -640,7 +640,7 @@ describe("collecte réelle : flux des entreprises", () => {
       now: NOW,
       knownEvents: [],
     });
-  
+
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.ok && result.items[0]?.url).toBe("https://www.kalray.eu/a");
   });
@@ -649,10 +649,10 @@ describe("collecte réelle : flux des entreprises", () => {
     const siteUrl = "https://www.kalray.eu/";
     const feedUrl = "https://www.kalray.eu/feed.xml";
     const feedFinal = "https://www.kalray.eu/feed-final";
-  
+
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input instanceof Request ? input.url : input);
-  
+
       if (url === siteUrl) {
         return new Response(
           `<html><head>
@@ -676,7 +676,7 @@ describe("collecte réelle : flux des entreprises", () => {
       throw new Error(`Requête interdite ou inattendue : ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-  
+
     const result = await new RealCollector({}).collect({
       source: ownSite,
       company,
@@ -684,13 +684,11 @@ describe("collecte réelle : flux des entreprises", () => {
       now: NOW,
       knownEvents: [],
     });
-  
+
     // HTML + feed.xml + feed-final ; jamais 127.0.0.1
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([siteUrl, feedUrl, feedFinal]);
-    expect(
-      fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1")),
-    ).toBe(false);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1"))).toBe(false);
     expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
   });
 });
@@ -712,11 +710,12 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
   }
   it("un refus de sécurité n'est pas réessayé (HOST_MISMATCH)", async () => {
     const source = await pasqalCommuniques();
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        status: 302,
-        headers: { Location: "https://www.autre-site.fr/actualites" },
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "https://www.autre-site.fr/actualites" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {

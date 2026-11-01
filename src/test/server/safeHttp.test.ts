@@ -283,7 +283,7 @@ describe("safeFetchText (SSRF collecteur)", () => {
           status: 200,
           headers: { "content-type": "text/xml" },
         }),
-      ); 
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -296,33 +296,33 @@ describe("safeFetchText (SSRF collecteur)", () => {
 });
 
 describe("collecte réelle : temps de collecte (4a)", () => {
-  
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   function slowRedirects(ms: number) {
-    return vi.fn((input: string | URL | Request, init?: RequestInit) =>
-      new Promise<Response>((resolve, reject) => {
-        const t = setTimeout(
-          () =>
-            resolve(
-              new Response(null, {
-                status: 302,
-                headers: { location: `${String(input)}/suite` },
-              }),
-            ),
-          ms,
-        );
-        init?.signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(t);
-            reject(init!.signal!.reason);
-          },
-          { once: true },
-        );
-      }),
+    return vi.fn(
+      (input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const t = setTimeout(
+            () =>
+              resolve(
+                new Response(null, {
+                  status: 302,
+                  headers: { location: `${String(input)}/suite` },
+                }),
+              ),
+            ms,
+          );
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(t);
+              reject(init!.signal!.reason);
+            },
+            { once: true },
+          );
+        }),
     );
   }
 
@@ -341,4 +341,3 @@ describe("collecte réelle : temps de collecte (4a)", () => {
     expect(elapsed).toBeLessThan(150);
   });
 });
-
