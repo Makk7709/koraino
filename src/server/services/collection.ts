@@ -486,7 +486,9 @@ function estimatePerSource(): number {
     const reserve = Number(raw);
 
     if (!raw || !isFourDecimalMoney(reserve)) {
-      throw budgetExhausted("Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide (quatre décimales maximum).");
+      throw budgetExhausted(
+        "Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide (quatre décimales maximum).",
+      );
     }
 
     fallbackReserve = reserve;

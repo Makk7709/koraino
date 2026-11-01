@@ -39,7 +39,11 @@ export const paidAttemptSchema = z
     workspaceId: z.string().min(1),
     month: z.string().regex(/^\d{4}-\d{2}$/),
     kind: kinds,
-    estimateEur: z.number().finite().positive().refine(isFourDecimalMoney, "Invalid estimated cost precision"),
+    estimateEur: z
+      .number()
+      .finite()
+      .positive()
+      .refine(isFourDecimalMoney, "Invalid estimated cost precision"),
     units: z.number().finite().nonnegative(),
     label: z.string().min(1).max(500),
     createdAt: z.string().datetime({ offset: true }),

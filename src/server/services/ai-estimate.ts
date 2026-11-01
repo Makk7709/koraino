@@ -8,7 +8,9 @@ export function estimatedTextAiCost(baseEstimateEur: number): number {
     Boolean(process.env["ANTHROPIC_API_KEY"]?.trim()) &&
     Boolean(process.env["AI_API_KEY"]?.trim());
   if (!isFourDecimalMoney(baseEstimateEur)) {
-    throw budgetExhausted("Estimation principale invalide : précision de quatre décimales requise.");
+    throw budgetExhausted(
+      "Estimation principale invalide : précision de quatre décimales requise.",
+    );
   }
   if (!fallbackConfigured) return baseEstimateEur;
   const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];

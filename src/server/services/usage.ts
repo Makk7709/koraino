@@ -345,7 +345,9 @@ export async function paidCall<T>(
       });
     if (matchesCommittedLines) {
       settlementConfirmedAfterLostAck = true;
-      console.warn(JSON.stringify({ event: "kora.paid_attempt.finish_ack_recovered", attemptId: id }));
+      console.warn(
+        JSON.stringify({ event: "kora.paid_attempt.finish_ack_recovered", attemptId: id }),
+      );
     } else {
       if (!persisted || persisted.status === "in_flight") {
         await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {

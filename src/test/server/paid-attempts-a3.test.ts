@@ -142,7 +142,9 @@ describe("KORA A3 / P1-11 — tentatives payantes", () => {
       expect(supplierCalls).toBe(1);
       expect(await c.repo.paidAttempts.get("pat_n1001")).toMatchObject({ status: "settled" });
       expect((await c.repo.getSettings()).reservedEur).toBe(0);
-      expect((await c.repo.usage.list()).filter((v) => v.id === "pat_n1001:line:0")).toHaveLength(1);
+      expect((await c.repo.usage.list()).filter((v) => v.id === "pat_n1001:line:0")).toHaveLength(
+        1,
+      );
     } finally {
       c.repo.paidAttempts.finish = originalFinish;
     }
