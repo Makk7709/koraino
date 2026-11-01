@@ -20,7 +20,7 @@ import {
 } from "@/server/adapters/collector";
 import { getRepository } from "@/server/store/memory";
 import type { CompanyRecord, SourceRecord } from "@/server/store/records";
-import { call, NOW, setup, teardown } from "./helpers";
+import { call, NOW, setup, teardown, USERS } from "./helpers";
 
 const DAY = 86_400_000;
 const KEYS = { LOVABLE_API_KEY: "cle-passerelle", PERPLEXITY_API_KEY: "cle-connexion" };
@@ -692,5 +692,46 @@ describe("collecte réelle : flux des entreprises", () => {
       fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1")),
     ).toBe(false);
     expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
+  });
+});
+
+describe("C01 · intégration collecte (exercice 4b)", () => {
+  beforeEach(() => {
+    setup();
+    setAdapters({ collector: new RealCollector({}) });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    teardown();
+  });
+  async function pasqalCommuniques(): Promise<Source> {
+    const res = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    const source = res.body.find((s) => s.type === "communiques");
+    if (!source) throw new Error("source communiqués Pasqal introuvable dans le seed");
+    return source;
+  }
+  it("un refus de sécurité n'est pas réessayé (HOST_MISMATCH)", async () => {
+    const source = await pasqalCommuniques();
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: { Location: "https://www.autre-site.fr/actualites" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "HOST_MISMATCH",
+    });
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    expect(sources.body.find((s) => s.id === source.id)).toMatchObject({
+      access: "erreur",
+      failureCode: "HOST_MISMATCH",
+      attempts: 1,
+    });
   });
 });
