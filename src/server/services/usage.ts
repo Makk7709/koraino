@@ -12,6 +12,7 @@ import { monthKey } from "../domain/dates";
 import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
 import type { Repository } from "../store/repository";
+import { validateEstimatedUsageLines } from "../store/paid-attempts";
 import { audit, notify } from "./journal";
 import { withLock } from "./locks";
 
@@ -225,7 +226,6 @@ export async function paidCall<T>(
       ? actual(result)
       : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
     const lines: UsageEntry[] = [];
-    let remaining = call.estimate;
     for (const line of usage) {
       if (line.costEur <= 0 && line.units <= 0) continue;
       if (
@@ -236,8 +236,7 @@ export async function paidCall<T>(
       ) {
         throw new Error("Invalid usage line");
       }
-      const cost = Math.max(0, Math.min(line.costEur, remaining));
-      remaining -= cost;
+      const cost = line.costEur;
       lines.push({
         id: `${id}:line:${lines.length}`,
         at: now.toISOString(),
@@ -246,6 +245,18 @@ export async function paidCall<T>(
         costEur: Math.round(cost * 10000) / 10000,
         label: line.label,
       });
+    }
+    const total = validateEstimatedUsageLines(lines, id);
+    if (total > call.estimate + 1e-9) {
+      await repo.paidAttempts.overrun(id, lines);
+      console.warn(JSON.stringify({
+        event: "kora.paid_attempt.estimated_overrun",
+        attemptId: id,
+        reservedEur: call.estimate,
+        estimatedCostEur: total,
+        overrunEur: Math.round((total - call.estimate) * 10000) / 10000,
+      }));
+      return result;
     }
     // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
     // The budget lock also protects legacy settings writes during A3 transition.
