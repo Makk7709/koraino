@@ -49,6 +49,7 @@ describe("KORA — Claude Haiku 5.5 principal, GPT-4.1 mini en repli", () => {
     const assessment = await new OpenAiEnhancer().classify(input);
     expect(assessment).toMatchObject({ category: "partenariat", model: "gpt-4.1-mini" });
     expect(mock).toHaveBeenCalledTimes(2);
+    expect((await new OpenAiEnhancer().classifyWithUsage(input)).billingUncertain).toBe(false);
     expect(String(mock.mock.calls[1]?.[0])).toContain("api.openai.com");
     const body = JSON.parse(String((mock.mock.calls[1]?.[1] as RequestInit).body));
     expect(body.model).toBe("gpt-4.1-mini");
