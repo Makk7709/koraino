@@ -18,9 +18,16 @@ export interface ClassificationResult {
   /** Tentatives comptées de façon conservatrice, y compris sans réponse exploitable. */
   primaryCalls: number;
   fallbackCalls: number;
+  /** At least one submitted provider request has an uncertain billing outcome. */
+  billingUncertain: boolean;
 }
 
-type ProviderResponse = { raw: string | null; retryable: boolean; attempted: boolean };
+type ProviderResponse = {
+  raw: string | null;
+  retryable: boolean;
+  attempted: boolean;
+  billingUncertain: boolean;
+};
 
 const SCHEMA = {
   type: "object",
@@ -96,7 +103,7 @@ export function isRetryable(status: number, payload: unknown): boolean {
 
 async function anthropic(input: ClassificationInput): Promise<ProviderResponse> {
   const key = process.env["ANTHROPIC_API_KEY"]?.trim();
-  if (!key) return { raw: null, retryable: false, attempted: false };
+  if (!key) return { raw: null, retryable: false, attempted: false, billingUncertain: false };
   try {
     const response = await fetch(ANTHROPIC_URL, {
       method: "POST",
@@ -126,7 +133,10 @@ async function anthropic(input: ClassificationInput): Promise<ProviderResponse> 
           /* limite inconnue : pas de repli */
         }
       }
-      return { raw: null, retryable: isRetryable(response.status, payload), attempted: true };
+      return {
+        raw: null, retryable: isRetryable(response.status, payload), attempted: true,
+        billingUncertain: response.status === 408 || response.status >= 500,
+      };
     }
     const data = (await response.json()) as { content?: Array<{ type?: string; text?: string }> };
     const raw =
@@ -135,10 +145,10 @@ async function anthropic(input: ClassificationInput): Promise<ProviderResponse> 
         .map((block) => block.text ?? "")
         .join("\n")
         .trim() || null;
-    return { raw, retryable: true, attempted: true };
+    return { raw, retryable: true, attempted: true, billingUncertain: false };
   } catch {
     // Délai ou erreur réseau : fournisseur secondaire permis si expressément activé.
-    return { raw: null, retryable: true, attempted: true };
+    return { raw: null, retryable: true, attempted: true, billingUncertain: true };
   }
 }
 
@@ -164,15 +174,19 @@ async function openaiFallback(input: ClassificationInput): Promise<ProviderRespo
       }),
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) return { raw: null, retryable: false, attempted: true };
+    if (!response.ok) return {
+      raw: null, retryable: false, attempted: true,
+      billingUncertain: response.status === 408 || response.status >= 500,
+    };
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return {
       raw: data.choices?.[0]?.message?.content?.trim() || null,
       retryable: false,
       attempted: true,
+      billingUncertain: false,
     };
   } catch {
-    return { raw: null, retryable: false, attempted: true };
+    return { raw: null, retryable: false, attempted: true, billingUncertain: true };
   }
 }
 
@@ -195,12 +209,13 @@ export async function classifyHaikuWithFallback(
   const assessment = validate(parseObject(primary.raw), PRIMARY_CLASSIFICATION_MODEL);
   const primaryCalls = Number(primary.attempted);
   if (assessment || !primary.retryable || !fallbackAuthorized()) {
-    return { assessment, primaryCalls, fallbackCalls: 0 };
+    return { assessment, primaryCalls, fallbackCalls: 0, billingUncertain: primary.billingUncertain };
   }
   const backup = await openaiFallback(input);
   return {
     assessment: validate(parseObject(backup.raw), FALLBACK_CLASSIFICATION_MODEL),
     primaryCalls,
     fallbackCalls: Number(backup.attempted),
+    billingUncertain: primary.billingUncertain || backup.billingUncertain,
   };
 }
