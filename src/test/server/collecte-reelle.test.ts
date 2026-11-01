@@ -733,4 +733,52 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
       attempts: 1,
     });
   });
+
+  it("un délai de lecture est stocké en TIMEOUT (4c)", async () => {
+    const source = await pasqalCommuniques();
+  
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (signal?.aborted) {
+            controller.error(signal.reason ?? new DOMException("Timeout", "TimeoutError"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              controller.error(signal.reason ?? new DOMException("Timeout", "TimeoutError"));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+  
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "TIMEOUT",
+    });
+  
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    const updated = sources.body.find((s) => s.id === source.id)!;
+    expect(updated).toMatchObject({
+      access: "erreur",
+      failureCode: "TIMEOUT",
+      failureReason: "Délai de réponse dépassé",
+      attempts: 3,
+    });
+    expect(updated.failureCode).not.toBe("23");
+  });
 });
