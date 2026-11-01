@@ -456,6 +456,29 @@ export async function perplexitySearch(
   }
 }
 
+/** 
+ * Définit si une erreur de collecte est transitoire, c'est-à-dire si elle peut être réessayée.
+ *  
+ * */
+function isTransientCollectError(code: string | undefined): boolean {
+  if (!code || code === "HTTP_403" || code === "HTTP_404") return false;
+  // Refus C01 / safeHttp : jamais réessayés
+  if (
+    code === "URL_REFUSED" ||
+    code === "HOST_MISMATCH" ||
+    code === "TOO_MANY_REDIRECTS" ||
+    code === "REDIRECT_NO_LOCATION" ||
+    code === "BODY_TOO_LARGE"
+  ) {
+    return false;
+  }
+  if (code === "TIMEOUT" || code === "NETWORK") return true;
+  if (code === "HTTP_408" || code === "HTTP_425" || code === "HTTP_429") return true;
+  if (/^HTTP_5\d\d$/.test(code)) return true;
+  return false;
+}
+
+
 /**
  * Collecte réelle : lit le flux RSS/Atom de la source (ou le découvre depuis la page HTML),
  * et interroge Google News pour les sources « recherche web » / « actualités ».
@@ -517,7 +540,7 @@ export class RealCollector implements Collector {
         ok: false as const,
         code: err.code ?? "NETWORK",
         reason: err.message || "Erreur réseau",
-        transient: err.code !== "HTTP_403" && err.code !== "HTTP_404",
+        transient: isTransientCollectError(err.code),
       };
       // Google News indisponible : la recherche Perplexity suffit à mener la collecte.
       if (!search || (await search).outcome.status !== "ok") return failure;
