@@ -1,0 +1,29 @@
+# A3 ONLY — unique project name passed by runner, no existing Supabase services.
+services:
+  db:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: a3-ci-postgres-only
+      POSTGRES_DB: kora_a3_ci
+    volumes:
+      - ./roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kora_a3_ci"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  api:
+    image: postgrest/postgrest:v14.18
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:a3-ci-auth-only@db:5432/kora_a3_ci
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: kora-a3-isolated-jwt-secret-only-not-for-production-2026
+      PGRST_SERVER_PORT: "3000"
+      PGRST_DB_POOL: "10"
+    ports:
+      - "127.0.0.1::3000"
