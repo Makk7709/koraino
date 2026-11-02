@@ -35,7 +35,7 @@
 | Anti-CSRF | En-tête obligatoire sur toute écriture ; jeton transmis par en-tête ; cookie de téléchargement `SameSite=Strict`, limité aux lectures de fichiers |
 | Contrôle des rôles | Côté serveur sur toutes les écritures ; lectures ouvertes à tout utilisateur connecté |
 | Validation des entrées | Schémas zod, tailles bornées |
-| Filtrage SSRF | Sur les URL déclarées et les liens collectés ; ni sur les redirections ni sur les flux découverts |
+| Filtrage SSRF | Sur les URL déclarées, les liens collectés et les requêtes `safeFetchText` du collecteur (chaque saut de redirection) ; ports 80/443 sur l'URL analysée ; pas de résolution DNS au connect |
 | Contenus externes | Nettoyage HTML, texte brut uniquement |
 | Base de données | Supabase de Lovable Cloud, accès serveur par clé de service, RLS sans policy, sans transaction, verrous applicatifs à expiration |
 | Séparation de l'espace | Un seul espace, sans filtrage |
@@ -122,19 +122,24 @@ La limite JSON porte sur le nombre d'unités de code UTF-16 et non sur les octet
 
 ### Filtrage SSRF
 
-`validateSourceUrl` et `checkHost` ([`domain/security.ts`](../src/server/domain/security.ts)) refusent les cibles internes. Le contrôle s'applique à trois endroits :
+`validateSourceUrl`, `checkHost` et `checkPort` ([`domain/security.ts`](../src/server/domain/security.ts)) refusent les cibles internes et les ports autres que 80 (http) et 443 (https). Le contrôle s'applique à trois endroits :
 
 - à la création et à la modification d'une source (`POST`, `PATCH /api/sources`) : refus 422 `url_refused` avec le motif ;
 - au domaine officiel d'une entreprise (`POST`, `PATCH /api/companies`) : refus 422 `url_refused`, ou `domain_invalid` si le format est incorrect ;
 - à chaque URL renvoyée par le collecteur : l'élément est ignoré sans erreur.
 
-Il ne s'applique pas aux requêtes que le collecteur réel émet lui-même : l'URL Google News qu'il construit, l'URL du flux découvert dans une page et les cibles des redirections (voir la liste des cas non couverts ci-dessous).
+Les requêtes HTTP du collecteur réel (`fetchText` → [`safeFetchText`](../src/server/domain/safeHttp.ts)) repassent par `validateSourceUrl` **avant chaque GET** et **à chaque URL de redirection** (`redirect: "manual"`, au plus 5 sauts). L'URL Google News construite, l'URL du flux découvert dans une page et chaque essai `FEED_PROBES` sont donc filtrées au moment de la connexion. En revanche, le filtrage des **liens** extraits d'un flux (observations) reste distinct : une entrée dont l'URL est refusée est ignorée sans faire échouer la collecte.
+
+**Politique d'hôte (`allowedHost`).** Par défaut, l'hôte de chaque requête en cours doit correspondre à l'hôte de l'URL passée à `safeFetchText` (normalisation `www`, casse). Une redirection HTTP vers un autre site produit `HOST_MISMATCH` et n'est pas suivie. Les appels secondaires (flux annoncé dans le HTML, sondes `/feed/`, etc.) utilisent leur propre URL comme référence d'hôte.
+
+Les lacunes ci-dessous concernent surtout **`validateSourceUrl` / `checkHost` en tant que règles d'URL**, pas l'absence de filtrage sur les redirections du collecteur (corrigé par C01).
 
 Règles appliquées à l'URL :
 
 | Règle | Exemple refusé |
 |---|---|
 | Protocole `http` ou `https` uniquement | `ftp://example.com/file`, `file:///etc/passwd` |
+| Ports 80 (http) et 443 (https) uniquement | `https://example.com:8443/feed` |
 | Pas d'identifiants dans l'URL | `http://user:pass@example.com/` |
 | Pas de `localhost` | `http://localhost:8080/admin` |
 | Pas de suffixe `.local`, `.internal`, `.localhost`, `.localdomain`, `.home.arpa` | `http://intranet.local/`, `http://metadata.internal/` |
@@ -150,25 +155,26 @@ Plages IPv4 refusées :
 | `127.0.0.0/8` | bouclage |
 | `169.254.0.0/16` | lien-local, dont l'adresse de métadonnées `169.254.169.254` |
 | `100.64.0.0/10` | réseau partagé opérateur |
+| `192.0.0.0/24`, `192.0.2.0/24` (TEST-NET) | assignations IETF et documentation |
+| `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24` | benchmark et documentation |
 | `224.0.0.0` et au-delà | multicast et réservé |
 
-Plages IPv6 refusées : `::` (non spécifiée), `::1` (bouclage), `fc00::/7` (locale unique), `fe80::/10` (lien-local), `ff00::/8` (multicast), ainsi que les adresses IPv4 encapsulées (`::ffff:a.b.c.d` et `::a.b.c.d`) dont la partie IPv4 est refusée. Les cas de refus sont testés dans [`security.test.ts`](../src/test/server/security.test.ts).
+Plages IPv6 refusées : `::` (non spécifiée), `::1` (bouclage), `fc00::/7` (locale unique), `fe80::/10` (lien-local), `ff00::/8` (multicast), `64:ff9b::/96` (NAT64), `2001:db8::/32` (documentation), `fec0::/10` (site local obsolète), ainsi que les adresses IPv4 encapsulées (`::ffff:a.b.c.d` et `::a.b.c.d`) dont la partie IPv4 est refusée. Les cas de refus sont testés dans [`security.test.ts`](../src/test/server/security.test.ts).
 
-Ce filtrage porte sur l'URL déclarée, pas sur la connexion que le collecteur réel ouvre ensuite (`fetchText` dans [`adapters/collector.ts`](../src/server/adapters/collector.ts)). Il ne couvre pas :
+**Limites restantes** (analyse de l'URL et du nom d'hôte, pas de la connexion TCP) :
 
-- les ports : `https://example.com:22/` est accepté ;
-- la résolution DNS : un nom public qui résout vers une adresse privée, ou qui change de résolution entre le contrôle et la connexion, n'est pas détecté ;
-- les redirections : `fetch` les suit par défaut sans que la cible soit revalidée, si bien qu'une source acceptée peut rediriger vers une adresse interne ;
-- l'URL du flux découvert : l'attribut `href` de la balise `<link>` de flux trouvée dans une page est résolu par rapport à la page et lu sans passer par `validateSourceUrl` ;
-- la taille des réponses : le corps est lu entièrement (`res.text()`), sans limite ; seul le délai de 15 secondes par requête borne la lecture ;
-- plusieurs plages réservées : `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24` en IPv4 ; `64:ff9b::/96`, `2001:db8::/32`, `fec0::/10` en IPv6 ;
-- les formes abrégées d'IPv4 comme `127.1` dans un domaine d'entreprise saisi sans schéma. Dans une URL, l'analyseur WHATWG les normalise en `127.0.0.1`, qui est refusé.
+- la **résolution DNS** : un nom public (`https://example.com/`) qui résout vers une adresse privée, ou dont la résolution change entre le contrôle et le `connect`, n'est pas détecté (*rebinding*) ;
+- les **noms d'hôte** valides syntaxiquement mais dangereux une fois résolus : le filtre ne s'applique qu'aux littéraux IP et aux règles de nom ci-dessus ;
+- les formes abrégées d'IPv4 comme `127.1` dans un **domaine d'entreprise** saisi sans schéma (hors `validateSourceUrl` sur une URL). Dans une URL HTTP(S), l'analyseur WHATWG les normalise en `127.0.0.1`, qui est refusé ;
+- d'autres préfixes IPv6 rares (ex. 6to4 `2002::/16`) ne sont pas listés explicitement.
+
+**Encadrement des réponses (collecteur).** `safeFetchText` borne la lecture du corps (2 Mio, flux), applique un délai global de 15 s par appel (requête + corps + chaîne de redirections), et normalise les timeouts en `TIMEOUT`. Ce n'est pas une protection contre un corps malveillant inférieur au plafond ni contre la consommation CPU locale.
 
 Le collecteur décide aussi qu'un flux est celui de l'entreprise par `hostOf(url).endsWith(company.domain)`, sans exiger de point de séparation : un hôte `notpasqal.com` est traité comme le site de `pasqal.com`, et toutes ses entrées sont gardées sans filtre par nom. L'indicateur documentaire reconnaît une source directe par le même test (voir [Indicateur documentaire](05-regles-metier.md#indicateur-documentaire)).
 
 Sur Cloudflare Workers, les requêtes sortantes partent du réseau de Cloudflare et non d'un réseau privé : les adresses privées et de bouclage ne devraient normalement pas y être joignables, ce qui limite la portée de ces lacunes ; c'est à confirmer sur le déploiement. En développement local, le serveur s'exécute sur le poste du développeur : une redirection ou un flux annoncé peut y atteindre `localhost` ou le réseau local.
 
-Le collecteur devra donc refaire le contrôle au moment de la connexion : résoudre le nom, vérifier chaque adresse obtenue, se connecter à l'adresse vérifiée, revalider chaque redirection et l'URL de chaque flux découvert, et borner la taille des réponses.
+Il reste à renforcer le filtrage **après résolution DNS** (contrôle de l'adresse obtenue si l'hébergeur le permet) et le test de domaine d'entreprise avec point de séparation (voir [P1-08](11-anomalies-connues.md#p1--avant-toute-ouverture-à-des-utilisateurs-réels)).
 
 ### Contenus externes non fiables
 
@@ -288,9 +294,9 @@ flowchart LR
 | Supabase | Réel dès que `SUPABASE_URL` est définie, hors tests | Toutes les données métier et les réglages | `SUPABASE_SERVICE_ROLE_KEY` | Aucun fixé par le code | Hors budget KORA |
 | Supabase Auth | Réel en mode supabase | Adresses e-mail et mots de passe (navigateur) ; jetons à vérifier et adresses invitées (serveur) | `SUPABASE_PUBLISHABLE_KEY` (publique) ; `SUPABASE_SERVICE_ROLE_KEY` pour les invitations | Aucun fixé par le code | Hors budget KORA |
 | OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons ; à la collecte, titre et extrait nettoyés de chaque publication nouvelle avec le nom de l'entreprise (classification) | `AI_API_KEY` | 30 s par appel (15 s pour une classification) | Estimé par `COSTS` |
-| Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |
+| Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par appel `safeFetchText` | Gratuit ; estimé par `COSTS` |
 | Perplexity | Réel si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, hors tests | Nom de l'entreprise, dans la requête de recherche | `LOVABLE_API_KEY`, `PERPLEXITY_API_KEY` | 20 s par requête | Coût réel non lu ; compris dans l'estimation de la collecte |
-| Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par requête | Gratuit ; estimé par `COSTS` |
+| Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par appel `safeFetchText` | Gratuit ; estimé par `COSTS` |
 | WordPress | Réel si les trois variables `WORDPRESS_*` sont définies ; simulé en démonstration et sous Vitest | Titre, contenu, extrait, catégories et étiquettes du brouillon | `WORDPRESS_APP_PASSWORD` | 15 s par requête | Aucun |
 | LinkedIn | Réel pour l'utilisateur qui a relié son compte ; export manuel sinon | Texte du post (variante choisie et hashtags) | `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, clé de connexion de l'utilisateur | 10 s pour l'identité, 20 s pour la publication | Aucun |
 | Google Fonts | Réel, depuis le navigateur | Requête HTTP du navigateur | Aucun | — | Aucun |
@@ -356,7 +362,7 @@ Ces textes proviennent de publications web collectées et du registre. Ils peuve
 - `https://news.google.com/rss/search` avec le nom et les alias de l'entreprise entre guillemets ;
 - pour résoudre une redirection Google News en adresse d'article (`GoogleNewsLinkResolver`, [`adapters/google-news.ts`](../src/server/adapters/google-news.ts)) : `https://news.google.com/articles/<id>` (page de l'article, `GET`) puis `https://news.google.com/_/DotsSplashUi/data/batchexecute` (`POST`, appel interne non documenté, sans cookie ni identifiant), au plus `MAX_ITEMS` fois par source et par collecte ; l'adresse obtenue passe par le filtrage SSRF avant d'être stockée.
 
-Il envoie l'agent utilisateur `Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et un en-tête `accept` orienté RSS, Atom et HTML, sans cookie ni identifiant. Google News reçoit ainsi le nom de chaque entreprise suivie, et chaque site reçoit l'adresse IP du serveur. Les redirections sont suivies. Les liens des articles ne sont jamais visités : seuls les flux et les pages déclarées sont lus. Le fichier `robots.txt` des sites n'est pas consulté.
+Il envoie l'agent utilisateur `Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et un en-tête `accept` orienté RSS, Atom et HTML, sans cookie ni identifiant. Google News reçoit ainsi le nom de chaque entreprise suivie, et chaque site reçoit l'adresse IP du serveur. Les redirections HTTP sont suivies **manuellement** avec revalidation SSRF et refus si l'hôte change (`safeFetchText`). Les liens des articles ne sont jamais visités : seuls les flux et les pages déclarées sont lus. Le fichier `robots.txt` des sites n'est pas consulté.
 
 **Recherche Perplexity.** Pour une source `recherche_web`, ou `actualites` dont l'URL n'est pas un flux, rattachée à une entreprise, le collecteur interroge aussi l'API Search de Perplexity, en parallèle de Google News, par la passerelle de connexion de la plateforme d'hébergement (`perplexitySearch`). La requête est un `POST https://connector-gateway.lovable.dev/perplexity/search` qui porte `LOVABLE_API_KEY` dans l'en-tête `Authorization: Bearer` et `PERPLEXITY_API_KEY` dans l'en-tête `X-Connection-Api-Key`. Son corps ne contient que la requête de recherche, formée du nom de l'entreprise entre guillemets suivi de « Grenoble actualité entreprise », le nombre de résultats (5) et la période (le dernier mois). Aucune autre donnée du registre, aucun utilisateur ni contenu collecté n'est transmis. La passerelle et Perplexity reçoivent donc le nom de chaque entreprise suivie par une recherche presse.
 
@@ -463,7 +469,7 @@ Cette liste compare l'état du code aux exigences du §7. Elle complète la [Cou
 
 10. Vérifier l'en-tête `Origin` en complément de `x-kora-request`.
 11. En-têtes de sécurité (`Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`) et limitation de débit.
-12. Filtrage SSRF au moment de la connexion dans le collecteur réel : résolution DNS, ports, revalidation de chaque redirection et de chaque flux découvert, taille des réponses, test de domaine avec point de séparation, ajout des plages réservées manquantes. L'absence d'accès aux adresses privées depuis Cloudflare Workers est à confirmer.
+12. Filtrage SSRF au moment de la connexion : **partiellement fait** (`validateSourceUrl` avec ports 80/443 et plages réservées courantes ; `safeFetchText` — revalidation à chaque URL et redirection, plafond corps, délai, politique d'hôte). Restent la résolution DNS et le test de domaine entreprise avec point de séparation. L'absence d'accès aux adresses privées depuis Cloudflare Workers est à confirmer.
 13. Contrôle de taille des imports sans `content-length` avant la lecture du corps.
 
 **Flux tiers et RGPD**
