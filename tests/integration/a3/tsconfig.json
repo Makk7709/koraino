@@ -1,0 +1,7 @@
+{
+  "extends": "../../../tsconfig.json",
+  "include": [
+    "http-e2e.ts",
+    "http-fixture.ts"
+  ]
+}

@@ -102,4 +102,12 @@ BEGIN
  RAISE NOTICE 'PASS: DBA reconciliation, 2 usage rows, zero reserve';
 END $$;
 SQL
-echo "PASS: disposable DB integration; cleanup on script exit"
+bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
+echo "=== A3.1 real HTTP loss and process restart (disposable DB ONLY) ==="
+(
+ cd "$ROOT"
+ env -u ANTHROPIC_API_KEY -u AI_API_KEY -u PERPLEXITY_API_KEY -u LOVABLE_DB_MIGRATION_URL -u VITEST \
+   SUPABASE_URL="$url" SUPABASE_SERVICE_ROLE_KEY="$jwt" A3_DB_ISOLATED_TEST=1 \
+   bun --no-env-file tests/integration/a3/http-e2e.ts
+)
+echo "PASS: disposable DB integration and HTTP system tests; cleanup on script exit"
