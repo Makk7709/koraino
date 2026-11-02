@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { createServer, type Server } from "node:http";
+import { createServer, request, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { DbRepository } from "../../../src/server/store/db";
@@ -92,15 +92,40 @@ async function start(provider: string): Promise<number> {
   });
 }
 function post(url: string, signalId: string, key: string): Promise<Response> {
-  return nativeFetch(url + "/api/articles", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-kora-request": "1",
-      "idempotency-key": key,
-    },
-    body: JSON.stringify({ signalId }),
-    signal: AbortSignal.timeout(15_000),
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ signalId });
+    const req = request(
+      url + "/api/articles",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          "x-kora-request": "1",
+          "idempotency-key": key,
+        },
+        signal: AbortSignal.timeout(15_000),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.once("error", reject);
+        res.once("end", () => {
+          const headers = new Headers();
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (typeof value === "string") headers.set(name, value);
+          }
+          resolve(
+            new Response(Buffer.concat(chunks).toString("utf8"), {
+              status: res.statusCode ?? 500,
+              headers,
+            }),
+          );
+        });
+      },
+    );
+    req.once("error", reject);
+    req.end(body);
   });
 }
 async function snapshot(key: string) {
