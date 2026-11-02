@@ -74,20 +74,34 @@ export class MemoryRepository implements Repository {
   private settings: Settings;
   private wordpress: WordPressSettings | null = null;
   private attempts = new Map<string, PaidAttemptRecord>();
-  private readonly httpOps = new Map<string, IdempotencyRecord & {
-    workspaceId: string; actorId: string; route: string; fingerprint: string;
-  }>();
+  private readonly httpOps = new Map<
+    string,
+    IdempotencyRecord & {
+      workspaceId: string;
+      actorId: string;
+      route: string;
+      fingerprint: string;
+    }
+  >();
   idempotency = {
     begin: async (input: {
-      id: string; workspaceId: string; actorId: string; route: string; fingerprint: string;
+      id: string;
+      workspaceId: string;
+      actorId: string;
+      route: string;
+      fingerprint: string;
     }): Promise<IdempotencyClaim> => {
       const existing = this.httpOps.get(input.id);
       if (!existing) {
         this.httpOps.set(input.id, { ...input, state: "pending" });
         return { kind: "claimed" };
       }
-      if (existing.workspaceId !== input.workspaceId || existing.actorId !== input.actorId ||
-          existing.route !== input.route || existing.fingerprint !== input.fingerprint)
+      if (
+        existing.workspaceId !== input.workspaceId ||
+        existing.actorId !== input.actorId ||
+        existing.route !== input.route ||
+        existing.fingerprint !== input.fingerprint
+      )
         return { kind: "conflict" };
       if (existing.state === "completed")
         return { kind: "completed", status: existing.httpStatus!, bodyText: existing.bodyText! };

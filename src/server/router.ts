@@ -95,7 +95,12 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/sources", handler: registry.createSource },
   { method: "PATCH", pattern: "/sources/:id", handler: registry.updateSource },
   { method: "DELETE", pattern: "/sources/:id", handler: registry.deleteSource },
-  { method: "POST", pattern: "/sources/:id/collect", handler: signals.collectSourceHandler, idempotent: true },
+  {
+    method: "POST",
+    pattern: "/sources/:id/collect",
+    handler: signals.collectSourceHandler,
+    idempotent: true,
+  },
   { method: "POST", pattern: "/collect", handler: signals.collectAllHandler, idempotent: true },
   { method: "GET", pattern: "/collection-runs", handler: signals.listRuns },
 
@@ -152,7 +157,12 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/newsletters", handler: dist.createNewsletter },
   { method: "GET", pattern: "/newsletters/:id", handler: dist.getNewsletter },
   { method: "PATCH", pattern: "/newsletters/:id", handler: dist.updateNewsletter },
-  { method: "POST", pattern: "/newsletters/:id/items", handler: dist.addNewsletterItem, idempotent: true },
+  {
+    method: "POST",
+    pattern: "/newsletters/:id/items",
+    handler: dist.addNewsletterItem,
+    idempotent: true,
+  },
   {
     method: "DELETE",
     pattern: "/newsletters/:id/items/:itemId",

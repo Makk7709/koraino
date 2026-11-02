@@ -128,35 +128,76 @@ export class DbRepository implements Repository {
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
   idempotency = {
-    begin: async (input: { id: string; workspaceId: string; actorId: string; route: string; fingerprint: string }) => {
-      const { data, error } = await (await db()).rpc("kora_http_idempotency_begin" as never, {
-        p_id: input.id, p_workspace: input.workspaceId, p_actor: input.actorId,
-        p_route: input.route, p_fingerprint: input.fingerprint,
-      } as never);
-      if (error) throw new Error("HTTP idempotency claim failed: " + (error.code ?? "database_error"));
+    begin: async (input: {
+      id: string;
+      workspaceId: string;
+      actorId: string;
+      route: string;
+      fingerprint: string;
+    }) => {
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_begin" as never,
+        {
+          p_id: input.id,
+          p_workspace: input.workspaceId,
+          p_actor: input.actorId,
+          p_route: input.route,
+          p_fingerprint: input.fingerprint,
+        } as never,
+      );
+      if (error)
+        throw new Error("HTTP idempotency claim failed: " + (error.code ?? "database_error"));
       return parseIdempotencyClaim(data);
     },
     complete: async (id: string, status: number, bodyText: string): Promise<void> => {
-      const { data, error } = await (await db()).rpc("kora_http_idempotency_complete" as never, {
-        p_id: id, p_status: status, p_body: bodyText,
-      } as never);
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_complete" as never,
+        {
+          p_id: id,
+          p_status: status,
+          p_body: bodyText,
+        } as never,
+      );
       if (error || data !== true) throw new Error("HTTP idempotency completion failed");
     },
     uncertain: async (id: string): Promise<void> => {
-      const { data, error } = await (await db()).rpc("kora_http_idempotency_uncertain" as never, {
-        p_id: id,
-      } as never);
-      if (error || data !== true) throw new Error("HTTP idempotency uncertainty persistence failed");
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_uncertain" as never,
+        {
+          p_id: id,
+        } as never,
+      );
+      if (error || data !== true)
+        throw new Error("HTTP idempotency uncertainty persistence failed");
     },
     get: async (id: string): Promise<IdempotencyRecord | undefined> => {
-      const { data, error } = await (await db()).from("kora_records").select("data")
-        .eq("collection", "http_idempotency").eq("id", id).maybeSingle();
+      const { data, error } = await (
+        await db()
+      )
+        .from("kora_records")
+        .select("data")
+        .eq("collection", "http_idempotency")
+        .eq("id", id)
+        .maybeSingle();
       if (error) throw new Error("HTTP idempotency read failed");
       const row = data?.data as unknown as Record<string, unknown> | undefined;
-      if (!row || (row["state"] !== "pending" && row["state"] !== "uncertain" && row["state"] !== "completed"))
+      if (
+        !row ||
+        (row["state"] !== "pending" && row["state"] !== "uncertain" && row["state"] !== "completed")
+      )
         return undefined;
-      return { id, state: row["state"], ...(typeof row["httpStatus"] === "number" ? { httpStatus: row["httpStatus"] } : {}),
-        ...(typeof row["bodyText"] === "string" ? { bodyText: row["bodyText"] } : {}) };
+      return {
+        id,
+        state: row["state"],
+        ...(typeof row["httpStatus"] === "number" ? { httpStatus: row["httpStatus"] } : {}),
+        ...(typeof row["bodyText"] === "string" ? { bodyText: row["bodyText"] } : {}),
+      };
     },
   };
   paidAttempts = {
