@@ -94,7 +94,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const retryIdentity = await paidRequestIdentity(path, init);
   if (retryIdentity) headers.set("Idempotency-Key", retryIdentity.key);
   const res = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });
-  if (res.ok && retryIdentity) retryIdentity.clear();
   if (!res.ok) {
     let body: ApiErrorBody | null = null;
     try {
@@ -115,8 +114,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       body?.error.details,
     );
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  if (res.status === 204) {
+    retryIdentity?.clear();
+    return undefined as T;
+  }
+  const result = (await res.json()) as T;
+  retryIdentity?.clear();
+  return result;
 }
 
 const json = (method: string, body?: unknown): RequestInit => ({

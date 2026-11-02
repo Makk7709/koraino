@@ -133,6 +133,35 @@ async function main(): Promise<void> {
   await repo.paidAttempts.finish(results[0]!.ok ? a : b, [], "not_sent");
   assert.equal((await repo.getSettings()).reservedEur, 0.02);
   assert.equal((await repo.usage.list()).length, 1);
+  // A3.1: unique durable HTTP claim; concurrency and replay go through PostgREST.
+  const httpId = "a".repeat(64);
+  const scope = {
+    id: httpId,
+    workspaceId: "kora",
+    actorId: "a3-ci-operator",
+    route: "POST /articles",
+    fingerprint: "b".repeat(64),
+  };
+  const claims = await Promise.all([repo.idempotency.begin(scope), repo.idempotency.begin(scope)]);
+  assert.equal(claims.filter((c) => c.kind === "claimed").length, 1);
+  assert.equal(claims.filter((c) => c.kind === "pending").length, 1);
+  assert.deepEqual(await repo.idempotency.begin({ ...scope, fingerprint: "c".repeat(64) }), {
+    kind: "conflict",
+  });
+  await repo.idempotency.complete(httpId, 201, '{"id":"article-test"}');
+  assert.deepEqual(await repo.idempotency.begin(scope), {
+    kind: "completed",
+    status: 201,
+    bodyText: '{"id":"article-test"}',
+  });
+  await repo.idempotency.complete(httpId, 201, '{"id":"article-test"}');
+  await assert.rejects(repo.idempotency.uncertain(httpId));
+  const uncertainId = "d".repeat(64);
+  const pending = { ...scope, id: uncertainId };
+  assert.deepEqual(await repo.idempotency.begin(pending), { kind: "claimed" });
+  await repo.idempotency.uncertain(uncertainId);
+  assert.deepEqual(await repo.idempotency.begin(pending), { kind: "uncertain" });
+  await assert.rejects(repo.idempotency.complete(uncertainId, 201, "{}"));
   console.log(
     JSON.stringify({
       event: "a3.db_repository.integration_pass",
