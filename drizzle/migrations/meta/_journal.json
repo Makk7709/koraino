@@ -15,6 +15,48 @@
       "when": 1791842259799,
       "tag": "0001_app_user_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793476800000,
+      "tag": "0002_kora_paid_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793563200000,
+      "tag": "0003_kora_settings_safe_write",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793653200000,
+      "tag": "0004_kora_paid_reconcile",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793721600000,
+      "tag": "0005_kora_paid_overrun",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793808000000,
+      "tag": "0006_kora_paid_accounting_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793894400000,
+      "tag": "0007_kora_http_idempotency",
+      "breakpoints": true
     }
   ]
 }

@@ -9,9 +9,10 @@ import {
   quotaExceeded,
 } from "../domain/budget";
 import { monthKey } from "../domain/dates";
-import type { QuotaKey, UsageKind } from "../store/records";
+import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
 import type { Repository } from "../store/repository";
+import { isFourDecimalMoney, validateEstimatedUsageLines } from "../store/paid-attempts";
 import { audit, notify } from "./journal";
 import { withLock } from "./locks";
 
@@ -140,31 +141,27 @@ export async function paidCall<T>(
   call: PaidCall,
   fn: () => T | Promise<T>,
   actual?: (result: T) => UsageLine[],
+  billingUncertain?: (result: T) => boolean,
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
-  const reservation = await withBudgetLock(repo, async () => {
-    const settings = await repo.getSettings();
-    const spent = monthTotals(await repo.usage.list(), month).costEur;
-    const decision = decideReservation({
-      settings,
-      spentEur: spent,
-      estimateEur: call.estimate,
+  if (!isFourDecimalMoney(call.estimate)) {
+    throw new Error("Invalid paid attempt estimate precision");
+  }
+  // Unique attempt per invocation. Persisted before any potentially paid work.
+  const id = repo.nextId("pat");
+  const reservation = await withBudgetLock(repo, () =>
+    repo.paidAttempts.reserve({
+      id,
+      workspaceId: repo.workspaceId,
       month,
-    });
-    if (!decision.ok) {
-      const suspending = !settings.paidCallsSuspended || settings.suspendedMonth !== month;
-      if (suspending) {
-        settings.paidCallsSuspended = true;
-        settings.suspendedMonth = month;
-        await repo.saveSettings(settings);
-      }
-      return { ...decision, suspending };
-    }
-    settings.reservedEur += call.estimate;
-    await repo.saveSettings(settings);
-    return decision;
-  });
+      kind: call.kind,
+      estimateEur: call.estimate,
+      units: call.units,
+      label: call.label,
+      createdAt: now.toISOString(),
+    }),
+  );
   if (!reservation.ok) {
     if (reservation.suspending) {
       await audit(ctx, "quota.suspension", "quota", "api_budget_eur", reservation.reason, "KORA");
@@ -178,19 +175,116 @@ export async function paidCall<T>(
     throw budgetExhausted(reservation.reason);
   }
 
+  // A failed acknowledgement is ambiguous: the database may have committed start().
+  // The provider callback has NOT run. Resolve only from a confirmed durable state.
+  try {
+    await repo.paidAttempts.start(id);
+  } catch (error: unknown) {
+    let disposition = "unresolved";
+    try {
+      const attempt = await repo.paidAttempts.get(id);
+      if (attempt?.status === "reserved") {
+        // DB confirms the attempt never entered in_flight; no provider work was started.
+        await repo.paidAttempts.finish(id, [], "not_sent");
+        disposition = "not_sent";
+      } else if (attempt?.status === "in_flight") {
+        // The write committed but its acknowledgement was lost. Preserve exposure.
+        await repo.paidAttempts.unknown(id, "persist_error");
+        disposition = "unknown";
+      } else if (attempt?.status === "unknown") {
+        disposition = "unknown";
+      }
+    } catch (recoveryError: unknown) {
+      console.error(
+        JSON.stringify({
+          event: "kora.paid_attempt.start_recovery_failed",
+          attemptId: id,
+          errorType: recoveryError instanceof Error ? recoveryError.name : "unknown",
+        }),
+      );
+    }
+    console.error(
+      JSON.stringify({
+        event: "kora.paid_attempt.start_failed",
+        attemptId: id,
+        disposition,
+        errorType: error instanceof Error ? error.name : "unknown",
+      }),
+    );
+    throw error;
+  }
   let result: T;
   try {
     result = await fn();
-    const lines = actual
+  } catch (error: unknown) {
+    // Even if callback rejects, a supplier might already have billed the request.
+    await repo.paidAttempts
+      .unknown(id, "provider_or_callback_error")
+      .catch((stateError: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "kora.paid_attempt.unknown_persist_failed",
+            attemptId: id,
+            errorType: stateError instanceof Error ? stateError.name : "unknown",
+          }),
+        );
+      });
+    throw error;
+  }
+
+  // A usable fallback result does not prove that an earlier timeout was free.
+  // Retain the full reservation for administrator reconciliation.
+  let hasBillingUncertainty = false;
+  try {
+    hasBillingUncertainty = billingUncertain?.(result) ?? false;
+  } catch (error: unknown) {
+    await repo.paidAttempts
+      .unknown(id, "provider_or_callback_error")
+      .catch((stateError: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "kora.paid_attempt.billing_uncertainty_persist_failed",
+            attemptId: id,
+            errorType: stateError instanceof Error ? stateError.name : "unknown",
+          }),
+        );
+      });
+    throw error;
+  }
+  if (hasBillingUncertainty) {
+    await repo.paidAttempts.unknown(id, "provider_or_callback_error");
+    console.warn(JSON.stringify({ event: "kora.paid_attempt.billing_uncertain", attemptId: id }));
+    return result;
+  }
+
+  let finishAttempted = false;
+  let expectedSettlementLines: UsageEntry[] | undefined;
+  let settlementConfirmedAfterLostAck = false;
+  try {
+    const usage = actual
       ? actual(result)
       : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
-    let remaining = call.estimate;
-    for (const line of lines) {
+    const lines: UsageEntry[] = [];
+    for (const line of usage) {
       if (line.costEur <= 0 && line.units <= 0) continue;
-      const cost = Math.max(0, Math.min(line.costEur, remaining));
-      remaining -= cost;
-      await repo.usage.insert({
-        id: repo.nextId("use"),
+      if (
+        !Number.isFinite(line.costEur) ||
+        !Number.isFinite(line.units) ||
+        line.costEur < 0 ||
+        line.units < 0
+      ) {
+        throw new Error("Invalid usage line");
+      }
+      const cost = line.costEur;
+      const costUnits = cost * 10000;
+      if (
+        !Number.isSafeInteger(Math.round(costUnits)) ||
+        Math.abs(costUnits - Math.round(costUnits)) > 1e-7
+      ) {
+        throw new Error("Invalid usage cost precision");
+      }
+      lines.push({
+        id: `${id}:line:${lines.length}`,
         at: now.toISOString(),
         kind: line.kind,
         units: line.units,
@@ -198,26 +292,91 @@ export async function paidCall<T>(
         label: line.label,
       });
     }
-  } finally {
-    await releaseReservation(repo, call.estimate);
+    const total = validateEstimatedUsageLines(lines, id);
+    if (total > call.estimate + 1e-9) {
+      await repo.paidAttempts.overrun(id, lines);
+      console.warn(
+        JSON.stringify({
+          event: "kora.paid_attempt.estimated_overrun",
+          attemptId: id,
+          reservedEur: call.estimate,
+          estimatedCostEur: total,
+          overrunEur: Math.round((total - call.estimate) * 10000) / 10000,
+        }),
+      );
+      return result;
+    }
+    // Atomic journal insertion + reservation release, idempotent in PostgreSQL.
+    // The budget lock also protects legacy settings writes during A3 transition.
+    expectedSettlementLines = lines;
+    finishAttempted = true;
+    await withBudgetLock(repo, () => repo.paidAttempts.finish(id, lines, "settled"));
+  } catch (error: unknown) {
+    // A committed finish() can lose its HTTP acknowledgement. Accept only an
+    // independently read, *exactly matching* settled ledger for this attempt.
+    let persisted: Awaited<ReturnType<typeof repo.paidAttempts.get>>;
+    try {
+      persisted = await repo.paidAttempts.get(id);
+    } catch (readError: unknown) {
+      console.error(
+        JSON.stringify({
+          event: "kora.paid_attempt.settlement_state_read_failed",
+          attemptId: id,
+          errorType: readError instanceof Error ? readError.name : "unknown",
+        }),
+      );
+    }
+    const matchesCommittedLines =
+      finishAttempted &&
+      expectedSettlementLines !== undefined &&
+      persisted?.status === "settled" &&
+      persisted.usageLines.length === expectedSettlementLines.length &&
+      persisted.usageLines.every((line, index) => {
+        const expected = expectedSettlementLines?.[index];
+        return (
+          expected !== undefined &&
+          line.id === expected.id &&
+          line.at === expected.at &&
+          line.kind === expected.kind &&
+          line.units === expected.units &&
+          line.costEur === expected.costEur &&
+          line.label === expected.label
+        );
+      });
+    if (matchesCommittedLines) {
+      settlementConfirmedAfterLostAck = true;
+      console.warn(
+        JSON.stringify({ event: "kora.paid_attempt.finish_ack_recovered", attemptId: id }),
+      );
+    } else {
+      if (!persisted || persisted.status === "in_flight") {
+        await repo.paidAttempts.unknown(id, "persist_error").catch((stateError: unknown) => {
+          console.error(
+            JSON.stringify({
+              event: "kora.paid_attempt.settlement_uncertain",
+              attemptId: id,
+              errorType: stateError instanceof Error ? stateError.name : "unknown",
+            }),
+          );
+        });
+      }
+      // Unknown or mismatched state is never promoted to success.
+      throw error;
+    }
+  }
+  if (settlementConfirmedAfterLostAck) {
+    // Acknowledgement was lost, but the matching durable outcome was verified.
+    // Cross-request idempotency still requires a stable business key (A4).
   }
   await checkAlerts(repo, now).catch((e: unknown) => {
-    console.error("[budget] alertes non vérifiées (revérifiées au prochain appel payant)", e);
+    console.error(
+      JSON.stringify({
+        event: "kora.budget.alert_check_failed",
+        errorType: e instanceof Error ? e.name : "unknown",
+      }),
+    );
   });
   return result;
-}
-
-/** Libérée après l'enregistrement du coût réel : à aucun moment l'appel n'échappe au plafond. */
-async function releaseReservation(repo: Repository, amount: number): Promise<void> {
-  const release = async () => {
-    const s = await repo.getSettings();
-    s.reservedEur = Math.max(0, s.reservedEur - amount);
-    await repo.saveSettings(s);
-  };
-  await withBudgetLock(repo, release).catch(async (e: unknown) => {
-    console.error("[budget] réservation libérée hors verrou", e);
-    await release();
-  });
 }
 
 /** Les appels payants sont-ils suspendus ce mois-ci ? */

@@ -48,7 +48,7 @@ flowchart LR
   C -- "fetch /api/*<br/>JSON + x-kora-request + jeton Bearer" --> R
   UI -. "connexion (mode supabase)" .-> SBA[(Supabase Auth)]
   RT -- "vérification du jeton" --> SBA
-  A -- "HTTPS (si AI_API_KEY)" --> OAI[(OpenAI)]
+  A -- "HTTPS, Haiku principal (si ANTHROPIC_API_KEY)" --> OAI[(Anthropic / OpenAI en secours)]
   A -- "HTTPS : flux RSS, Google News" --> WEB[(Sites des sources)]
   A -- "passerelle de connexion : Perplexity, LinkedIn" --> GW[(Passerelle de la plateforme)]
   A -- "HTTPS : API REST (si WORDPRESS_*)" --> WPX[(WordPress)]
@@ -175,7 +175,7 @@ Au premier usage, `ensureReady()` installe les grilles de score, les règles éd
 
 Limites à connaître :
 
-- **Pas de transactions** : chaque opération du `Repository` est une requête indépendante, et une opération composée interrompue (fusion de signaux, suppression d'une entreprise, publication) peut laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des **verrous à expiration** : `acquireLock` insère une ligne `locks` sans écraser, la clé primaire garantissant un seul détenteur, et `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) exécute l'opération puis libère le verrou. Un verrou déjà pris répond 409 tout de suite, ou après quelques secondes d'attente pour les sections courtes. Sont ainsi protégés : la collecte (un verrou global de 15 minutes, 409 `collection_in_progress`), les générations d'articles et de variantes LinkedIn (409 `generation_in_progress`), l'ajout de sujets aux newsletters (`generation_in_progress` ou `newsletter_busy`), la conversion d'un import (`conversion_in_progress`), la décision sur une proposition de règle (`already_decided`), le budget (verrou `budget`, `budget_busy`), les publications WordPress et LinkedIn (`publication_in_progress`) et la gestion des utilisateurs (`users_busy`). `saveSettings` réécrit tout le JSON des réglages, mais tous ses appels passent par le verrou `budget`.
+- **Pas de transactions pour les opérations générales** : les opérations du `Repository` hors fonctions SQL financières A3 restent des requêtes indépendantes, et une opération composée interrompue (fusion de signaux, suppression d'une entreprise, publication) peut laisser un état partiel. Les opérations exposées aux demandes simultanées sont sérialisées par des **verrous à expiration** : `acquireLock` insère une ligne `locks` sans écraser, la clé primaire garantissant un seul détenteur, et `withLock` ([`services/locks.ts`](../src/server/services/locks.ts)) exécute l'opération puis libère le verrou. Un verrou déjà pris répond 409 tout de suite, ou après quelques secondes d'attente pour les sections courtes. Sont ainsi protégés : la collecte (un verrou global de 15 minutes, 409 `collection_in_progress`), les générations d'articles et de variantes LinkedIn (409 `generation_in_progress`), l'ajout de sujets aux newsletters (`generation_in_progress` ou `newsletter_busy`), la conversion d'un import (`conversion_in_progress`), la décision sur une proposition de règle (`already_decided`), le budget (verrou `budget`, `budget_busy`), les publications WordPress et LinkedIn (`publication_in_progress`) et la gestion des utilisateurs (`users_busy`). `saveSettings` réécrit tout le JSON des réglages, mais tous ses appels passent par le verrou `budget`.
 - **`list()` charge toute la collection**, par pages de 1 000 lignes : chaque liste, chaque compteur du dashboard et chaque contrôle de doublon relit toutes les lignes de la collection concernée. Insuffisant pour l'épreuve de charge R13 (100 000 signaux).
 - **Fichiers importés dans le JSON** : l'original d'un import (`bytes`, un `Uint8Array`) est sérialisé dans `data`. `JSON.stringify` transforme un `Uint8Array` en objet `{"0": …, "1": …}` : le fichier occupe environ dix fois sa taille et ne se relit pas comme un `Uint8Array`.
 - **Requêtes non filtrées par espace** : la colonne d'espace du schéma cible n'existe pas dans `kora_records`.
@@ -195,36 +195,57 @@ Les adaptateurs sont regroupés dans [`adapters/index.ts`](../src/server/adapter
 | Rôle | Interface | Implémentation par défaut | Statut |
 |---|---|---|---|
 | Génération de textes (dossier factuel, brouillon, variantes LinkedIn, résumés, notes éditoriales) | `TextModel` ([`text-model.ts`](../src/server/adapters/text-model.ts)) | `TemplateTextModel` : gabarits déterministes à partir des données du signal. | Réel, sans IA. |
-| Amélioration IA des textes | `AiTextEnhancer` ([`openai.ts`](../src/server/adapters/openai.ts)) | `OpenAiEnhancer` (OpenAI `gpt-4o-mini`), actif seulement si `AI_API_KEY` est défini et hors Vitest ; sinon `null`. | Réel si clé configurée. |
+| Amélioration IA des textes | `AiTextEnhancer` ([`openai.ts`](../src/server/adapters/openai.ts)) | Classe historique `OpenAiEnhancer` : Anthropic `claude-haiku-5-5` principal (clé `ANTHROPIC_API_KEY`), OpenAI `gpt-4.1-mini` en secours conditionnel ; sans clé principale, conservation du gabarit. Adaptateur désactivé par défaut sous Vitest. | Migration locale validée sur mocks ; non déployée. |
 | Collecte des sources | `Collector` ([`collector.ts`](../src/server/adapters/collector.ts)) | `RealCollector` : lit le flux RSS ou Atom de la source (découvert dans la page HTML au besoin) ou interroge Google News RSS avec le nom de l'entreprise ; délai de 15 s par requête. Pour les recherches presse rattachées à une entreprise, interroge en parallèle l'API Search de Perplexity par la passerelle de connexion de la plateforme d'hébergement (si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, délai de 20 s). Ne garde que les publications datées de moins de 30 jours. Sous Vitest : `SimulatedCollector` (observations plausibles et échecs reproductibles). | Réel (flux RSS, Google News et Perplexity ; pas de lecture de pages HTML). |
 | WordPress | `WordPressClient` ([`channels.ts`](../src/server/adapters/channels.ts)) | Choisi par `createWordPressClient` ([`wordpress/client.ts`](../src/server/wordpress/client.ts)) : `RestWordPress` (API REST du site, mot de passe d'application) si les trois variables `WORDPRESS_*` sont définies ; `SimulatedWordPress` sans aucune de ces variables, sous Vitest ou sans base ; sinon un client « non configuré » qui refuse l'envoi. | Réel en production si configuré ; simulé en démonstration. |
 | LinkedIn | `LinkedInClient` ([`channels.ts`](../src/server/adapters/channels.ts)) | `ExportOnlyLinkedIn` : API indisponible pour l'adaptateur. La publication passe par le compte LinkedIn que chaque utilisateur relie ([`linkedin/publish.ts`](../src/server/linkedin/publish.ts), passerelle de connexion de la plateforme). | Publication réelle pour un compte relié ; export manuel sinon. |
 
-### Chaîne de génération avec OpenAI
+### Chaîne de génération IA : Haiku principal, secours OpenAI conditionnel
 
-Le modèle à gabarits produit toujours un premier texte. Si un `AiTextEnhancer` est configuré, ce texte et les données sources lui sont transmis pour réécriture ; en cas d'erreur réseau, de délai dépassé (30 s), de réponse non JSON ou incomplète, le texte gabarit est conservé. L'application ne dépend donc jamais de la disponibilité d'OpenAI.
+Le modèle à gabarits fournit toujours le texte de départ. Le chemin de réécriture éditoriale
+appelle Claude Haiku 5.5 lorsque la clé serveur Anthropic est présente. En cas d'échec transitoire
+reconnu, et uniquement si le secours est explicitement activé, configuré et couvert par une
+réserve estimative, GPT-4.1 mini peut être appelé. En cas de réponse inexploitable ou d'échec,
+le texte gabarit est conservé. Les réponses restent soumises aux garde-fous éditoriaux.
 
 ```mermaid
 sequenceDiagram
   participant H as Handler / service
   participant T as TemplateTextModel
-  participant AI as OpenAiEnhancer
-  participant O as API OpenAI
+  participant B as paidCall (réservation estimée)
+  participant AI as AiTextEnhancer
+  participant A as Anthropic Haiku 5.5
+  participant O as OpenAI GPT-4.1 mini
   H->>T: generateDossier / linkedinVariants / summarize
   T-->>H: texte gabarit
-  alt AI_API_KEY défini
-    H->>AI: enhanceXxx(entrée, texte gabarit)
-    AI->>O: chat/completions (gpt-4o-mini)
+  alt clé Anthropic présente et budget disponible
+    H->>B: réserver estimation primaire + secours éventuel
+    B->>AI: enhanceXxx(entrée, gabarit)
+    AI->>A: POST /v1/messages
     alt réponse valide
-      O-->>AI: texte réécrit
-      AI-->>H: texte réécrit
-    else erreur, délai, réponse invalide
-      AI-->>H: texte gabarit inchangé
+      A-->>AI: texte
+    else erreur transitoire autorisée et secours activé
+      AI->>O: POST /v1/chat/completions
+      O-->>AI: texte ou erreur
+    else 429 ambigu/financier, ou autre erreur non éligible
+      AI-->>B: texte gabarit
     end
+    AI-->>B: texte retenu après contrôles
+    B-->>H: résultat et régularisation estimative
+  else clé absente ou budget refusé
+    H-->>H: gabarit ou erreur HTTP selon le chemin appelant
   end
 ```
 
-Points d'insertion actuels : résumé des signaux à la collecte ([`services/collection.ts`](../src/server/services/collection.ts)) et à la défusion ([`handlers/signals.ts`](../src/server/handlers/signals.ts)), dossier et brouillon d'article ([`handlers/articles.ts`](../src/server/handlers/articles.ts)), variantes LinkedIn ([`handlers/distribution.ts`](../src/server/handlers/distribution.ts)), résumés de newsletter ([`services/newsletters.ts`](../src/server/services/newsletters.ts)). Les garde-fous du prompt et les données transmises sont décrits dans [Sécurité et flux tiers](06-securite-et-flux-tiers.md).
+Points d'insertion : résumés à la collecte ([`services/collection.ts`](../src/server/services/collection.ts))
+et à la défusion ([`handlers/signals.ts`](../src/server/handlers/signals.ts)) via
+[`services/summary-ai.ts`](../src/server/services/summary-ai.ts) ; dossier d'article
+([`handlers/articles.ts`](../src/server/handlers/articles.ts)) ; variantes LinkedIn
+([`handlers/distribution.ts`](../src/server/handlers/distribution.ts)) ;
+résumés de newsletter ([`services/newsletters.ts`](../src/server/services/newsletters.ts)).
+Le routage de classification utilise [`adapters/classification-providers.ts`](../src/server/adapters/classification-providers.ts).
+Les tests de cette migration sont simulés ; les contrats API réels n'ont pas été éprouvés.
+Voir [le jalon A1/A2 v1.2](2026-10-31-correctifs-ia-a1-a2-v1.2.md).
 
 ### Brancher un vrai fournisseur
 
@@ -232,13 +253,30 @@ Points d'insertion actuels : résumé des signaux à la collecte ([`services/col
 
 ## Budget et appels payants
 
-Toute opération susceptible de coûter (collecte, génération de dossier, variantes LinkedIn, résumés de newsletter) est enveloppée par `paidCall()` de [`services/usage.ts`](../src/server/services/usage.ts). Avant l'appel, le coût estimé (constantes `COSTS` de [`domain/budget.ts`](../src/server/domain/budget.ts)) est **réservé**, sous le verrou `budget` qui sérialise réservations, libérations, suspension et alertes (attente de 5 s au plus, sinon 409 `budget_busy`) ; si le plafond mensuel serait dépassé, rien n'est appelé, les appels payants sont suspendus pour le mois, un événement d'audit et une notification sont créés, et l'API répond 402 `budget_exhausted`. Après l'appel, la consommation est enregistrée avant la libération de la réservation, puis les alertes à 80 % et 100 % sont vérifiées. La lecture et les exports ne passent jamais par `paidCall` et restent disponibles.
+`paidCall()` ([`services/usage.ts`](../src/server/services/usage.ts)) réserve une
+**estimation** avant toute opération susceptible d'engager des coûts. Depuis A3, la voie PostgreSQL utilise les fonctions SQL atomiques `kora_paid_reserve`, `kora_paid_start`, `kora_paid_finish`, `kora_paid_unknown` et `kora_paid_overrun` via `DbRepository`. La tentative et son état restent durables. Lors d'une réponse ambiguë ou d'un dépassement estimé, la réservation est conservée ; aucune consommation fictive n'est insérée dans le ledger avant réconciliation. Les tests PostgreSQL isolés l'ont confirmé sur la branche A3. Ces montants sont **estimatifs**, pas les factures Anthropic/OpenAI/Perplexity. Voir le [rapport A3/P1-11](2026-11-01-a3-p1-11-validation.md).
 
-Exception à corriger : les résumés réécrits par OpenAI via `enhanceSummary()` lors de l'ingestion des observations ([`services/collection.ts`](../src/server/services/collection.ts), après le `paidCall` de la collecte) et lors d'une défusion ([`handlers/signals.ts`](../src/server/handlers/signals.ts)) ne sont pas enveloppés par `paidCall` : ils ne sont ni réservés ni bloqués quand les appels payants sont suspendus. Les autres points d'insertion d'OpenAI (dossier d'article, variantes LinkedIn, résumés de newsletter) sont bien à l'intérieur d'un `paidCall`.
+**Correctif A1 (local, 31/10/2026) :** les résumés post-collecte et les résumés de
+défusion passent désormais par `improveSummary()` et `paidCall()`. Le service
+[`summary-ai.ts`](../src/server/services/summary-ai.ts) conserve le gabarit
+lorsque la clé principale manque ou si l'amélioration échoue ou est refusée
+par le budget. La conservation du signal collecté ne dépend pas du succès de
+l'amélioration facultative.
 
-La collecte reste facturée comme un appel payant : une recherche à 0,012 € plus jusqu'à trois observations à 0,021 € par source et par exécution, les publications déjà connues n'étant pas comptées. Les flux RSS et Google News lus par `RealCollector` sont pourtant gratuits, et le coût réel de la recherche Perplexity n'est pas lu. Une collecte complète de 150 sources consomme entre 1,80 € (aucune nouvelle publication) et environ 11 € du budget de 150 €.
+**Correctif A2 (local, 31/10/2026) :** les HTTP 429 ambigus ou signalant un
+plafond financier ne déclenchent plus automatiquement le secours OpenAI. Le
+fallback doit être explicitement activé, disposant de ses credentials et d'une
+réserve positive. [`ai-estimate.ts`](../src/server/services/ai-estimate.ts)
+ajoute une estimation forfaitaire du secours potentiel pour la génération
+éditoriale lorsque la configuration le permet.
 
-Le coût enregistré est l'**estimation** de `COSTS`, pas le coût réellement facturé par OpenAI. Pour un suivi exact, `OpenAiEnhancer` devra remonter l'usage en jetons de la réponse et le convertir en euros via le paramètre `actual` de `paidCall`. Les règles détaillées sont dans [Règles métier](05-regles-metier.md).
+**État au 01/11/2026 :** A3 conserve désormais la réservation en état `unknown` et permet un rapprochement administratif `billed/not_billed` sur preuve via `kora_paid_reconcile` (PostgreSQL seulement). La fonction de rapprochement est inaccessible au rôle HTTP `service_role` et doit être appelée par un administrateur PostgreSQL habilité. Les appels concurrents hors de ce périmètre et l'expiration des verrous restent à auditer (A4). Les forfaits KORA ne sont pas des coûts de facture vérifiés (A5).
+Le coût conventionnel attribué à certaines collectes RSS/Google News ne doit
+pas être assimilé à une dépense fournisseur réelle.
+
+Pour les scénarios, les validations du 31/10/2026 et les risques résiduels,
+voir [le jalon A1/A2 v1.2](2026-10-31-correctifs-ia-a1-a2-v1.2.md) ainsi
+que les [règles métier](05-regles-metier.md).
 
 ## Frontend
 

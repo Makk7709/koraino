@@ -30,6 +30,12 @@ export interface RawItem {
   via?: ObservationVia;
   /** Lecture du contenu par le modèle, ajoutée par le service de collecte avant l'ingestion. */
   assessment?: ContentAssessment;
+  /** Tentatives de classification en mémoire, pour le budget API global uniquement. */
+  classificationUsage?: {
+    primaryCalls: number;
+    fallbackCalls: number;
+    billingUncertain?: boolean;
+  };
 }
 
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */

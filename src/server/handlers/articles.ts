@@ -2,6 +2,7 @@ import type { Approval, ArticleStatus, ArticleVersion, PublicationAttempt } from
 import { adapters } from "../adapters";
 import type { Ctx, Handler } from "../context";
 import { COSTS } from "../domain/budget";
+import { estimatedTextAiCost } from "../services/ai-estimate";
 import { KORA_AUTHOR } from "../domain/dna";
 import { assertCan, can } from "../domain/permissions";
 import { truncate } from "../domain/text";
@@ -118,7 +119,7 @@ async function generateArticle(
     ctx,
     {
       kind: "generation_article",
-      estimate: COSTS.article,
+      estimate: estimatedTextAiCost(COSTS.article),
       units: 1,
       label: `Dossier et brouillon : ${signal.title}`,
     },

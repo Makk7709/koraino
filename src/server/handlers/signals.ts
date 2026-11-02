@@ -1,5 +1,5 @@
 import type { ScoringGrid, Signal, SignalStatus } from "@/lib/api/types";
-import { adapters, enhanceSummary } from "../adapters";
+import { adapters } from "../adapters";
 import type { Ctx, Handler } from "../context";
 import { assertCan } from "../domain/permissions";
 import { applyGrid, isDecided, validateWeights } from "../domain/scoring";
@@ -9,6 +9,7 @@ import type { GridRecord, SignalRecord } from "../store/records";
 import { collectAll, collectOne } from "../services/collection";
 import { audit } from "../services/journal";
 import { addItem, ensureCurrentEdition, removeItems, renumber } from "../services/newsletters";
+import { improveSummary } from "../services/summary-ai";
 import {
   activeGrid,
   applyGridToSignals,
@@ -367,11 +368,12 @@ export const splitSignal: Handler = async (ctx) => {
     review: original.review?.kind === "fusion_incertaine" ? null : original.review,
     updatedAt: at,
   };
+  const summaryInput = { title: first.title, text: first.excerpt };
   const draft: SignalRecord = {
     ...original,
     id: createdId,
     title: first.title,
-    summary: await enhanceSummary({ title: first.title, text: first.excerpt }),
+    summary: await improveSummary(ctx, summaryInput, adapters().textModel.summarize(summaryInput)),
     status: "nouveau",
     statusReason: null,
     observationIds: moving,

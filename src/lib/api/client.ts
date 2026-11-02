@@ -1,3 +1,4 @@
+import { paidRequestIdentity } from "./idempotency";
 import type {
   ApiErrorBody,
   ApproveInput,
@@ -89,6 +90,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     const token = await getAccessToken();
     if (token) headers.set("authorization", `Bearer ${token}`);
   }
+  // Protected generation and collection operations retain their key across an HTTP timeout.
+  const retryIdentity = await paidRequestIdentity(path, init);
+  if (retryIdentity) headers.set("Idempotency-Key", retryIdentity.key);
   const res = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });
   if (!res.ok) {
     let body: ApiErrorBody | null = null;
@@ -110,8 +114,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       body?.error.details,
     );
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  if (res.status === 204) {
+    retryIdentity?.clear();
+    return undefined as T;
+  }
+  const result = (await res.json()) as T;
+  retryIdentity?.clear();
+  return result;
 }
 
 const json = (method: string, body?: unknown): RequestInit => ({

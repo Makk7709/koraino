@@ -29,7 +29,9 @@ import type {
 import { notify } from "./journal";
 import { withLock } from "./locks";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
+import { improveSummary } from "./summary-ai";
 import { paidCall, type UsageLine } from "./usage";
+import { isFourDecimalMoney } from "../store/paid-attempts";
 
 /** Nombre maximal d'essais par exécution (§6 : tentatives bornées), sur erreur transitoire seulement. */
 export const MAX_ATTEMPTS = 3;
@@ -292,16 +294,20 @@ function replaceSignal(
  * critique de l'ingestion. Sans clé IA, rien n'est appelé ni réécrit.
  */
 async function enhanceSummaries(
-  repo: Pick<Ctx, "repo">["repo"],
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
   pending: CollectState["pendingSummaries"],
 ): Promise<void> {
-  const ai = adapters().ai;
-  if (!ai || pending.length === 0) return;
+  if (!adapters().ai || pending.length === 0) return;
   await parallel(pending, CONCURRENCY, async (p) => {
-    const summary = await ai.enhanceSummary({ title: p.title, text: p.text }, p.base);
+    const summary = await improveSummary(ctx, { title: p.title, text: p.text }, p.base);
     if (summary === p.base) return;
-    const current = await repo.signals.get(p.signalId);
-    if (current) await repo.signals.update({ ...current, summary });
+    // Failure to persist an optional improvement must not invalidate ingested signals.
+    try {
+      const current = await ctx.repo.signals.get(p.signalId);
+      if (current) await ctx.repo.signals.update({ ...current, summary });
+    } catch {
+      console.warn(JSON.stringify({ event: "kora.summary.persist_failed" }));
+    }
   });
 }
 
@@ -353,7 +359,21 @@ async function assessItems(
     const title = sanitizeText(item.title, 300);
     const text = sanitizeText(item.html, 1200);
     if (!title || !text) return item;
-    const assessment = await ai.classify({ title, text, companyName: company?.name ?? null });
+    const input = { title, text, companyName: company?.name ?? null };
+    if (ai.classifyWithUsage) {
+      const measured = await ai.classifyWithUsage(input);
+      return {
+        ...item,
+        ...(measured.assessment ? { assessment: measured.assessment } : {}),
+        classificationUsage: {
+          primaryCalls: measured.primaryCalls,
+          fallbackCalls: measured.fallbackCalls,
+          billingUncertain: measured.billingUncertain,
+        },
+      };
+    }
+    // Compatibilité avec les adaptateurs simulés ne disposant pas de compteur.
+    const assessment = await ai.classify(input);
     return assessment ? { ...item, assessment } : item;
   });
   const byOriginal = new Map([...picked].map((item, i) => [item, assessed[i]!]));
@@ -388,11 +408,33 @@ async function fetchOutcome(
   return { result, attempts: attempt };
 }
 
-/** Coût réel d'une source : une requête, les nouvelles publications retenues, les lectures par le modèle. */
+/** Estimation forfaitaire retenue dans le budget global pour un appel de secours. */
+function fallbackCostEstimate(): number {
+  const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
+  const value = raw ? Number(raw) : Number.NaN;
+  if (!isFourDecimalMoney(value)) {
+    throw budgetExhausted("Réserve de repli IA absente ou invalide (quatre décimales maximum).");
+  }
+  return value;
+}
+
+/**
+ * Consommation estimée du budget API KORA, distincte de toute facturation client.
+ * Un appel peut être compté même si la classification n'a pas abouti.
+ */
 function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome): UsageLine[] {
   const items = outcome.result.ok ? outcome.result.items : [];
-  const units = Math.min(items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS);
-  const assessed = items.filter((i) => i.assessment).length;
+  const candidates = items.filter((item) => !isKnown(state, item)).slice(0, MAX_ITEMS);
+  const units = candidates.length;
+  const primaryCalls = candidates.reduce(
+    (sum, item) => sum + (item.classificationUsage?.primaryCalls ?? (item.assessment ? 1 : 0)),
+    0,
+  );
+  const fallbackCalls = candidates.reduce(
+    (sum, item) => sum + (item.classificationUsage?.fallbackCalls ?? 0),
+    0,
+  );
+
   return [
     { kind: "search_query", costEur: COSTS.search, units: 1, label: `Collecte ${source.label}` },
     ...(units
@@ -405,13 +447,23 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
           },
         ]
       : []),
-    ...(assessed
+    ...(primaryCalls
       ? [
           {
             kind: "classification" as const,
-            costEur: assessed * COSTS.classification,
-            units: assessed,
-            label: `Lecture par le modèle ${source.label}`,
+            costEur: primaryCalls * COSTS.classification,
+            units: primaryCalls,
+            label: `Classification IA principale ${source.label}`,
+          },
+        ]
+      : []),
+    ...(fallbackCalls
+      ? [
+          {
+            kind: "classification" as const,
+            costEur: fallbackCalls * fallbackCostEstimate(),
+            units: fallbackCalls,
+            label: `Classification IA de secours ${source.label}`,
           },
         ]
       : []),
@@ -420,8 +472,36 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
 
 /** Coût estimé d'une source, réservé avant l'appel : requête, publications, lectures par le modèle. */
 function estimatePerSource(): number {
-  const perItem = COSTS.observation + (adapters().ai ? COSTS.classification : 0);
-  return COSTS.search + MAX_ITEMS * perItem;
+  const aiEnabled = Boolean(adapters().ai);
+  let fallbackReserve = 0;
+
+  const fallbackConfigured =
+    aiEnabled &&
+    process.env["KORA_AI_FALLBACK_ENABLED"] === "true" &&
+    Boolean(process.env["ANTHROPIC_API_KEY"]?.trim()) &&
+    Boolean(process.env["AI_API_KEY"]?.trim());
+
+  if (fallbackConfigured) {
+    const raw = process.env["KORA_AI_FALLBACK_RESERVE_EUR_PER_CALL"];
+    const reserve = Number(raw);
+
+    if (!raw || !isFourDecimalMoney(reserve)) {
+      throw budgetExhausted(
+        "Repli IA bloqué : réserve budgétaire OpenAI absente ou invalide (quatre décimales maximum).",
+      );
+    }
+
+    fallbackReserve = reserve;
+  }
+
+  // Exact budget unit: each configured component must already have four-decimal precision.
+  const perItemUnits =
+    Math.round(COSTS.observation * 10_000) +
+    (aiEnabled ? Math.round(COSTS.classification * 10_000) : 0) +
+    Math.round(fallbackReserve * 10_000);
+  const estimate = (Math.round(COSTS.search * 10_000) + MAX_ITEMS * perItemUnits) / 10_000;
+  if (!isFourDecimalMoney(estimate)) throw budgetExhausted("Réserve de collecte invalide.");
+  return estimate;
 }
 
 /** Suite d'une exécution après l'appel réseau : état de la source, ingestion, exécution consignée. */
@@ -548,6 +628,12 @@ async function runBatch(
       },
       () => parallel(sources, CONCURRENCY, (s) => fetchOutcome(ctx, state, s, companyOf(s))),
       (outs) => outs.flatMap((o, i) => usageLines(state, sources[i]!, o)),
+      (outs) =>
+        outs.some(
+          (o) =>
+            o.result.ok &&
+            o.result.items.some((item) => item.classificationUsage?.billingUncertain === true),
+        ),
     );
   } catch (e) {
     if (!(e instanceof HttpError)) throw e;
@@ -579,7 +665,7 @@ async function runBatch(
   for (const [i, source] of sources.entries()) {
     runs.push(await settle(ctx, state, source, outcomes[i]!, bases.get(source.id)!));
   }
-  await enhanceSummaries(repo, state.pendingSummaries.splice(0));
+  await enhanceSummaries(ctx, state.pendingSummaries.splice(0));
   return runs;
 }
 

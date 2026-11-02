@@ -1,4 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { parseIdempotencyClaim, type IdempotencyRecord } from "../services/http-idempotency";
+import {
+  paidAttemptSchema,
+  validateEstimatedUsageLines,
+  validateUsageLines,
+  type PaidAttemptInput,
+  type PaidAttemptRecord,
+  type ReserveResult,
+} from "./paid-attempts";
+import type { UsageEntry } from "./records";
 import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
@@ -117,6 +127,164 @@ export class DbRepository implements Repository {
   examples = new DbCollection<any>("examples");
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
+  idempotency = {
+    begin: async (input: {
+      id: string;
+      workspaceId: string;
+      actorId: string;
+      route: string;
+      fingerprint: string;
+    }) => {
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_begin" as never,
+        {
+          p_id: input.id,
+          p_workspace: input.workspaceId,
+          p_actor: input.actorId,
+          p_route: input.route,
+          p_fingerprint: input.fingerprint,
+        } as never,
+      );
+      if (error)
+        throw new Error("HTTP idempotency claim failed: " + (error.code ?? "database_error"));
+      return parseIdempotencyClaim(data);
+    },
+    complete: async (id: string, status: number, bodyText: string): Promise<void> => {
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_complete" as never,
+        {
+          p_id: id,
+          p_status: status,
+          p_body: bodyText,
+        } as never,
+      );
+      if (error || data !== true) throw new Error("HTTP idempotency completion failed");
+    },
+    uncertain: async (id: string): Promise<void> => {
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_http_idempotency_uncertain" as never,
+        {
+          p_id: id,
+        } as never,
+      );
+      if (error || data !== true)
+        throw new Error("HTTP idempotency uncertainty persistence failed");
+    },
+    get: async (id: string): Promise<IdempotencyRecord | undefined> => {
+      const { data, error } = await (
+        await db()
+      )
+        .from("kora_records")
+        .select("data")
+        .eq("collection", "http_idempotency")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error("HTTP idempotency read failed");
+      const row = data?.data as unknown as Record<string, unknown> | undefined;
+      if (
+        !row ||
+        (row["state"] !== "pending" && row["state"] !== "uncertain" && row["state"] !== "completed")
+      )
+        return undefined;
+      return {
+        id,
+        state: row["state"],
+        ...(typeof row["httpStatus"] === "number" ? { httpStatus: row["httpStatus"] } : {}),
+        ...(typeof row["bodyText"] === "string" ? { bodyText: row["bodyText"] } : {}),
+      };
+    },
+  };
+  paidAttempts = {
+    reserve: async (attempt: PaidAttemptInput): Promise<ReserveResult> => {
+      paidAttemptSchema.parse(attempt);
+      const { data, error } = await (
+        await db()
+      ).rpc("kora_paid_reserve" as never, { p_attempt: attempt } as never);
+      if (error) throw new Error(`Budget reservation failed: ${error.code ?? "database_error"}`);
+      if (!data || typeof data !== "object" || Array.isArray(data))
+        throw new Error("Invalid reservation response");
+      const result = data as unknown as ReserveResult;
+      if (result.ok === true) return { ok: true };
+      if (
+        result.ok === false &&
+        typeof result.reason === "string" &&
+        typeof result.suspending === "boolean"
+      )
+        return result;
+      throw new Error("Invalid reservation response");
+    },
+    start: async (id: string): Promise<void> => {
+      const { data, error } = await (
+        await db()
+      ).rpc("kora_paid_start" as never, { p_id: id } as never);
+      if (error || data !== true)
+        throw new Error(`Paid attempt start failed: ${error?.code ?? "invalid_response"}`);
+    },
+    unknown: async (
+      id: string,
+      code: "provider_or_callback_error" | "persist_error",
+    ): Promise<void> => {
+      const { data, error } = await (
+        await db()
+      ).rpc("kora_paid_unknown" as never, { p_id: id, p_code: code } as never);
+      if (error || data !== true)
+        throw new Error(`Paid attempt unknown-state failed: ${error?.code ?? "invalid_response"}`);
+    },
+    overrun: async (id: string, lines: UsageEntry[]): Promise<void> => {
+      validateEstimatedUsageLines(lines, id);
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_paid_overrun" as never,
+        {
+          p_id: id,
+          p_lines: lines,
+        } as never,
+      );
+      if (error || data !== true)
+        throw new Error(`Paid attempt overrun failed: ${error?.code ?? "invalid_response"}`);
+    },
+    finish: async (
+      id: string,
+      lines: UsageEntry[],
+      status: "settled" | "not_sent",
+    ): Promise<void> => {
+      const existing = await this.paidAttempts.get(id);
+      if (!existing) throw new Error("Paid attempt not found");
+      validateUsageLines(lines, id, existing.estimateEur);
+      const { data, error } = await (
+        await db()
+      ).rpc(
+        "kora_paid_finish" as never,
+        {
+          p_id: id,
+          p_lines: lines,
+          p_status: status,
+        } as never,
+      );
+      if (error || data !== true)
+        throw new Error(`Paid attempt finish failed: ${error?.code ?? "invalid_response"}`);
+    },
+    get: async (id: string): Promise<PaidAttemptRecord | undefined> => {
+      const { data, error } = await (
+        await db()
+      )
+        .from("kora_records")
+        .select("data")
+        .eq("collection", "paid_attempts")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error("Paid attempt lookup failed");
+      return (data?.data as unknown as PaidAttemptRecord | undefined) ?? undefined;
+    },
+  };
+
   audit = new DbCollection<any>("audit");
   notifications = new DbCollection<any>("notifications");
 
@@ -188,12 +356,16 @@ export class DbRepository implements Repository {
       });
       if (error && error.code !== UNIQUE_VIOLATION) throw new Error(error.message);
     }
-    const { error } = await client.from("kora_settings").upsert({
-      workspace_id: WORKSPACE,
-      data: rest as never,
-      updated_at: new Date().toISOString(),
-    });
-    if (error) throw new Error(error.message);
+    // A3: database-owned financial fields must survive stale application snapshots.
+    // Fail closed if the migration is absent instead of falling back to a full-row upsert.
+    const { data, error } = await client.rpc(
+      "kora_settings_save" as never,
+      {
+        p_data: rest,
+      } as never,
+    );
+    if (error || data !== true)
+      throw new Error(error?.message ?? "Settings save RPC returned an invalid response");
   }
 
   async getWordPressSettings() {

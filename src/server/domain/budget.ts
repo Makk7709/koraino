@@ -54,14 +54,14 @@ export interface UsageTotals {
 /** Totaux du mois calculés à partir du journal de consommation. */
 export function monthTotals(entries: UsageEntry[], month: string): UsageTotals {
   const units = Object.fromEntries(METERS.map((m) => [m.key, 0])) as Record<QuotaKey, number>;
-  let cents = 0;
+  let tenThousandths = 0;
   for (const e of entries) {
     if (monthKey(new Date(e.at)) !== month) continue;
-    cents += Math.round(e.costEur * 10000);
+    tenThousandths += Math.round(e.costEur * 10000);
     const meter = KIND_TO_METER[e.kind];
     if (meter) units[meter] += e.units;
   }
-  return { costEur: Math.round(cents / 100) / 100, units };
+  return { costEur: tenThousandths / 10000, units };
 }
 
 export function alertLevel(ratio: number): QuotaMeter["alert"] {

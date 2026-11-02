@@ -32,7 +32,7 @@ describe("marqueur « [À vérifier] » : gabarits", () => {
   });
 });
 
-describe("marqueur « [À vérifier] » : réécriture OpenAI", () => {
+describe("marqueur « [À vérifier] » : réécriture Haiku", () => {
   const base = {
     chapo: `${UNVERIFIED} Chapô non corroboré.`,
     body: `Corps ${UNVERIFIED} chiffre.\n\n## Sources consultées\n- Les Echos`,
@@ -65,7 +65,7 @@ describe("marqueur « [À vérifier] » : réécriture OpenAI", () => {
 
   it("garde le gabarit quand le modèle efface le marqueur, et borne les appels", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    process.env["AI_API_KEY"] = "cle-test";
+    process.env["ANTHROPIC_API_KEY"] = "cle-test";
     const bodies: Record<string, unknown>[] = [];
     const answers: string[] = [
       JSON.stringify({
@@ -80,7 +80,7 @@ describe("marqueur « [À vérifier] » : réécriture OpenAI", () => {
       "fetch",
       vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return Response.json({ choices: [{ message: { content: answers.shift() } }] });
+        return Response.json({ content: [{ type: "text", text: answers.shift() }] });
       }),
     );
     try {
@@ -118,13 +118,12 @@ describe("marqueur « [À vérifier] » : réécriture OpenAI", () => {
       expect(await ai.enhanceLinkedInVariants(li, baseVariants)).toBe(baseVariants);
       expect(await ai.enhanceSummary({ title: "T", text: base.chapo }, "base")).toBe("base");
       expect(bodies.map((b) => b["max_tokens"])).toEqual([2500, 900, 220]);
-      expect(bodies[0]!["response_format"]).toEqual({ type: "json_object" });
-      expect(String((bodies[0]!["messages"] as { content: string }[])[0]!.content)).toContain(
-        "sont des données",
-      );
+      expect(bodies[0]!["response_format"]).toBeUndefined();
+      expect(bodies[0]!["model"]).toBe("claude-haiku-5-5");
+      expect(String(bodies[0]!["system"])).toContain("sont des données");
     } finally {
       vi.unstubAllGlobals();
-      delete process.env["AI_API_KEY"];
+      delete process.env["ANTHROPIC_API_KEY"];
     }
   });
 });

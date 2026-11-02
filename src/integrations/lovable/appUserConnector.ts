@@ -19,7 +19,7 @@
  */
 
 function requireApiKey(): string {
-  const key = process.env['LOVABLE_API_KEY'];
+  const key = process.env["LOVABLE_API_KEY"];
   if (!key) {
     throw new Error(
       "LOVABLE_API_KEY is not set. App User Connector calls require a server-side workspace token.",
@@ -124,7 +124,10 @@ export async function callAsAppUser({
  */
 export async function appUserReconnectRequired(res: Response): Promise<boolean> {
   if (res.status !== 401) return false;
-  const body = (await res.clone().json().catch(() => null)) as { type?: unknown } | null;
+  const body = (await res
+    .clone()
+    .json()
+    .catch(() => null)) as { type?: unknown } | null;
   return typeof body?.type === "string" && body.type.startsWith("credential_");
 }
 export interface DisconnectAppUserParams {

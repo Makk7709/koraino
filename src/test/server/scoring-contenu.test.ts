@@ -55,7 +55,7 @@ describe("évaluation du contenu par le modèle", () => {
       category: "contrat",
       importance: 77,
       reason: "Contrat cadre",
-      model: "gpt-4o-mini",
+      model: "claude-haiku-5-5",
     });
     expect(toAssessment({ category: "autre" as never, importance: 50, reason: "x" })).toBeNull();
     expect(toAssessment({ category: "contrat", importance: 140, reason: "x" })).toBeNull();
@@ -204,7 +204,7 @@ describe("évaluation du contenu : collecte", () => {
 
     const entries = (await repo.usage.list()).slice(entriesBefore);
     const lecture = entries.find((u) => u.kind === "classification")!;
-    expect(lecture).toMatchObject({ units: 2, label: `Lecture par le modèle ${src.label}` });
+    expect(lecture).toMatchObject({ units: 2, label: `Classification IA principale ${src.label}` });
     expect(lecture.costEur).toBeCloseTo(2 * COSTS.classification, 6);
   });
 

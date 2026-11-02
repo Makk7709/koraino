@@ -25,7 +25,9 @@ async function spend(
   kind: "search_query" | "generation_article" = "search_query",
   units = 0,
 ) {
-  await (await getRepository()).usage.insert({
+  await (
+    await getRepository()
+  ).usage.insert({
     id: `use_test_${Math.random().toString(36).slice(2)}`,
     at: NOW.toISOString(),
     kind,
@@ -51,6 +53,20 @@ function spyTextModel() {
 }
 
 describe("consommation et quotas", () => {
+  it("préserve les fractions de centime dans le total mensuel", async () => {
+    const { monthTotals } = await import("@/server/domain/budget");
+    const { monthKey } = await import("@/server/domain/dates");
+    const records = [0.004, 0.004].map((costEur, index) => ({
+      id: `micro_${index}`,
+      at: NOW.toISOString(),
+      kind: "generation_summary" as const,
+      units: 1,
+      costEur,
+      label: "Microcoût",
+    }));
+    expect(monthTotals(records, monthKey(NOW)).costEur).toBe(0.008);
+  });
+
   it("expose la consommation du mois (≈ 112 € sur 150 €)", async () => {
     const { body } = await call<UsageSnapshot>("GET", "/usage");
     expect(body.paidCallsSuspended).toBe(false);
