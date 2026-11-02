@@ -102,6 +102,13 @@ BEGIN
  RAISE NOTICE 'PASS: DBA reconciliation, 2 usage rows, zero reserve';
 END $$;
 SQL
+# The concurrency fixture deliberately suspended paid calls. Reset ONLY that fixture
+# after all financial assertions; application settings writes cannot clear this flag.
+sql <<'SQL'
+UPDATE public.kora_settings
+SET data = data || '{"paidCallsSuspended":false,"suspendedMonth":null}'::jsonb
+WHERE workspace_id='kora';
+SQL
 bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
 echo "=== A3.1 real HTTP loss and process restart (disposable DB ONLY) ==="
 (
