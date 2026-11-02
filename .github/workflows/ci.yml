@@ -1,0 +1,35 @@
+name: KORA CI
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kora-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461
+        with:
+          bun-version: "1.2.19"
+      - run: bun install --frozen-lockfile
+      - name: TypeScript
+        run: bunx tsc --noEmit -p .
+      - name: ESLint
+        if: ${{ !cancelled() && success() }}
+        run: bun run lint
+      - name: Tests
+        if: ${{ !cancelled() && !failure() }}
+        run: bun --no-env-file run test
+      - name: Build
+        run: bun --no-env-file run build
+      - run: git diff --check
