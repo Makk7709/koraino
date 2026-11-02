@@ -13,6 +13,7 @@ import * as signals from "./handlers/signals";
 import * as users from "./handlers/users";
 import * as wordpress from "./handlers/wordpress";
 import { getRepository } from "./store/memory";
+import { withHttpIdempotency } from "./services/http-idempotency";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -25,6 +26,7 @@ interface RouteBase {
 type RouteDef =
   | (RouteBase & {
       handler: Handler;
+      idempotent?: boolean;
       public?: undefined;
       /** Corps multipart/form-data (imports) au lieu de JSON. */
       multipart?: boolean;
@@ -93,8 +95,8 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/sources", handler: registry.createSource },
   { method: "PATCH", pattern: "/sources/:id", handler: registry.updateSource },
   { method: "DELETE", pattern: "/sources/:id", handler: registry.deleteSource },
-  { method: "POST", pattern: "/sources/:id/collect", handler: signals.collectSourceHandler },
-  { method: "POST", pattern: "/collect", handler: signals.collectAllHandler },
+  { method: "POST", pattern: "/sources/:id/collect", handler: signals.collectSourceHandler, idempotent: true },
+  { method: "POST", pattern: "/collect", handler: signals.collectAllHandler, idempotent: true },
   { method: "GET", pattern: "/collection-runs", handler: signals.listRuns },
 
   { method: "GET", pattern: "/signals", handler: signals.listSignals },
@@ -102,12 +104,12 @@ const ROUTES: RouteDef[] = [
   { method: "GET", pattern: "/signals/:id", handler: signals.getSignal },
   { method: "PATCH", pattern: "/signals/:id", handler: signals.patchSignal },
   { method: "POST", pattern: "/signals/:id/merge", handler: signals.mergeSignals },
-  { method: "POST", pattern: "/signals/:id/split", handler: signals.splitSignal },
+  { method: "POST", pattern: "/signals/:id/split", handler: signals.splitSignal, idempotent: true },
   { method: "GET", pattern: "/scoring-grids", handler: signals.listGrids },
   { method: "POST", pattern: "/scoring-grids", handler: signals.createGrid },
 
   { method: "GET", pattern: "/articles", handler: articles.listArticles },
-  { method: "POST", pattern: "/articles", handler: articles.createArticle },
+  { method: "POST", pattern: "/articles", handler: articles.createArticle, idempotent: true },
   { method: "GET", pattern: "/articles/:id", handler: articles.getArticle },
   { method: "POST", pattern: "/articles/:id/versions", handler: articles.saveVersion },
   { method: "POST", pattern: "/articles/:id/restore", handler: articles.restoreVersion },
@@ -139,7 +141,7 @@ const ROUTES: RouteDef[] = [
   { method: "PUT", pattern: "/wordpress/settings", handler: wordpress.saveWordPressSettings },
 
   { method: "GET", pattern: "/linkedin", handler: dist.listLinkedIn },
-  { method: "POST", pattern: "/linkedin", handler: dist.createLinkedIn },
+  { method: "POST", pattern: "/linkedin", handler: dist.createLinkedIn, idempotent: true },
   { method: "PATCH", pattern: "/linkedin/:id", handler: dist.updateLinkedIn },
   { method: "POST", pattern: "/linkedin/:id/submit", handler: dist.submitLinkedIn },
   { method: "POST", pattern: "/linkedin/:id/approve", handler: dist.approveLinkedIn },
@@ -150,7 +152,7 @@ const ROUTES: RouteDef[] = [
   { method: "POST", pattern: "/newsletters", handler: dist.createNewsletter },
   { method: "GET", pattern: "/newsletters/:id", handler: dist.getNewsletter },
   { method: "PATCH", pattern: "/newsletters/:id", handler: dist.updateNewsletter },
-  { method: "POST", pattern: "/newsletters/:id/items", handler: dist.addNewsletterItem },
+  { method: "POST", pattern: "/newsletters/:id/items", handler: dist.addNewsletterItem, idempotent: true },
   {
     method: "DELETE",
     pattern: "/newsletters/:id/items/:itemId",
@@ -302,12 +304,15 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     }
 
     const { user } = await authenticate(request, repo, at, { allowCookie: !!route.download });
-    return await route.handler({
+    const ctx = {
       ...base,
       user,
       body: hasBody && !route.multipart ? await readJson(request) : undefined,
       form: route.multipart ? await readForm(request) : null,
-    });
+    };
+    return route.public === undefined && route.idempotent && request.headers.has("idempotency-key")
+      ? await withHttpIdempotency(ctx, route.pattern, route.handler)
+      : await route.handler(ctx);
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     console.error("[api] erreur interne", error);

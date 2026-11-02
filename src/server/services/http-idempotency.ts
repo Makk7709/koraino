@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Ctx, Handler } from "../context";
-import { conflict, HttpError, json } from "../http";
+import { conflict, HttpError } from "../http";
 
 const keySchema = z.string().regex(/^[a-zA-Z0-9_-]{16,128}$/);
 const hexDigest = (input: string): string => createHash("sha256").update(input).digest("hex");

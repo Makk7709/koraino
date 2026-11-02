@@ -1,3 +1,4 @@
+import type { IdempotencyRecord, IdempotencyClaim } from "../services/http-idempotency";
 import {
   paidAttemptSchema,
   validateEstimatedUsageLines,
@@ -73,6 +74,43 @@ export class MemoryRepository implements Repository {
   private settings: Settings;
   private wordpress: WordPressSettings | null = null;
   private attempts = new Map<string, PaidAttemptRecord>();
+  private readonly httpOps = new Map<string, IdempotencyRecord & {
+    workspaceId: string; actorId: string; route: string; fingerprint: string;
+  }>();
+  idempotency = {
+    begin: async (input: {
+      id: string; workspaceId: string; actorId: string; route: string; fingerprint: string;
+    }): Promise<IdempotencyClaim> => {
+      const existing = this.httpOps.get(input.id);
+      if (!existing) {
+        this.httpOps.set(input.id, { ...input, state: "pending" });
+        return { kind: "claimed" };
+      }
+      if (existing.workspaceId !== input.workspaceId || existing.actorId !== input.actorId ||
+          existing.route !== input.route || existing.fingerprint !== input.fingerprint)
+        return { kind: "conflict" };
+      if (existing.state === "completed")
+        return { kind: "completed", status: existing.httpStatus!, bodyText: existing.bodyText! };
+      return { kind: existing.state };
+    },
+    complete: async (id: string, status: number, bodyText: string): Promise<void> => {
+      const r = this.httpOps.get(id);
+      if (!r) throw new Error("Missing idempotency claim");
+      if (r.state === "completed" && r.httpStatus === status && r.bodyText === bodyText) return;
+      if (r.state !== "pending") throw new Error("Idempotency state conflict");
+      this.httpOps.set(id, { ...r, state: "completed", httpStatus: status, bodyText });
+    },
+    uncertain: async (id: string): Promise<void> => {
+      const r = this.httpOps.get(id);
+      if (!r) throw new Error("Missing idempotency claim");
+      if (r.state === "completed") throw new Error("Completed operation cannot be uncertain");
+      this.httpOps.set(id, { ...r, state: "uncertain" });
+    },
+    get: async (id: string): Promise<IdempotencyRecord | undefined> => {
+      const r = this.httpOps.get(id);
+      return r ? structuredClone(r) : undefined;
+    },
+  };
   paidAttempts = {
     reserve: async (attempt: PaidAttemptInput): Promise<ReserveResult> => {
       paidAttemptSchema.parse(attempt);

@@ -50,6 +50,13 @@
       "when": 1793808000000,
       "tag": "0006_kora_paid_accounting_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793894400000,
+      "tag": "0007_kora_http_idempotency",
+      "breakpoints": true
     }
   ]
 }

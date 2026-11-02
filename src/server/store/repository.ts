@@ -1,4 +1,5 @@
 import type { PaidAttemptsRepository } from "./paid-attempts";
+import type { IdempotencyRepository } from "../services/http-idempotency";
 import type { WordPressSettings } from "@/lib/api/types";
 import type {
   ArticleRecord,
@@ -54,6 +55,7 @@ export interface Repository {
   ruleProposals: Collection<RuleProposalRecord>;
   usage: Collection<UsageEntry>;
   paidAttempts: PaidAttemptsRepository;
+  idempotency: IdempotencyRepository;
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;
   getSettings(): Promise<Settings>;
