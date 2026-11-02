@@ -153,10 +153,10 @@ export class DbRepository implements Repository {
         .eq("collection", "http_idempotency").eq("id", id).maybeSingle();
       if (error) throw new Error("HTTP idempotency read failed");
       const row = data?.data as unknown as Record<string, unknown> | undefined;
-      if (!row || (row.state !== "pending" && row.state !== "uncertain" && row.state !== "completed"))
+      if (!row || (row["state"] !== "pending" && row["state"] !== "uncertain" && row["state"] !== "completed"))
         return undefined;
-      return { id, state: row.state, ...(typeof row.httpStatus === "number" ? { httpStatus: row.httpStatus } : {}),
-        ...(typeof row.bodyText === "string" ? { bodyText: row.bodyText } : {}) };
+      return { id, state: row["state"], ...(typeof row["httpStatus"] === "number" ? { httpStatus: row["httpStatus"] } : {}),
+        ...(typeof row["bodyText"] === "string" ? { bodyText: row["bodyText"] } : {}) };
     },
   };
   paidAttempts = {
