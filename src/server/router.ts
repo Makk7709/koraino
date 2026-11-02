@@ -1,5 +1,6 @@
 import { authenticate } from "./auth/session";
 import { now } from "./clock";
+import { usesDatabase } from "./database";
 import type { Handler, PublicCtx, PublicHandler } from "./context";
 import { errorResponse, forbidden, HttpError, json } from "./http";
 import * as articles from "./handlers/articles";
@@ -320,7 +321,9 @@ export async function handleApiRequest(request: Request): Promise<Response> {
       body: hasBody && !route.multipart ? await readJson(request) : undefined,
       form: route.multipart ? await readForm(request) : null,
     };
-    return route.public === undefined && route.idempotent && request.headers.has("idempotency-key")
+    // Legacy memory/demo calls remain compatible; production paid endpoints fail closed.
+    const mustProtect = route.public === undefined && route.idempotent;
+    return mustProtect && (request.headers.has("idempotency-key") || usesDatabase())
       ? await withHttpIdempotency(ctx, route.pattern, route.handler)
       : await route.handler(ctx);
   } catch (error) {
