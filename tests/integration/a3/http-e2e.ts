@@ -224,12 +224,19 @@ try {
       retainedReserveEur: 0,
     }),
   );
+} catch (error: unknown) {
+  console.error(error);
+  throw error;
 } finally {
   await stop();
   for (const server of servers) {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
+      server.close((error) => {
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING")
+          reject(error);
+        else resolve();
+      }),
     );
   }
 }
