@@ -3,5 +3,11 @@
   "include": [
     "http-e2e.ts",
     "http-fixture.ts"
-  ]
+  ],
+  "compilerOptions": {
+    "types": [
+      "node",
+      "vite/client"
+    ]
+  }
 }
