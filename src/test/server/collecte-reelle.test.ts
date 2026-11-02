@@ -735,6 +735,9 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
   });
 
   it("un délai de lecture est stocké en TIMEOUT (4c)", async () => {
+    setAdapters({
+      collector: new RealCollector( {}, 50 ),
+    });
     const source = await pasqalCommuniques();
   
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {

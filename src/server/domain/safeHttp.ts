@@ -74,7 +74,7 @@ async function readBodyLimited(
   try {
     for (;;) {
       if (signal?.aborted) {
-        throw signal.reason ?? httpError("TIMEOUT", "Délai de réponse dépassé");
+        throw httpError("TIMEOUT", "Délai de réponse dépassé");
       }
       const { done, value } = await reader.read();
       if (done) break;
@@ -127,8 +127,15 @@ export async function safeFetchText(
         signal,
       });
     } catch (e) {
-      const err = e as Error;
-      if (err.name === "TimeoutError" || err.name === "AbortError") {
+      const err = e as Error & { code?: string | number };
+      if (err.code === "BODY_TOO_LARGE") throw e;
+      if (
+        err.code === "TIMEOUT" ||
+        err.name === "TimeoutError" ||
+        err.name === "AbortError" ||
+        err.code === 23 ||
+        err.code === "23"
+      ) {
         throw httpError("TIMEOUT", "Délai de réponse dépassé");
       }
       throw e;
@@ -158,9 +165,15 @@ export async function safeFetchText(
     try {
       return await readBodyLimited(res, maxBytes, signal);
     } catch (e) {
-      const err = e as Error & { code?: string };
+      const err = e as Error & { code?: string | number };
       if (err.code === "BODY_TOO_LARGE") throw e;
-      if (err.name === "TimeoutError" || err.name === "AbortError") {
+      if (
+        err.code === "TIMEOUT" ||
+        err.name === "TimeoutError" ||
+        err.name === "AbortError" ||
+        err.code === 23 ||
+        err.code === "23"
+      ) {
         throw httpError("TIMEOUT", "Délai de réponse dépassé");
       }
       throw e;

@@ -485,10 +485,14 @@ function isTransientCollectError(code: string | undefined): boolean {
 export class RealCollector implements Collector {
   readonly name = "collecteur-rss-google-v1";
 
+  private readonly fetchTimeoutMs;
+
   /** Recherches Perplexity de l'exécution en cours, par source : une seule par exécution, essais compris. */
   private readonly searches = new WeakMap<Date, Map<string, ReturnType<typeof perplexitySearch>>>();
 
-  constructor(private readonly env: Record<string, string | undefined> = process.env) {}
+  constructor(private readonly env: Record<string, string | undefined> = process.env, timeout_ms? : number) {
+    this.fetchTimeoutMs = timeout_ms ? timeout_ms : 15000;
+  }
 
   /** Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas. */
   private search(company: CompanyRecord, source: SourceRecord, now: Date) {
@@ -614,6 +618,7 @@ export class RealCollector implements Collector {
 
   private async fetchText(url: string): Promise<string> {
     return safeFetchText(url, {
+      timeoutMs: this.fetchTimeoutMs,
       headers: {
         "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
         accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
