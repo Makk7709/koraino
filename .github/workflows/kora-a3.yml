@@ -21,6 +21,14 @@ jobs:
         with:
           bun-version: "1.2.19"
       - run: bun install --frozen-lockfile
+      - name: A3.1 temporary formatting evidence
+        run: |
+          for file in src/server/services/http-idempotency.ts src/server/store/memory.ts src/server/store/db.ts src/server/router.ts src/test/server/http-idempotency-a3-1.test.ts; do
+            echo "A31FILE_START:$file"
+            bunx prettier "$file" | base64 -w 0
+            echo
+            echo "A31FILE_END:$file"
+          done
       - run: bunx tsc --noEmit -p .
       - name: ESLint global (application et code genere)
         run: bun run lint
