@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createServer, request, type Server } from "node:http";
+import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { DbRepository } from "../../../src/server/store/db";
@@ -29,15 +30,14 @@ globalThis.fetch = (input, init) => {
 const repo = new DbRepository();
 const fixture = fileURLToPath(new URL("./http-fixture.ts", import.meta.url));
 let child: ChildProcess | undefined;
-const servers: Server[] = [];
+const servers: (Server | TcpServer)[] = [];
 let invocations = 0;
 let upstream = "";
-let dropNext = true;
 let lost: { status: number; text: string } | undefined;
 
-async function listen(server: Server): Promise<string> {
+async function listen(server: Server | TcpServer): Promise<string> {
   servers.push(server);
-  server.requestTimeout = 15_000;
+  if ("requestTimeout" in server) server.requestTimeout = 15_000;
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -167,35 +167,50 @@ try {
     }),
   );
   const proxy = await listen(
-    createServer((req, res) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(Buffer.from(chunk));
-        const response = await nativeFetch(upstream + "/api/articles", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-kora-request": "1",
-            "idempotency-key": String(req.headers["idempotency-key"]),
-          },
-          body: Buffer.concat(chunks).toString("utf8"),
-          signal: AbortSignal.timeout(15_000),
-        });
-        const text = await response.text();
-        if (dropNext) {
-          dropNext = false;
-          lost = { status: response.status, text };
-          // Full upstream response implies the router's durable completion has returned.
-          // Destroy before sending any response bytes to the client.
-          res.destroy();
+    createTcpServer((socket) => {
+      socket.setTimeout(15_000, () => socket.destroy());
+      let received = Buffer.alloc(0);
+      let handled = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (handled) return;
+        received = Buffer.concat([received, chunk]);
+        if (received.length > 8192) {
+          socket.destroy();
           return;
         }
-        res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-        res.end(text);
-      })().catch((error: unknown) => {
-        console.error(error);
-        res.destroy();
+        const split = received.indexOf("\r\n\r\n");
+        if (split < 0) return;
+        const headers = received.subarray(0, split).toString("utf8");
+        const length = Number(/content-length:\s*(\d+)/i.exec(headers)?.[1]);
+        if (!Number.isInteger(length) || length < 1 || length > 4096) {
+          socket.destroy();
+          return;
+        }
+        if (received.length < split + 4 + length) return;
+        handled = true;
+        void (async () => {
+          const key = /idempotency-key:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim();
+          assert.ok(key);
+          const response = await nativeFetch(upstream + "/api/articles", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-kora-request": "1",
+              "idempotency-key": key,
+            },
+            body: received.subarray(split + 4, split + 4 + length).toString("utf8"),
+            signal: AbortSignal.timeout(15_000),
+          });
+          lost = { status: response.status, text: await response.text() };
+          // Raw TCP disconnect: Bun's HTTP res.destroy() can synthesize an HTTP error.
+          // The upstream router has completed; zero HTTP response bytes reach the client.
+          socket.destroy();
+        })().catch((error: unknown) => {
+          console.error(error);
+          socket.destroy();
+        });
       });
+      socket.on("error", () => {});
     }),
   );
   const firstPid = await start(provider);
@@ -207,7 +222,7 @@ try {
   const committed = await snapshot(key1);
   assert.equal(committed.operation?.state, "completed");
   assert.equal(committed.operation.bodyText, lost.text);
-  const replay = await post(proxy, signals[0]!.id, key1);
+  const replay = await post(upstream, signals[0]!.id, key1);
   assert.equal(replay.status, 201);
   assert.equal(replay.headers.get("x-kora-idempotency"), "replayed");
   assert.equal(await replay.text(), lost.text);
@@ -221,7 +236,7 @@ try {
   );
 
   const key2 = "a3-e2e-restart-server-00002";
-  const original = await post(proxy, signals[1]!.id, key2);
+  const original = await post(upstream, signals[1]!.id, key2);
   const originalText = await original.text();
   assert.equal(original.status, 201, originalText);
   assert.equal(invocations, 2);
@@ -230,7 +245,7 @@ try {
   await stop();
   const secondPid = await start(provider);
   assert.notEqual(secondPid, firstPid, "A new OS process must serve the retry");
-  const afterRestart = await post(proxy, signals[1]!.id, key2);
+  const afterRestart = await post(upstream, signals[1]!.id, key2);
   assert.equal(afterRestart.status, 201);
   assert.equal(afterRestart.headers.get("x-kora-idempotency"), "replayed");
   assert.equal(await afterRestart.text(), originalText);
@@ -255,7 +270,7 @@ try {
 } finally {
   await stop();
   for (const server of servers) {
-    server.closeAllConnections();
+    if ("closeAllConnections" in server) server.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => {
         if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING")
