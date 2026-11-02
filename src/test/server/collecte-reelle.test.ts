@@ -736,10 +736,10 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
 
   it("un délai de lecture est stocké en TIMEOUT (4c)", async () => {
     setAdapters({
-      collector: new RealCollector( {}, 50 ),
+      collector: new RealCollector({}, 50),
     });
     const source = await pasqalCommuniques();
-  
+
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       const signal = init?.signal;
       const body = new ReadableStream<Uint8Array>({
@@ -763,17 +763,17 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-  
+
     const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
       user: USERS.admin,
     });
-  
+
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(run.body).toMatchObject({
       status: "echec",
       errorCode: "TIMEOUT",
     });
-  
+
     const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
     const updated = sources.body.find((s) => s.id === source.id)!;
     expect(updated).toMatchObject({

@@ -490,7 +490,10 @@ export class RealCollector implements Collector {
   /** Recherches Perplexity de l'exécution en cours, par source : une seule par exécution, essais compris. */
   private readonly searches = new WeakMap<Date, Map<string, ReturnType<typeof perplexitySearch>>>();
 
-  constructor(private readonly env: Record<string, string | undefined> = process.env, timeout_ms? : number) {
+  constructor(
+    private readonly env: Record<string, string | undefined> = process.env,
+    timeout_ms?: number,
+  ) {
     this.fetchTimeoutMs = timeout_ms ? timeout_ms : 15000;
   }
 
