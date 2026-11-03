@@ -8,11 +8,7 @@ function cell(value: unknown): string {
     s = sanitizeString(value);
   } else if (Array.isArray(value)) {
     s = value
-      .map((v) =>
-        typeof v === "object" && v !== null
-          ? JSON.stringify(v)
-          : String(v)
-      )
+      .map((v) => (typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)))
       .join(" | ");
 
     // On protège la cellule si son premier élément est une chaîne.
@@ -25,9 +21,7 @@ function cell(value: unknown): string {
     s = String(value);
   }
 
-  return /[",\r\n]/.test(s)
-    ? `"${s.replace(/"/g, '""')}"`
-    : s;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function toCsv(columns: string[], rows: Record<string, unknown>[]): string {

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 
 import { toCsv } from "../../../server/domain/csv";
 
-
 describe("toCsv - sécurité des formules", () => {
   it.each([
     ["=", ["=HYPERLINK(...)"]],
@@ -52,11 +51,8 @@ describe("toCsv - sécurité des formules", () => {
   });
 
   it("neutralise une formule précédée d'un espace", () => {
-    const result = toCsv(
-      ["valeur"],
-      [{ valeur: " =HYPERLINK(...)" }]
-    );
-  
+    const result = toCsv(["valeur"], [{ valeur: " =HYPERLINK(...)" }]);
+
     expect(result).toContain("' =HYPERLINK");
   });
 });
@@ -85,44 +81,33 @@ describe("toCsv - conservation des données", () => {
     expect(result).toContain("-42");
     expect(result).not.toContain("'-42");
   });
-  
+
   it("neutralise les chaînes commençant par un moins", () => {
     const result = toCsv(["valeur"], [{ valeur: "-42" }]);
     expect(result).toContain("'-42");
   });
 
   it("conserve les valeurs numériques dans les objets", () => {
-    const result = toCsv(
-      ["informations"],
-      [{ informations: { prix: -42, quantite: 10 } }]
-    );
-  
+    const result = toCsv(["informations"], [{ informations: { prix: -42, quantite: 10 } }]);
+
     expect(result).toContain("-42");
     expect(result).not.toContain("'-42");
   });
   it("conserve la sérialisation JSON des objets", () => {
-    const result = toCsv(
-      ["informations"],
-      [{ informations: { nom: "Alice", age: 30 } }]
-    );
-  
-    expect(result).toContain(
-      '"{""nom"":""Alice"",""age"":30}"'
-    );
+    const result = toCsv(["informations"], [{ informations: { nom: "Alice", age: 30 } }]);
+
+    expect(result).toContain('"{""nom"":""Alice"",""age"":30}"');
   });
   it("conserve la sérialisation JSON des tableaux imbriqués", () => {
-    const result = toCsv(
-      ["valeurs"],
-      [{ valeurs: ["normal", ["texte", "autre"]] }]
-    );
-  
+    const result = toCsv(["valeurs"], [{ valeurs: ["normal", ["texte", "autre"]] }]);
+
     expect(result).toContain('normal | [""texte"",""autre""]');
   });
   it("conserve les dates lors de leur sérialisation JSON", () => {
     const date = new Date("2026-11-03T10:00:00.000Z");
-  
+
     const result = toCsv(["date"], [{ date }]);
-  
+
     expect(result).toContain(date.toISOString());
   });
 });
