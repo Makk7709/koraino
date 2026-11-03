@@ -7,7 +7,7 @@ function cell(value: unknown): string {
   else if (typeof value === "object") s = JSON.stringify(value);
   else s = String(value);
   // Neutralise l'injection de formules dans les tableurs.
-  if (typeof value === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
