@@ -161,6 +161,7 @@ DO $$
 DECLARE
   v_http jsonb;
   v_reservation jsonb;
+  v_rejected boolean := false;
 BEGIN
   v_http := public.kora_http_idempotency_begin(
     repeat('a',64),'kora','a43-actor','POST /articles',repeat('1',64));
@@ -173,12 +174,15 @@ BEGIN
     OR v_http->>'articleId' <> 'a43-done-article'
   THEN RAISE EXCEPTION 'A43 existing article not recoverable via HTTP'; END IF;
 
-  v_reservation := public.kora_article_generation_reserve_linked(
-    'a4300000-0000-4000-8000-000000000025',
-    '{"id":"a43-safe-signal","status":"nouveau","articleId":null}'::jsonb,
-    '{"id":"a43-safe-retry","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"A43 retry","createdAt":"2026-11-03T00:00:00Z"}'::jsonb,
-    repeat('a',64));
-  IF v_reservation->>'ok' = 'true' THEN
+  BEGIN
+    PERFORM public.kora_article_generation_reserve_linked(
+      'a4300000-0000-4000-8000-000000000025',
+      '{"id":"a43-safe-signal","status":"nouveau","articleId":null}'::jsonb,
+      '{"id":"a43-safe-retry","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"A43 retry","createdAt":"2026-11-03T00:00:00Z"}'::jsonb,
+      repeat('a',64));
+  EXCEPTION WHEN raise_exception THEN v_rejected := true; END;
+  IF NOT v_rejected OR EXISTS (SELECT 1 FROM public.kora_records
+      WHERE collection='paid_attempts' AND id='a43-safe-retry') THEN
     RAISE EXCEPTION 'A43 closed HTTP key reused for new paid generation'; END IF;
 
   v_http := public.kora_http_idempotency_begin(
