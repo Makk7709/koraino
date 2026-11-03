@@ -388,8 +388,16 @@ export class MemoryRepository implements Repository {
           throw new Error("Signal transaction state changed");
         if (change.after && change.after.id !== change.id)
           throw new Error("Signal transaction identifier mismatch");
-        if (change.collection === "signals" && this.generations.has(change.id))
-          throw new Error("Article generation ownership prevents signal mutation");
+        if (change.collection === "signals") {
+          const generation = this.generations.get(change.id);
+          if (
+            generation &&
+            (generation.state !== "completed" ||
+              !change.after ||
+              change.before?.articleId !== change.after.articleId)
+          )
+            throw new Error("Article generation ownership prevents signal mutation");
+        }
         const entries = final.get(change.collection)!;
         if (change.after) entries.set(change.id, change.after);
         else entries.delete(change.id);
