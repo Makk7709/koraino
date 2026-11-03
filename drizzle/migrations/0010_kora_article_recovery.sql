@@ -46,7 +46,7 @@ RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE v_checked timestamptz;
 BEGIN
   IF jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
-    OR p_evidence->>'source' NOT IN ('runtime_process_audit','provider_support_confirmation')
+    OR COALESCE(p_evidence->>'source','') NOT IN ('runtime_process_audit','provider_support_confirmation')
     OR length(btrim(COALESCE(p_evidence->>'reference',''))) NOT BETWEEN 6 AND 256
     OR length(btrim(COALESCE(p_evidence->>'operator',''))) NOT BETWEEN 3 AND 128
     OR COALESCE(p_evidence->>'sha256','') !~ '^[a-f0-9]{64}$'
@@ -93,6 +93,10 @@ BEGIN
      OR v_http->>'route' IS DISTINCT FROM 'POST /articles'
      OR v_http->>'workspaceId' IS DISTINCT FROM 'kora'
   THEN RAISE EXCEPTION 'HTTP operation mismatch'; END IF;
+  -- A stale edited signal requires investigation rather than quiet closure.
+  PERFORM 1 FROM public.kora_records
+    WHERE collection='signals' AND id=p_signal_id AND data=v_op.expected_signal FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'signal changed before recovery'; END IF;
   SELECT data INTO STRICT v_attempt FROM public.kora_records
     WHERE collection='paid_attempts' AND id=v_op.attempt_id FOR UPDATE;
   IF v_attempt->>'status' IS DISTINCT FROM 'reserved'
