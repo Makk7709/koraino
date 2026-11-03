@@ -61,7 +61,7 @@ BEGIN
   END LOOP;
 
   IF (SELECT count(*) FROM jsonb_array_elements(p_changes)) <>
-     (SELECT count(DISTINCT c->>'collection' || ':' || c->>'id')
+     (SELECT count(DISTINCT (c->>'collection') || ':' || (c->>'id'))
       FROM jsonb_array_elements(p_changes) AS c)
   THEN RAISE EXCEPTION 'duplicate signal transaction row'; END IF;
 
