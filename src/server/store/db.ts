@@ -146,6 +146,24 @@ export class DbRepository implements Repository {
     },
   };
   articleGenerations: ArticleGenerationsRepository = {
+    reserveLinked: async (claim, attempt, httpOperationId) => {
+      paidAttemptSchema.parse(attempt);
+      const { data, error } = await (
+        await db()
+      )
+        .rpc(
+          "kora_article_generation_reserve_linked" as never,
+          {
+            p_token: claim.token,
+            p_signal: claim.signal,
+            p_attempt: attempt,
+            p_http_id: httpOperationId,
+          } as never,
+        )
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (error) throw new Error("Linked article reservation failed: " + (error.code ?? "database_error"));
+      return generationReservationSchema.parse(data);
+    },
     reserve: async (claim, attempt) => {
       paidAttemptSchema.parse(attempt);
       const { data, error } = await (
