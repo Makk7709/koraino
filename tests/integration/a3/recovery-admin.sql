@@ -12,8 +12,7 @@ LANGUAGE sql STABLE AS $$
   SELECT jsonb_build_object(
     'source','runtime_process_audit','reference',p_reference,
     'operator','a43-test-dba','sha256',repeat('a',64),
-    'checkedAt',to_char(clock_timestamp() AT TIME ZONE 'UTC',
-      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z')
+    'checkedAt','2026-11-03T00:00:00Z'
   )
 $$;
 
