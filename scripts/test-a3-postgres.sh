@@ -72,6 +72,8 @@ END $$;
 SQL
 echo "=== A4 SQL transaction and ownership checks (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/article-generations.sql"
+echo "=== A4.2 SQL atomic merge/split rollback checks (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/signal-mutations.sql"
 compose up --detach api
 endpoint="$(compose port api 3000)"
 port="$(printf '%s\n' "$endpoint" | sed -E 's/^.*:([0-9]+)$/\1/')"
