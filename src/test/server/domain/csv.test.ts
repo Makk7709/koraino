@@ -3,16 +3,13 @@ import { describe, it, expect } from "vitest";
 import { toCsv } from "../../../server/domain/csv";
 
 describe("toCsv - sécurité des formules", () => {
-  it.each([
-    ["=", ["=HYPERLINK(...)"]],
-    ["+", ["+123"]],
-    ["-", ["-123"]],
-    ["@", ["@SUM(...)"]],
-  ])("neutralise les tableaux commençant par %s", (_, value) => {
-    const result = toCsv(["etiquettes"], [{ etiquettes: value }]);
-
-    expect(result).toContain("'");
-  });
+    it.each([["=1+1"], ["+1"], ["-1"], ["@SUM(1)"]])(
+        "neutralise %s, seul ou dans un tableau",
+        (input) => {
+            expect(toCsv(["v"], [{ v: input }])).toBe(`v\r\n'${input}\r\n`);
+            expect(toCsv(["v"], [{ v: [input] }])).toBe(`v\r\n'${input}\r\n`);
+        },
+        );
 
   it("neutralise les formules contenues dans un tableau de chaînes", () => {
     const rows = [
@@ -39,9 +36,7 @@ describe("toCsv - sécurité des formules", () => {
   });
 
   it("neutralise une formule précédée d'une tabulation", () => {
-    const result = toCsv(["nom"], [{ nom: "\t=HYPERLINK(...)" }]);
-
-    expect(result).toContain("'");
+    expect(toCsv(["nom"], [{ nom: "\t=1+1" }])).toBe("nom\r\n'\t=1+1\r\n");
   });
 
   it("ne double pas la neutralisation d'une chaîne déjà neutralisée", () => {
@@ -55,6 +50,24 @@ describe("toCsv - sécurité des formules", () => {
 
     expect(result).toContain("' =HYPERLINK");
   });
+
+  it("neutralise un tableau dont le premier élément est un nombre négatif", () => {
+    const result = toCsv(["valeurs"], [{ valeurs: [-5, 2] }]);
+  
+    expect(result).toBe("valeurs\r\n'-5 | 2\r\n");
+  });
+  it("neutralise une formule retournée par toJSON() d'un objet", () => {
+    const value = {
+      toJSON() {
+        return "=1+1";
+      },
+    };
+  
+    const result = toCsv(["informations"], [{ informations: value }]);
+  
+    expect(result).toBe("informations\r\n=1+1\r\n");
+  });
+
 });
 
 describe("toCsv - conservation des données", () => {

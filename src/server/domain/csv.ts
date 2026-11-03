@@ -11,10 +11,9 @@ function cell(value: unknown): string {
       .map((v) => (typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)))
       .join(" | ");
 
-    // On protège la cellule si son premier élément est une chaîne.
-    if (typeof value[0] === "string") {
-      s = sanitizeString(s);
-    }
+    // On protège la chaîne finale.
+    s = sanitizeString(s);
+    
   } else if (typeof value === "object") {
     s = JSON.stringify(value);
   } else {
