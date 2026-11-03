@@ -63,6 +63,43 @@ sql_migration < "$ROOT/drizzle/migrations/0012_kora_paid_a4_ownership_guard.sql"
 echo "=== A4.3.4 post-fix financial/A4 transactional guard (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/financial-generation-guard.sql"
 sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
+echo "=== A4.3 legacy-data migration rehearsal (SECOND disposable PostgreSQL DB ONLY) ==="
+HIST_DB="kora_a43_legacy_ci"
+compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c "CREATE DATABASE $HIST_DB" >/dev/null
+hist_sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB"; }
+hist_migration() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB" --single-transaction -f -; }
+hist_sql <<'SQL' >/dev/null
+GRANT USAGE ON SCHEMA public TO service_role, anon, authenticated;
+SQL
+for m in 0000_kora_records 0001_app_user_connections 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations; do
+  echo "Historical replay: applying $m (second disposable DB ONLY)"
+  hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
+done
+hist_sql < "$ROOT/tests/integration/a3/historical-fixture-seed.sql" >/dev/null
+hist_fingerprint() {
+  hist_sql <<'SQL' | tail -n 1
+SELECT md5(
+  COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.collection,r.id)::text
+    FROM public.kora_records r),'[]')
+  || COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.workspace_id)::text
+    FROM public.kora_settings s),'[]')
+);
+SQL
+}
+historical_before="$(hist_fingerprint)"
+test -n "$historical_before"
+for m in 0010_kora_article_recovery 0011_kora_postgres_hardening 0012_kora_paid_a4_ownership_guard; do
+  echo "Historical replay: applying $m (second disposable DB ONLY)"
+  hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
+done
+hist_sql < "$ROOT/tests/integration/a3/historical-migration-verify.sql"
+historical_after="$(hist_fingerprint)"
+if [[ "$historical_before" != "$historical_after" ]]; then
+  echo "ERROR: historic records/settings digest changed across 0010-0012" >&2
+  exit 1
+fi
+echo "PASS: synthetic historical records/settings preserved byte-equivalently across migrations 0010-0012"
+
 echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
 sql <<'SQL' >/dev/null
