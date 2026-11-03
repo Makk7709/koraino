@@ -7,14 +7,14 @@ import { monthTotals } from "../../../src/server/domain/budget";
 import { supabaseAdmin } from "../../../src/integrations/supabase/client.server";
 
 async function main(): Promise<void> {
-  assert.equal(process.env.A3_DB_ISOLATED_TEST, "1");
-  const raw = process.env.SUPABASE_URL;
+  assert.equal(process.env["A3_DB_ISOLATED_TEST"], "1");
+  const raw = process.env["SUPABASE_URL"];
   assert.ok(raw, "Missing disposable PostgREST URL");
   const url = new URL(raw);
   assert.equal(url.protocol, "http:");
   assert.equal(url.hostname, "127.0.0.1");
   assert.ok(!["54321", "55321"].includes(url.port), "Protected Supabase port");
-  assert.ok(process.env.SUPABASE_SERVICE_ROLE_KEY, "Missing disposable JWT");
+  assert.ok(process.env["SUPABASE_SERVICE_ROLE_KEY"], "Missing disposable JWT");
 
   // Supabase-js targets /rest/v1; standalone PostgREST exposes the same routes at /.
   // Rewrite only requests to this disposable loopback server.
@@ -94,9 +94,9 @@ async function main(): Promise<void> {
     settings: await repo.getSettings(),
     usage: await repo.usage.list(),
   };
-  const httpId = "43".repeat(32);
+  const protectedHttpId = "43".repeat(32);
   await repo.idempotency.begin({
-    id: httpId,
+    id: protectedHttpId,
     workspaceId: "kora",
     actorId: "a433-http-test",
     route: "POST /articles",
@@ -124,7 +124,7 @@ async function main(): Promise<void> {
       .from("kora_records")
       .delete()
       .eq("collection", "http_idempotency")
-      .eq("id", httpId)
+      .eq("id", protectedHttpId)
       .abortSignal(AbortSignal.timeout(10_000)),
   );
   await expectDenied(
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
   assert.deepEqual(await repo.paidAttempts.get(id), beforeProtection.attempt);
   assert.deepEqual(await repo.getSettings(), beforeProtection.settings);
   assert.deepEqual(await repo.usage.list(), beforeProtection.usage);
-  assert.equal((await repo.idempotency.get(httpId))?.state, "pending");
+  assert.equal((await repo.idempotency.get(protectedHttpId))?.state, "pending");
   console.log(JSON.stringify({ event: "a433.http.protected_writes.pass", statePreserved: true }));
 
   // SQL must reject fractional-cent reservations even from a direct service_role RPC.

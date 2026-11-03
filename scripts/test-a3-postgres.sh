@@ -13,6 +13,7 @@ if [[ -n "$(printenv SUPABASE_URL || true)" || -n "$(printenv SUPABASE_SERVICE_R
   echo "STOP: inherited Supabase credentials: run with SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY=" >&2
   exit 1
 fi
+bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
 PROJECT="koraa3ci$(date -u +%s)$$"
 compose() { docker compose --project-name "$PROJECT" --file "$COMPOSE" "$@"; }
 cleanup() {
@@ -144,7 +145,6 @@ UPDATE public.kora_settings
 SET data = data || '{"paidCallsSuspended":false,"suspendedMonth":null}'::jsonb
 WHERE workspace_id='kora';
 SQL
-bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
 echo "=== A3.1 real HTTP loss and process restart (disposable DB ONLY) ==="
 (
  cd "$ROOT"
