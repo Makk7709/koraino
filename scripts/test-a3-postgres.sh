@@ -44,7 +44,7 @@ trap cleanup EXIT
 echo "=== Disposable A3 project: $PROJECT ==="
 compose up --detach --wait db
 sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$DB"; }
-for m in 0000_kora_records 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations; do
+for m in 0000_kora_records 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations; do
   f="$ROOT/drizzle/migrations/$m.sql"
   test -s "$f"
   echo "Applying $m (disposable DB ONLY)"
