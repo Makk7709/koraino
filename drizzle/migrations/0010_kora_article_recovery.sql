@@ -24,8 +24,6 @@ BEGIN
   IF p_http_id IS NULL OR p_http_id !~ '^[a-f0-9]{64}$' THEN
     RAISE EXCEPTION 'invalid HTTP association';
   END IF;
-  SELECT data INTO STRICT v_http FROM public.kora_records
-    WHERE collection='http_idempotency' AND id=p_http_id FOR UPDATE;
   IF v_http->>'state' IS DISTINCT FROM 'pending'
      OR v_http->>'workspaceId' IS DISTINCT FROM 'kora'
      OR v_http->>'route' IS DISTINCT FROM 'POST /articles'
@@ -77,6 +75,9 @@ DECLARE v_op public.kora_article_generations; v_http jsonb; v_attempt jsonb;
 BEGIN
   IF current_user <> 'postgres' THEN RAISE EXCEPTION 'DBA only'; END IF;
   PERFORM public.kora_article_recovery_check_evidence(p_evidence);
+  -- The linked reservation locks HTTP first; preserve this order to avoid deadlocks.
+  SELECT data INTO STRICT v_http FROM public.kora_records
+    WHERE collection='http_idempotency' AND id=p_http_id FOR UPDATE;
   -- Serialize financial transitions with kora_paid_finish / reserve.
   SELECT data INTO STRICT v_settings FROM public.kora_settings
     WHERE workspace_id='kora' FOR UPDATE;
@@ -152,12 +153,12 @@ DECLARE v_op public.kora_article_generations; v_http jsonb; v_article jsonb;
 BEGIN
   IF current_user <> 'postgres' THEN RAISE EXCEPTION 'DBA only'; END IF;
   PERFORM public.kora_article_recovery_check_evidence(p_evidence);
+  SELECT data INTO STRICT v_http FROM public.kora_records
+    WHERE collection='http_idempotency' AND id=p_http_id FOR UPDATE;
   SELECT * INTO STRICT v_op FROM public.kora_article_generations
     WHERE signal_id=p_signal_id FOR UPDATE;
   IF v_op.http_operation_id IS DISTINCT FROM p_http_id OR v_op.state <> 'completed'
     OR v_op.article_payload IS NULL THEN RAISE EXCEPTION 'generation not completed'; END IF;
-  SELECT data INTO STRICT v_http FROM public.kora_records
-    WHERE collection='http_idempotency' AND id=p_http_id FOR UPDATE;
   SELECT * INTO v_archive FROM public.kora_article_generation_recoveries
     WHERE http_operation_id=p_http_id;
   IF FOUND THEN
