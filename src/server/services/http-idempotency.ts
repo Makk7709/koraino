@@ -86,11 +86,21 @@ export async function withHttpIdempotency(
       "Statut incertain : réexécution payante bloquée, rapprochement requis.",
     );
   if (claim.kind === "closed_not_sent")
-    throw conflict("idempotency_closed_not_sent", "Cette tentative a été clôturée administrativement. Utilisez une nouvelle demande.");
+    throw conflict(
+      "idempotency_closed_not_sent",
+      "Cette tentative a été clôturée administrativement. Utilisez une nouvelle demande.",
+    );
   if (claim.kind === "recovered_completed") {
     const article = await ctx.repo.articles.get(claim.articleId);
-    if (!article || !article.signalId || (await ctx.repo.signals.get(article.signalId))?.articleId !== article.id)
-      throw conflict("recovery_inconsistent", "L’article récupéré ne correspond plus à son signal.");
+    if (
+      !article ||
+      !article.signalId ||
+      (await ctx.repo.signals.get(article.signalId))?.articleId !== article.id
+    )
+      throw conflict(
+        "recovery_inconsistent",
+        "L’article récupéré ne correspond plus à son signal.",
+      );
     return json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
   }
   if (claim.kind === "completed") {
