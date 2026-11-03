@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Ctx, Handler } from "../context";
 import { conflict, HttpError, json } from "../http";
+import { assertCan } from "../domain/permissions";
 import { articleDetail } from "./view";
 
 const keySchema = z.string().regex(/^[a-zA-Z0-9_-]{16,128}$/);
@@ -91,6 +92,8 @@ export async function withHttpIdempotency(
       "Cette tentative a été clôturée administrativement. Utilisez une nouvelle demande.",
     );
   if (claim.kind === "recovered_completed") {
+    if (route !== "POST /articles") throw conflict("recovery_route_mismatch", "Réponse récupérée sur une route incorrecte.");
+    assertCan(ctx.user, "article.write");
     const article = await ctx.repo.articles.get(claim.articleId);
     if (
       !article ||
@@ -101,7 +104,12 @@ export async function withHttpIdempotency(
         "recovery_inconsistent",
         "L’article récupéré ne correspond plus à son signal.",
       );
-    return json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
+    console.info(
+      JSON.stringify({ event: "kora.idempotency.recovery_replayed", operationId: id, articleId: article.id }),
+    );
+    const response = json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
+    response.headers.set("x-kora-idempotency", "recovered");
+    return response;
   }
   if (claim.kind === "completed") {
     console.info(JSON.stringify({ event: "kora.idempotency.replayed", operationId: id }));
