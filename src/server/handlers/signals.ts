@@ -309,8 +309,6 @@ export const mergeSignals: Handler = async (ctx) => {
       signalId: target.id,
       ...(removed.has(previous.signalId ?? "") && companyId ? { companyId } : {}),
     };
-    if (JSON.stringify(previous) !== JSON.stringify(after))
-      changes.push({ collection: "observations", id, before: previous, after });
     return after;
   });
   for (const article of allArticles) {
@@ -370,6 +368,17 @@ export const mergeSignals: Handler = async (ctx) => {
     others: allSignals.filter((signal) => !removed.has(signal.id)),
     now: ctx.now,
   });
+  for (const observation of rebuilt.observations) {
+    const previous = obsById.get(observation.id)!;
+    if (JSON.stringify(previous) !== JSON.stringify(observation)) {
+      changes.push({
+        collection: "observations",
+        id: observation.id,
+        before: previous,
+        after: observation,
+      });
+    }
+  }
   if (isDecided(target.status)) {
     rebuilt.signal = {
       ...rebuilt.signal,
@@ -466,14 +475,15 @@ export const splitSignal: Handler = async (ctx) => {
     updatedAt: at,
   };
   const withoutNew = allSignals.filter((signal) => signal.id !== original.id);
-  const kept = rebuildSignal({
+  const keptRebuild = rebuildSignal({
     signal: source,
     observations: remainingObs as ObservationRecord[],
     company: company ?? null,
     grid,
     others: allSignals,
     now: ctx.now,
-  }).signal;
+  });
+  const kept = keptRebuild.signal;
   const stableKept = isDecided(original.status)
     ? {
         ...kept,
@@ -482,21 +492,24 @@ export const splitSignal: Handler = async (ctx) => {
         suggestedAngle: original.suggestedAngle,
       }
     : kept;
-  const created = rebuildSignal({
+  const createdRebuild = rebuildSignal({
     signal: draft,
     observations: newObs,
     company: company ?? null,
     grid,
     others: [...withoutNew, stableKept],
     now: ctx.now,
-  }).signal;
+  });
+  const created = createdRebuild.signal;
   const changes: SignalMutation[] = [
-    ...sorted.map((observation): SignalMutation => ({
-      collection: "observations",
-      id: observation.id,
-      before: observation,
-      after: { ...observation, signalId: createdId },
-    })),
+    ...[...keptRebuild.observations, ...createdRebuild.observations].map(
+      (observation): SignalMutation => ({
+        collection: "observations",
+        id: observation.id,
+        before: obsById.get(observation.id)!,
+        after: observation,
+      }),
+    ),
     { collection: "signals", id: original.id, before: original, after: stableKept },
     { collection: "signals", id: createdId, before: null, after: created },
   ];
