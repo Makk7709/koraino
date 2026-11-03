@@ -533,7 +533,9 @@ export class RealCollector implements Collector {
     if (company && !useGoogle) {
       // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
       // sauf si le flux est celui de l'entreprise elle-même.
-      const own = hostOf(url).endsWith(company.domain);
+      const host = hostOf(url);
+      const domain = company.domain.replace(/^www\./, "");
+      const own = host === domain || host.endsWith(`.${domain}`);
       if (!own) {
         const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
         items = items.filter((i) =>
