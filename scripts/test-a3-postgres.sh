@@ -16,9 +16,28 @@ fi
 PROJECT="koraa3ci$(date -u +%s)$$"
 compose() { docker compose --project-name "$PROJECT" --file "$COMPOSE" "$@"; }
 cleanup() {
-  code=$?
+  local code=$? cleanup_failed=0 remaining_containers remaining_networks remaining_volumes
   trap - EXIT
-  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  set +e
+  echo "=== Nettoyage du projet temporaire : $PROJECT ==="
+  compose down --volumes --remove-orphans
+  if [[ $? -ne 0 ]]; then
+    echo "ERREUR : docker compose down a échoué" >&2
+    cleanup_failed=1
+  fi
+  remaining_containers="$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT")" || cleanup_failed=1
+  remaining_networks="$(docker network ls -q --filter "label=com.docker.compose.project=$PROJECT")" || cleanup_failed=1
+  remaining_volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT")" || cleanup_failed=1
+  if [[ -n "$remaining_containers$remaining_networks$remaining_volumes" ]]; then
+    echo "ERREUR : ressources du projet encore présentes" >&2
+    cleanup_failed=1
+  fi
+  if [[ $cleanup_failed -eq 0 ]]; then
+    echo "PASS : aucun conteneur, réseau ou volume du projet ne reste"
+  else
+    echo "ECHEC : nettoyage non confirmé pour $PROJECT" >&2
+    [[ $code -ne 0 ]] || code=1
+  fi
   exit "$code"
 }
 trap cleanup EXIT
