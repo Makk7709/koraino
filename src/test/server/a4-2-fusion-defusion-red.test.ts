@@ -125,5 +125,4 @@ describe("A4.2 — atomicite fusion/defusion (red before fix)", () => {
     ).rejects.toThrow("state changed");
     expect(await repo.observations.get(original.id)).toEqual(changed);
   });
-
 });
