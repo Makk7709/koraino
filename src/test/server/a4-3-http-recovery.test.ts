@@ -31,6 +31,7 @@ describe("A4.3 — HTTP recovery handling", () => {
     });
 
     expect(replay.status).toBe(201);
+    expect(replay.headers.get("x-kora-idempotency")).toBe("recovered");
     expect(replay.body.id).toBe(existingId);
     expect(provider).not.toHaveBeenCalled();
     expect((await repo.articles.list()).filter((a) => a.signalId === "sig_verkor")).toHaveLength(1);
