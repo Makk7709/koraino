@@ -58,6 +58,10 @@ echo "Applying 0011_kora_postgres_hardening (disposable DB ONLY)"
 sql_migration < "$ROOT/drizzle/migrations/0011_kora_postgres_hardening.sql" >/dev/null
 echo "=== A4.3.4 pre-fix cross-ledger characterization (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/financial-generation-characterization.sql"
+echo "Applying 0012_kora_paid_a4_ownership_guard (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0012_kora_paid_a4_ownership_guard.sql" >/dev/null
+echo "=== A4.3.4 post-fix financial/A4 transactional guard (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/financial-generation-guard.sql"
 sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
 echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
