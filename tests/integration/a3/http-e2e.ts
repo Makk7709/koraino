@@ -145,8 +145,8 @@ try {
   const user = seed.users.find((u) => u.id === DEFAULT_USER_ID);
   assert.ok(user);
   await repo.users.insert(user);
-  const signals = seed.signals.filter((s) => !s.articleId && s.status !== "rejete").slice(0, 2);
-  assert.equal(signals.length, 2);
+  const signals = seed.signals.filter((s) => !s.articleId && s.status !== "rejete").slice(0, 3);
+  assert.equal(signals.length, 3);
   for (const signal of signals) await repo.signals.insert(signal);
   // Fresh disposable fixture only, after the financial integration assertions.
   const settings = await repo.getSettings();
@@ -264,6 +264,52 @@ try {
       retainedReserveEur: 0,
     }),
   );
+
+  // A4: process dies while the instrumented provider is still processing.
+  let reportProviderStart!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { reportProviderStart = resolve; });
+  const heldProvider = await listen(createServer((req, res) => {
+    assert.equal(req.method, "POST");
+    invocations += 1;
+    req.resume();
+    reportProviderStart();
+    // Deliberately retain the response until the KORA process is killed.
+    res.on("error", () => {});
+  }));
+  await stop();
+  await start(heldProvider);
+  const crashKey = "a4-e2e-crash-during-call-001";
+  const pendingRequest = post(upstream, signals[2]!.id, crashKey).then(
+    () => "response",
+    () => "connection_lost",
+  );
+  await Promise.race([
+    providerStarted,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Provider not reached")), 4000)),
+  ]);
+  const beforeCrash = await snapshot(crashKey);
+  assert.equal(beforeCrash.operation?.state, "pending");
+  assert.ok(beforeCrash.settings.reservedEur > 0, "Expected reservation before crash");
+  assert.equal(invocations, 3);
+  await stop();
+  assert.equal(await pendingRequest, "connection_lost");
+  const afterCrash = await snapshot(crashKey);
+  assert.equal(afterCrash.operation?.state, "pending");
+  assert.equal(afterCrash.settings.reservedEur, beforeCrash.settings.reservedEur);
+  await start(heldProvider);
+  const retryAfterCrash = await post(upstream, signals[2]!.id, crashKey);
+  assert.equal(retryAfterCrash.status, 409);
+  assert.equal(invocations, 3, "Same-key retry triggered another provider invocation");
+  const afterRetry = await snapshot(crashKey);
+  assert.equal(afterRetry.operation?.state, "pending");
+  assert.equal(afterRetry.settings.reservedEur, beforeCrash.settings.reservedEur);
+  console.log(JSON.stringify({
+    event: "a4.e2e.crash_during_call.characterized",
+    providerCalls: 1,
+    sameKeyRetryStatus: retryAfterCrash.status,
+    operationState: afterRetry.operation?.state,
+    reservationRetained: true,
+  }));
 } catch (error: unknown) {
   console.error(error);
   throw error;
