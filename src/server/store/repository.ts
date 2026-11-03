@@ -1,4 +1,5 @@
 import type { ArticleGenerationsRepository } from "./article-generations";
+import type { SignalMutationsRepository } from "./signal-mutations";
 import type { PaidAttemptsRepository } from "./paid-attempts";
 import type { IdempotencyRepository } from "../services/http-idempotency";
 import type { WordPressSettings } from "@/lib/api/types";
@@ -57,6 +58,7 @@ export interface Repository {
   usage: Collection<UsageEntry>;
   paidAttempts: PaidAttemptsRepository;
   articleGenerations: ArticleGenerationsRepository;
+  signalMutations: SignalMutationsRepository;
   idempotency: IdempotencyRepository;
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;
