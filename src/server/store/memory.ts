@@ -363,7 +363,8 @@ export class MemoryRepository implements Repository {
   };
   signalMutations: SignalMutationsRepository = {
     commit: async (changes) => {
-      if (!changes.length || changes.length > 2000) throw new Error("Invalid signal transaction size");
+      if (!changes.length || changes.length > 2000)
+        throw new Error("Invalid signal transaction size");
       const stores = {
         signals: this.signals,
         observations: this.observations,
@@ -396,15 +397,22 @@ export class MemoryRepository implements Repository {
       const signals = final.get("signals")!;
       const articles = final.get("articles")!;
       const signalIds = new Set(
-        changes.flatMap((c) => c.collection === "articles"
-          ? [c.before?.signalId, c.after?.signalId]
-          : c.collection === "signals" ? [c.id] : []).filter((id): id is string => !!id),
+        changes
+          .flatMap((c) =>
+            c.collection === "articles"
+              ? [c.before?.signalId, c.after?.signalId]
+              : c.collection === "signals"
+                ? [c.id]
+                : [],
+          )
+          .filter((id): id is string => !!id),
       );
       for (const signalId of signalIds) {
-        const linked = [...articles.values()].filter((a) => "signalId" in a && a.signalId === signalId);
+        const linked = [...articles.values()].filter(
+          (a) => "signalId" in a && a.signalId === signalId,
+        );
         if (linked.length > 1) throw new Error("Article already exists for signal");
-        if (linked.length && !signals.has(signalId))
-          throw new Error("Article signal missing");
+        if (linked.length && !signals.has(signalId)) throw new Error("Article signal missing");
       }
       // There is no await between validation and publication of these prepared mutations.
       for (const change of changes) {
