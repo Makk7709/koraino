@@ -571,7 +571,7 @@ describe("collecte réelle : flux des entreprises", () => {
       <rss>
         <channel>
           <item>
-            <title>Une actualité sans rapport avec Kalray</title>
+            <title>Une actualité sans rapport avec l'entreprise</title>
             <link>https://notkalray.eu/article</link>
             <pubDate>${date}</pubDate>
           </item>
