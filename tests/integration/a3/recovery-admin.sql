@@ -199,7 +199,7 @@ BEGIN
   RAISE NOTICE 'PASS: A4.3 original key closed, recovered article replayed, new intent permitted';
 END $$;
 RESET ROLE;
-DO $
+DO $$
 BEGIN
   IF (SELECT count(*) FROM public.kora_article_generation_recoveries
        WHERE signal_id='a43-safe-signal') <> 1
@@ -207,5 +207,5 @@ BEGIN
        WHERE signal_id='a43-done-signal') <> 1
   THEN RAISE EXCEPTION 'A43 immutable DBA archive missing'; END IF;
   RAISE NOTICE 'PASS: A4.3 two DBA-only recovery archives retained';
-END $;
+END $$;
 ROLLBACK;
