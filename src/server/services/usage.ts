@@ -139,7 +139,7 @@ export interface UsageLine {
  * rien n'est appelé (402 `budget_exhausted`) et les appels payants sont suspendus.
  */
 export async function paidCall<T>(
-  ctx: Pick<Ctx, "repo" | "user" | "now">,
+  ctx: Pick<Ctx, "repo" | "user" | "now" | "httpOperationId">,
   call: PaidCall,
   fn: () => T | Promise<T>,
   actual?: (result: T) => UsageLine[],
@@ -164,7 +164,9 @@ export async function paidCall<T>(
   };
   const reservation = await withBudgetLock(repo, () =>
     call.articleGeneration
-      ? repo.articleGenerations.reserve(call.articleGeneration, attempt)
+      ? ctx.httpOperationId
+        ? repo.articleGenerations.reserveLinked(call.articleGeneration, attempt, ctx.httpOperationId)
+        : repo.articleGenerations.reserve(call.articleGeneration, attempt)
       : repo.paidAttempts.reserve(attempt),
   );
   if ("blocked" in reservation) {
