@@ -21,7 +21,12 @@ CREATE FUNCTION public.kora_article_generation_reserve_linked(
 SET lock_timeout = '3s' SET statement_timeout = '20s' AS $$
 DECLARE v_http jsonb; v_result jsonb;
 BEGIN
-  IF p_http_id IS NULL OR p_http_id !~ '^[a-f0-9]{64} IS DISTINCT FROM 'pending'
+  IF p_http_id IS NULL OR p_http_id !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 'invalid HTTP association';
+  END IF;
+  SELECT data INTO STRICT v_http FROM public.kora_records
+    WHERE collection='http_idempotency' AND id=p_http_id FOR UPDATE;
+  IF v_http->>'state' IS DISTINCT FROM 'pending'
      OR v_http->>'workspaceId' IS DISTINCT FROM 'kora'
      OR v_http->>'route' IS DISTINCT FROM 'POST /articles'
   THEN RAISE EXCEPTION 'invalid HTTP operation state'; END IF;
