@@ -92,7 +92,8 @@ export async function withHttpIdempotency(
       "Cette tentative a été clôturée administrativement. Utilisez une nouvelle demande.",
     );
   if (claim.kind === "recovered_completed") {
-    if (route !== "POST /articles") throw conflict("recovery_route_mismatch", "Réponse récupérée sur une route incorrecte.");
+    if (route !== "POST /articles")
+      throw conflict("recovery_route_mismatch", "Réponse récupérée sur une route incorrecte.");
     assertCan(ctx.user, "article.write");
     const article = await ctx.repo.articles.get(claim.articleId);
     if (
@@ -105,7 +106,11 @@ export async function withHttpIdempotency(
         "L’article récupéré ne correspond plus à son signal.",
       );
     console.info(
-      JSON.stringify({ event: "kora.idempotency.recovery_replayed", operationId: id, articleId: article.id }),
+      JSON.stringify({
+        event: "kora.idempotency.recovery_replayed",
+        operationId: id,
+        articleId: article.id,
+      }),
     );
     const response = json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
     response.headers.set("x-kora-idempotency", "recovered");
