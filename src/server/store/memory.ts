@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ArticleGenerationsRepository } from "./article-generations";
+import type { SignalMutationsRepository } from "./signal-mutations";
 import type { ArticleRecord, SignalRecord } from "./records";
 import type { IdempotencyRecord, IdempotencyClaim } from "../services/http-idempotency";
 import {
@@ -71,6 +72,12 @@ class MemoryCollection<T extends { id: string }> implements Collection<T> {
 
   async remove(id: string) {
     return this.items.delete(id);
+  }
+
+  /** Internal commit-only write; validated against an entire precomputed transaction. */
+  replaceCommitted(item: T | null, id: string) {
+    if (item) this.items.set(id, structuredClone(item));
+    else this.items.delete(id);
   }
 }
 
@@ -352,6 +359,58 @@ export class MemoryRepository implements Repository {
       const op = this.generations.get(signalId);
       if (op?.token === token && op.state !== "completed")
         this.generations.set(signalId, { ...op, state: "uncertain" });
+    },
+  };
+  signalMutations: SignalMutationsRepository = {
+    commit: async (changes) => {
+      if (!changes.length || changes.length > 2000) throw new Error("Invalid signal transaction size");
+      const stores = {
+        signals: this.signals,
+        observations: this.observations,
+        articles: this.articles,
+        linkedin: this.linkedin,
+        newsletters: this.newsletters,
+        audit: this.audit,
+      };
+      const seen = new Set<string>();
+      const final = new Map<string, Map<string, { id: string }>>();
+      for (const [name, store] of Object.entries(stores)) {
+        final.set(name, new Map(store.all().map((item) => [item.id, item])));
+      }
+      for (const change of changes) {
+        const key = `${change.collection}:${change.id}`;
+        if (seen.has(key)) throw new Error("Duplicate signal transaction row");
+        seen.add(key);
+        const store = stores[change.collection] as unknown as MemoryCollection<{ id: string }>;
+        const current = store.read(change.id) ?? null;
+        if (!isDeepStrictEqual(current, change.before))
+          throw new Error("Signal transaction state changed");
+        if (change.after && change.after.id !== change.id)
+          throw new Error("Signal transaction identifier mismatch");
+        if (change.collection === "signals" && this.generations.has(change.id))
+          throw new Error("Article generation ownership prevents signal mutation");
+        const entries = final.get(change.collection)!;
+        if (change.after) entries.set(change.id, change.after);
+        else entries.delete(change.id);
+      }
+      const signals = final.get("signals")!;
+      const articles = final.get("articles")!;
+      const signalIds = new Set(
+        changes.flatMap((c) => c.collection === "articles"
+          ? [c.before?.signalId, c.after?.signalId]
+          : c.collection === "signals" ? [c.id] : []).filter((id): id is string => !!id),
+      );
+      for (const signalId of signalIds) {
+        const linked = [...articles.values()].filter((a) => "signalId" in a && a.signalId === signalId);
+        if (linked.length > 1) throw new Error("Article already exists for signal");
+        if (linked.length && !signals.has(signalId))
+          throw new Error("Article signal missing");
+      }
+      // There is no await between validation and publication of these prepared mutations.
+      for (const change of changes) {
+        const store = stores[change.collection] as unknown as MemoryCollection<{ id: string }>;
+        store.replaceCommitted(change.after, change.id);
+      }
     },
   };
   private counter = 1000;
