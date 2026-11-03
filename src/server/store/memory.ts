@@ -272,12 +272,27 @@ export class MemoryRepository implements Repository {
     {
       token: string;
       attemptId: string;
+      httpOperationId?: string;
       signal: SignalRecord;
       state: "reserved" | "in_flight" | "uncertain" | "completed";
       article?: ArticleRecord;
     }
   >();
   articleGenerations: ArticleGenerationsRepository = {
+    reserveLinked: async (claim, attempt, httpOperationId) => {
+      const http = this.httpOps.get(httpOperationId);
+      if (!http || http.state !== "pending" || http.route !== "POST /articles" ||
+          http.workspaceId !== this.workspaceId ||
+          [...this.generations.values()].some((operation) => operation.httpOperationId === httpOperationId))
+        throw new Error("Invalid linked HTTP operation");
+      const result = await this.articleGenerations.reserve(claim, attempt);
+      if (result.ok === true) {
+        const op = this.generations.get(claim.signal.id);
+        if (!op || op.token !== claim.token) throw new Error("Missing linked generation");
+        this.generations.set(claim.signal.id, { ...op, httpOperationId });
+      }
+      return result;
+    },
     reserve: async (claim, attempt) => {
       if (
         !claim.token ||
