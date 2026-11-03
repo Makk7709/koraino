@@ -86,7 +86,11 @@ BEGIN
   SELECT * INTO v_archive FROM public.kora_article_generation_recoveries
     WHERE signal_id=p_signal_id AND http_operation_id=p_http_id AND resolution='not_sent';
   IF FOUND THEN
-    IF v_archive.evidence = p_evidence THEN RETURN true; END IF;
+    IF v_archive.evidence = p_evidence
+       AND v_http->>'state' = 'closed_not_sent'
+       AND NOT EXISTS (SELECT 1 FROM public.kora_article_generations
+         WHERE signal_id=p_signal_id)
+    THEN RETURN true; END IF;
     RAISE EXCEPTION 'conflicting recovery replay';
   END IF;
   SELECT * INTO STRICT v_op FROM public.kora_article_generations
@@ -94,7 +98,7 @@ BEGIN
   IF v_op.http_operation_id IS DISTINCT FROM p_http_id OR v_op.state <> 'reserved'
      OR v_op.article_payload IS NOT NULL THEN
     RAISE EXCEPTION 'generation was not proven unsent'; END IF;
-  IF v_http->>'state' IS DISTINCT FROM 'pending'
+  IF v_http->>'state' NOT IN ('pending','uncertain')
      OR v_http->>'route' IS DISTINCT FROM 'POST /articles'
      OR v_http->>'workspaceId' IS DISTINCT FROM 'kora'
   THEN RAISE EXCEPTION 'HTTP operation mismatch'; END IF;
