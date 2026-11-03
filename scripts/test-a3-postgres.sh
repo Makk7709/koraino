@@ -56,6 +56,8 @@ echo "=== A4.3.3 pre-fix permission characterization (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/permissions-characterization.sql"
 echo "Applying 0011_kora_postgres_hardening (disposable DB ONLY)"
 sql_migration < "$ROOT/drizzle/migrations/0011_kora_postgres_hardening.sql" >/dev/null
+echo "=== A4.3.4 pre-fix cross-ledger characterization (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/financial-generation-characterization.sql"
 sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
 echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
