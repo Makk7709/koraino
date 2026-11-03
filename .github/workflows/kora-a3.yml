@@ -3,9 +3,11 @@ on:
   push:
     branches:
       - fix/kora-a3-tracabilite-appels-payants
+      - fix/kora-a4-concurrence-reprise
   pull_request:
     branches:
       - main
+      - fix/kora-a3-tracabilite-appels-payants
   workflow_dispatch:
 permissions:
   contents: read
