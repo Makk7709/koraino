@@ -12,6 +12,8 @@ CREATE TABLE public.kora_article_generation_recoveries (
 ALTER TABLE public.kora_article_generation_recoveries ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.kora_article_generation_recoveries FROM PUBLIC, anon, authenticated, service_role;
 
+ALTER TABLE public.kora_article_generations ADD COLUMN http_operation_id text UNIQUE;
+
 -- Establish an immutable link within the same transaction as budget reservation.
 CREATE FUNCTION public.kora_article_generation_reserve_linked(
   p_token uuid, p_signal jsonb, p_attempt jsonb, p_http_id text
@@ -42,8 +44,6 @@ BEGIN
   RETURN v_result;
 END;
 $$;
-
-ALTER TABLE public.kora_article_generations ADD COLUMN http_operation_id text UNIQUE;
 
 -- Evidence is an audit reference, not a claim that SHA-256 content was externally verified.
 CREATE FUNCTION public.kora_article_recovery_check_evidence(p_evidence jsonb)
@@ -211,3 +211,56 @@ REVOKE ALL ON FUNCTION public.kora_article_generation_admin_close_not_sent(text,
   FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.kora_article_generation_admin_recover_http(text,text,jsonb)
   FROM PUBLIC,anon,authenticated,service_role;
+
+-- Recover existing HTTP intents without losing actor/route/fingerprint checks.
+CREATE OR REPLACE FUNCTION public.kora_http_idempotency_begin(
+  p_id text, p_workspace text, p_actor text, p_route text, p_fingerprint text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = '' SET lock_timeout = '3s' SET statement_timeout = '15s'
+AS $$
+DECLARE v_data jsonb; v_inserted integer;
+BEGIN
+  IF p_id IS NULL OR p_id !~ '^[a-f0-9]{64}$'
+     OR p_workspace IS DISTINCT FROM 'kora'
+     OR p_actor IS NULL OR length(p_actor) < 1 OR length(p_actor) > 200
+     OR p_route IS NULL OR length(p_route) < 3 OR length(p_route) > 300
+     OR p_fingerprint IS NULL OR p_fingerprint !~ '^[a-f0-9]{64}$'
+  THEN RAISE EXCEPTION 'invalid HTTP idempotency claim'; END IF;
+  INSERT INTO public.kora_records(collection,id,data)
+  VALUES ('http_idempotency',p_id,jsonb_build_object(
+    'id',p_id,'workspaceId',p_workspace,'actorId',p_actor,'route',p_route,
+    'fingerprint',p_fingerprint,'state','pending',
+    'createdAt',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  )) ON CONFLICT (collection,id) DO NOTHING;
+  GET DIAGNOSTICS v_inserted = ROW_COUNT;
+  IF v_inserted = 1 THEN RETURN jsonb_build_object('kind','claimed'); END IF;
+  SELECT data INTO STRICT v_data FROM public.kora_records
+   WHERE collection='http_idempotency' AND id=p_id FOR UPDATE;
+  IF v_data->>'workspaceId' IS DISTINCT FROM p_workspace
+     OR v_data->>'actorId' IS DISTINCT FROM p_actor
+     OR v_data->>'route' IS DISTINCT FROM p_route
+     OR v_data->>'fingerprint' IS DISTINCT FROM p_fingerprint
+  THEN RETURN jsonb_build_object('kind','conflict'); END IF;
+  IF v_data->>'state' = 'completed' THEN
+    RETURN jsonb_build_object('kind','completed','status',v_data->'httpStatus',
+      'bodyText',v_data->'bodyText');
+  END IF;
+  IF v_data->>'state' = 'closed_not_sent' THEN
+    RETURN jsonb_build_object('kind','closed_not_sent');
+  END IF;
+  IF v_data->>'state' = 'recovered_completed' THEN
+    RETURN jsonb_build_object('kind','recovered_completed',
+      'articleId',v_data->>'articleId');
+  END IF;
+  IF v_data->>'state' = 'pending' THEN
+    RETURN jsonb_build_object('kind','pending');
+  END IF;
+  RETURN jsonb_build_object('kind','uncertain');
+END;
+$$;
+
+
+REVOKE ALL ON FUNCTION public.kora_http_idempotency_begin(text,text,text,text,text)
+ FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.kora_http_idempotency_begin(text,text,text,text,text)
+ TO service_role;
