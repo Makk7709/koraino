@@ -64,12 +64,7 @@ const STYLE =
 
 export class OpenAiEnhancer implements AiTextEnhancer {
   async enhanceDossier(input: DossierInput, base: Dossier): Promise<Dossier> {
-    const facts = base.factChecks
-      .map(
-        (f) =>
-          `- [${f.status}] ${f.claim}`,
-      )
-      .join("\n");
+    const facts = base.factChecks.map((f) => `- [${f.status}] ${f.claim}`).join("\n");
     const raw = await chat(
       STYLE,
       `À partir de ces faits vérifiés, réécris l'article.\n\n` +
@@ -79,9 +74,7 @@ export class OpenAiEnhancer implements AiTextEnhancer {
         `Réponds en JSON uniquement : {"title": "...", "chapo": "...", "body": "..."}. ` +
         `Le corps garde la section « Sources consultées » à la fin, reprise à l'identique.`,
     );
-    const parsed = raw
-      ? parseJson<{ title?: string; chapo?: string; body?: string }>(raw)
-      : null;
+    const parsed = raw ? parseJson<{ title?: string; chapo?: string; body?: string }>(raw) : null;
     if (!parsed?.title || !parsed.chapo || !parsed.body) return base;
     return {
       ...base,
