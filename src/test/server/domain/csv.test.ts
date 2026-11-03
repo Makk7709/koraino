@@ -2,19 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { toCsv } from "../../../server/domain/csv";
 
-describe("toCsv", () => {
-  it("neutralise les formules contenues dans un tableau de chaînes", () => {
-    const rows = [
-      {
-        etiquettes: ['=HYPERLINK("https://malicious.com")'],
-      },
-    ];
 
-    const result = toCsv(["etiquettes"], rows);
-
-    expect(result).toContain("'=HYPERLINK");
-  });
-});
 describe("toCsv - sécurité des formules", () => {
   it.each([
     ["=", ["=HYPERLINK(...)"]],
@@ -27,10 +15,49 @@ describe("toCsv - sécurité des formules", () => {
     expect(result).toContain("'");
   });
 
+  it("neutralise les formules contenues dans un tableau de chaînes", () => {
+    const rows = [
+      {
+        etiquettes: ['=HYPERLINK("https://malicious.com")'],
+      },
+    ];
+
+    const result = toCsv(["etiquettes"], rows);
+
+    expect(result).toContain("'=HYPERLINK");
+  });
   it("neutralise les chaînes commençant par =", () => {
     const result = toCsv(["nom"], [{ nom: "=SUM(A1:A2)" }]);
 
     expect(result).toContain("'=SUM");
+  });
+
+  it("neutralise une formule dans le premier élément d'un tableau", () => {
+    const result = toCsv(["etiquettes"], [{ etiquettes: ["=HYPERLINK(...)", "administration"] }]);
+
+    expect(result).toContain("'=HYPERLINK");
+    expect(result).toContain("administration");
+  });
+
+  it("neutralise une formule précédée d'une tabulation", () => {
+    const result = toCsv(["nom"], [{ nom: "\t=HYPERLINK(...)" }]);
+
+    expect(result).toContain("'");
+  });
+
+  it("ne double pas la neutralisation d'une chaîne déjà neutralisée", () => {
+    const result = toCsv(["nom"], [{ nom: "'=HYPERLINK(...)" }]);
+
+    expect(result).toBe("nom\r\n'=HYPERLINK(...)\r\n");
+  });
+
+  it("neutralise une formule précédée d'un espace", () => {
+    const result = toCsv(
+      ["valeur"],
+      [{ valeur: " =HYPERLINK(...)" }]
+    );
+  
+    expect(result).toContain("' =HYPERLINK");
   });
 });
 
@@ -53,22 +80,14 @@ describe("toCsv - conservation des données", () => {
     expect(result).toBe("nom\r\n\r\n");
   });
 
-  it("neutralise une formule dans le premier élément d'un tableau", () => {
-    const result = toCsv(["etiquettes"], [{ etiquettes: ["=HYPERLINK(...)", "administration"] }]);
-
-    expect(result).toContain("'=HYPERLINK");
-    expect(result).toContain("administration");
+  it("conserve les nombres négatifs", () => {
+    const result = toCsv(["prix"], [{ prix: -42 }]);
+    expect(result).toContain("-42");
+    expect(result).not.toContain("'-42");
   });
-
-  it("neutralise une formule précédée d'une tabulation", () => {
-    const result = toCsv(["nom"], [{ nom: "\t=HYPERLINK(...)" }]);
-
-    expect(result).toContain("'");
-  });
-
-  it("ne double pas la neutralisation d'une chaîne déjà neutralisée", () => {
-    const result = toCsv(["nom"], [{ nom: "'=HYPERLINK(...)" }]);
-
-    expect(result).toBe("nom\r\n'=HYPERLINK(...)\r\n");
+  
+  it("neutralise les chaînes commençant par un moins", () => {
+    const result = toCsv(["valeur"], [{ valeur: "-42" }]);
+    expect(result).toContain("'-42");
   });
 });
