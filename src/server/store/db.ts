@@ -134,8 +134,11 @@ export class DbRepository implements Repository {
   usage = new DbCollection<any>("usage");
   signalMutations: SignalMutationsRepository = {
     commit: async (changes) => {
-      if (!changes.length || changes.length > 2000) throw new Error("Invalid signal transaction size");
-      const { data, error } = await (await db())
+      if (!changes.length || changes.length > 2000)
+        throw new Error("Invalid signal transaction size");
+      const { data, error } = await (
+        await db()
+      )
         .rpc("kora_signal_mutations_commit" as never, { p_changes: changes } as never)
         .abortSignal(AbortSignal.timeout(10_000));
       if (error || data !== true)
