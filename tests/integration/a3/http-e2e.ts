@@ -8,6 +8,7 @@ import { createServer as createTcpServer, type Server as TcpServer } from "node:
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { DbRepository } from "../../../src/server/store/db";
+import { supabaseAdmin } from "../../../src/integrations/supabase/client.server";
 import { buildSeed, DEFAULT_USER_ID } from "../../../src/server/store/seed";
 
 assert.equal(process.env["A3_DB_ISOLATED_TEST"], "1");
@@ -309,6 +310,62 @@ try {
     sameKeyRetryStatus: retryAfterCrash.status,
     operationState: afterRetry.operation?.state,
     reservationRetained: true,
+  }));
+
+  // Characterize two different HTTP keys for one signal after simulated lock expiry.
+  const raceSignal = { ...signals[0]!, id: "a4-signal-expiry-race" };
+  await repo.signals.insert(raceSignal);
+  let calls = 0;
+  let startedFirst!: () => void;
+  let startedSecond!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { startedFirst = resolve; });
+  const secondStarted = new Promise<void>((resolve) => { startedSecond = resolve; });
+  const waitingResponses: import("node:http").ServerResponse[] = [];
+  const raceProvider = await listen(createServer((req, res) => {
+    req.resume();
+    calls += 1;
+    waitingResponses.push(res);
+    if (calls === 1) startedFirst();
+    if (calls === 2) startedSecond();
+  }));
+  await stop();
+  await start(raceProvider);
+  const firstRace = post(upstream, raceSignal.id, "a4-race-first-key-00000001");
+  await Promise.race([
+    firstStarted,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("First provider call timeout")), 4000)),
+  ]);
+  // Fixture-only forced expiry on the disposable database, while first call is held.
+  const lockId = "article-create:" + raceSignal.id;
+  const lockRead = await supabaseAdmin.from("kora_records").select("data")
+    .eq("collection", "locks").eq("id", lockId).single();
+  assert.equal(lockRead.error, null);
+  assert.ok(lockRead.data);
+  const lock = lockRead.data.data as { id: string; token: string; expiresAt: string };
+  assert.ok(lock.token && lock.expiresAt);
+  const lockUpdate = await supabaseAdmin.from("kora_records")
+    .update({ data: { ...lock, expiresAt: "2000-01-01T00:00:00.000Z" } as never })
+    .eq("collection", "locks").eq("id", lockId).eq("data->>token", lock.token)
+    .select("id");
+  assert.equal(lockUpdate.error, null);
+  assert.equal(lockUpdate.data?.length, 1);
+  const secondRace = post(upstream, raceSignal.id, "a4-race-second-key-0000002");
+  await Promise.race([
+    secondStarted,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Second provider call not observed")), 4000)),
+  ]);
+  assert.equal(calls, 2);
+  for (const response of waitingResponses) { response.writeHead(204); response.end(); }
+  const raceResponses = await Promise.all([firstRace, secondRace]);
+  const raceStatuses = raceResponses.map((response) => response.status);
+  const raceBodies = await Promise.all(raceResponses.map((response) => response.text()));
+  const raceArticles = (await repo.articles.list()).filter((article) => article.signalId === raceSignal.id);
+  console.log(JSON.stringify({
+    event: "a4.e2e.expired_lock_two_keys.characterized",
+    providerCalls: calls,
+    statuses: raceStatuses,
+    articles: raceArticles.length,
+    responseBodies: raceBodies,
   }));
 } catch (error: unknown) {
   console.error(error);
