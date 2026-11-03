@@ -165,7 +165,11 @@ export async function paidCall<T>(
   const reservation = await withBudgetLock(repo, () =>
     call.articleGeneration
       ? ctx.httpOperationId
-        ? repo.articleGenerations.reserveLinked(call.articleGeneration, attempt, ctx.httpOperationId)
+        ? repo.articleGenerations.reserveLinked(
+            call.articleGeneration,
+            attempt,
+            ctx.httpOperationId,
+          )
         : repo.articleGenerations.reserve(call.articleGeneration, attempt)
       : repo.paidAttempts.reserve(attempt),
   );
