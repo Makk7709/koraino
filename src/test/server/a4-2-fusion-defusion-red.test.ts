@@ -92,4 +92,38 @@ describe("A4.2 — atomicite fusion/defusion (red before fix)", () => {
     expect(await repo.signals.get(original.id)).toEqual(beforeOriginal);
     expect((await repo.signals.list()).length).toBe(beforeSignals);
   });
+  it("préserve la grille et le score historique d'un signal décidé après défusion", async () => {
+    const repo = setup();
+    const original = (await repo.signals.get("sig_pasqal"))!;
+    const decided = { ...original, status: "traite" as const };
+    await repo.signals.update(decided);
+    const observationId = decided.observationIds[0]!;
+    const response = await call("POST", `/signals/${decided.id}/split`, {
+      body: { observationIds: [observationId] },
+    });
+    expect(response.status).toBe(201);
+    const kept = await repo.signals.get(decided.id);
+    expect(kept?.score).toEqual(decided.score);
+    expect(kept?.whyInteresting).toEqual(decided.whyInteresting);
+    expect(kept?.suggestedAngle).toEqual(decided.suggestedAngle);
+  });
+
+  it("refuse un état préparé périmé sans écriture partielle", async () => {
+    const repo = setup();
+    const original = (await repo.observations.list())[0]!;
+    const changed = { ...original, title: "Version concurrente" };
+    await repo.observations.update(changed);
+    await expect(
+      repo.signalMutations.commit([
+        {
+          collection: "observations",
+          id: original.id,
+          before: original,
+          after: { ...original, signalId: "sig_pasqal" },
+        },
+      ]),
+    ).rejects.toThrow("state changed");
+    expect(await repo.observations.get(original.id)).toEqual(changed);
+  });
+
 });
