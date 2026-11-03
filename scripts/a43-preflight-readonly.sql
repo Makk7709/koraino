@@ -91,5 +91,5 @@ WHERE NOT t.tgisinternal AND t.tgrelid IN
   JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
   WHERE n.nspname='public' AND c.relname IN
    ('kora_records','kora_settings','kora_article_generations'))
-ORDER BY relation::text,t.tgname;
+ORDER BY t.tgrelid::regclass::text,t.tgname;
 COMMIT;
