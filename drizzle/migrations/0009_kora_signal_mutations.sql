@@ -56,7 +56,10 @@ BEGIN
     -- The durable A4 claim is never moved, erased or re-parented by a merge/split.
     -- In-flight generation is also fenced against all signal modifications.
     IF v_collection = 'signals' AND EXISTS (
-      SELECT 1 FROM public.kora_article_generations WHERE signal_id = v_id
+      SELECT 1 FROM public.kora_article_generations
+      WHERE signal_id = v_id
+        AND (state <> 'completed' OR v_after = 'null'::jsonb
+             OR v_before->>'articleId' IS DISTINCT FROM v_after->>'articleId')
     ) THEN RAISE EXCEPTION 'article generation ownership prevents signal mutation'; END IF;
   END LOOP;
 
