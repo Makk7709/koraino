@@ -196,10 +196,16 @@ BEGIN
   IF v_reservation->>'ok' <> 'true' THEN
     RAISE EXCEPTION 'A43 safe retry not allowed with fresh key: %',v_reservation; END IF;
 
-  IF (SELECT count(*) FROM public.kora_article_generation_recoveries
-       WHERE signal_id='a43-safe-signal') <> 1
-  THEN RAISE EXCEPTION 'A43 archival history lost'; END IF;
   RAISE NOTICE 'PASS: A4.3 original key closed, recovered article replayed, new intent permitted';
 END $$;
 RESET ROLE;
+DO $
+BEGIN
+  IF (SELECT count(*) FROM public.kora_article_generation_recoveries
+       WHERE signal_id='a43-safe-signal') <> 1
+     OR (SELECT count(*) FROM public.kora_article_generation_recoveries
+       WHERE signal_id='a43-done-signal') <> 1
+  THEN RAISE EXCEPTION 'A43 immutable DBA archive missing'; END IF;
+  RAISE NOTICE 'PASS: A4.3 two DBA-only recovery archives retained';
+END $;
 ROLLBACK;
