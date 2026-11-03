@@ -4,8 +4,9 @@ import type { Ctx, Handler } from "../context";
 import { assertCan } from "../domain/permissions";
 import { applyGrid, isDecided, validateWeights } from "../domain/scoring";
 import { normalize } from "../domain/text";
-import { json, notFound, unprocessable } from "../http";
-import type { GridRecord, SignalRecord } from "../store/records";
+import { conflict, json, notFound, unprocessable } from "../http";
+import type { GridRecord, ObservationRecord, SignalRecord } from "../store/records";
+import type { SignalMutation } from "../store/signal-mutations";
 import { collectAll, collectOne } from "../services/collection";
 import { audit } from "../services/journal";
 import { addItem, ensureCurrentEdition, removeItems, renumber } from "../services/newsletters";
@@ -252,85 +253,129 @@ export const patchSignal: Handler = async (ctx) => {
   return json(await signalDto(ctx, rec.id));
 };
 
+/** A4.2: prepare all changes before a single compare-and-swap transaction. */
 export const mergeSignals: Handler = async (ctx) => {
   assertCan(ctx.user, "signal.write");
   const { otherIds } = parse(schemas.merge, ctx.body);
   const target = await getSignalOr404(ctx, ctx.params["id"]!);
   const ids = [...new Set(otherIds)];
   if (ids.includes(target.id))
-    throw unprocessable("invalid_merge", "Un signal ne peut pas être fusionné avec lui-même.");
+    throw unprocessable("invalid_merge", "Un signal ne peut être fusionné avec lui-même.");
   const others: SignalRecord[] = [];
   for (const id of ids) others.push(await getSignalOr404(ctx, id));
   const companies = new Set(
-    [target, ...others].map((s) => s.companyId).filter((c): c is string => !!c),
+    [target, ...others].map((signal) => signal.companyId).filter((id): id is string => !!id),
   );
-  if (companies.size > 1) {
-    throw unprocessable(
-      "company_mismatch",
-      "Fusion impossible : les signaux concernent des entreprises différentes.",
-    );
-  }
+  if (companies.size > 1)
+    throw unprocessable("company_mismatch", "Les signaux concernent des entreprises différentes.");
+
   const companyId = target.companyId ?? [...companies][0] ?? null;
-  const movedObs = others.flatMap((s) => s.observationIds);
-  for (const id of movedObs) {
-    const o = await ctx.repo.observations.get(id);
-    if (o)
-      await ctx.repo.observations.update({
-        ...o,
-        signalId: target.id,
-        companyId: companyId ?? o.companyId,
-      });
-  }
-  let articleId = target.articleId;
   const removed = new Set(ids);
-  for (const a of await ctx.repo.articles.list()) {
-    if (a.signalId && removed.has(a.signalId)) {
-      await ctx.repo.articles.update({ ...a, signalId: target.id });
-      articleId ??= a.id;
+  const [allObservations, allArticles, allPosts, allNewsletters, allSignals, grid, company] =
+    await Promise.all([
+      ctx.repo.observations.list(),
+      ctx.repo.articles.list(),
+      ctx.repo.linkedin.list(),
+      ctx.repo.newsletters.list(),
+      ctx.repo.signals.list(),
+      activeGrid(ctx.repo),
+      companyId ? ctx.repo.companies.get(companyId) : Promise.resolve(undefined),
+    ]);
+  const involved = new Set([target.id, ...ids]);
+  const linkedArticles = allArticles.filter((a) => a.signalId && involved.has(a.signalId));
+  // A4 guarantees at most one article per signal. Never silently discard an article.
+  if (linkedArticles.length > 1)
+    throw conflict(
+      "merge_article_conflict",
+      "La fusion de signaux possédant plusieurs articles nécessite un arbitrage éditorial.",
+      { articleIds: linkedArticles.map((a) => a.id) },
+    );
+  const movedObs = others.flatMap((signal) => signal.observationIds);
+  const finalObsIds = [...new Set([...target.observationIds, ...movedObs])];
+  const obsById = new Map(allObservations.map((obs) => [obs.id, obs]));
+  if (finalObsIds.some((id) => !obsById.has(id)))
+    throw conflict("signal_changed", "Une observation a disparu : rechargez les signaux.");
+
+  const changes: SignalMutation[] = [];
+  const finalObservations = finalObsIds.map((id) => {
+    const previous = obsById.get(id)!;
+    const after = {
+      ...previous,
+      signalId: target.id,
+      ...(removed.has(previous.signalId ?? "") && companyId ? { companyId } : {}),
+    };
+    if (JSON.stringify(previous) !== JSON.stringify(after))
+      changes.push({ collection: "observations", id, before: previous, after });
+    return after;
+  });
+  for (const article of allArticles) {
+    if (article.signalId && removed.has(article.signalId)) {
+      changes.push({
+        collection: "articles", id: article.id, before: article,
+        after: { ...article, signalId: target.id },
+      });
     }
   }
-  for (const p of await ctx.repo.linkedin.list()) {
-    if (p.signalId && removed.has(p.signalId))
-      await ctx.repo.linkedin.update({ ...p, signalId: target.id });
+  for (const post of allPosts) {
+    if (post.signalId && removed.has(post.signalId)) {
+      changes.push({
+        collection: "linkedin", id: post.id, before: post,
+        after: { ...post, signalId: target.id },
+      });
+    }
   }
-  for (const n of await ctx.repo.newsletters.list()) {
-    if (!n.items.some((i) => i.signalId && removed.has(i.signalId))) continue;
-    let seen = n.items.some((i) => i.signalId === target.id);
-    const items = n.items.flatMap((i) => {
-      if (!i.signalId || !removed.has(i.signalId)) return [i];
+  for (const edition of allNewsletters) {
+    if (!edition.items.some((item) => item.signalId && removed.has(item.signalId))) continue;
+    let seen = edition.items.some((item) => item.signalId === target.id);
+    const items = edition.items.flatMap((item) => {
+      if (!item.signalId || !removed.has(item.signalId)) return [item];
       if (seen) return [];
       seen = true;
-      return [{ ...i, signalId: target.id }];
+      return [{ ...item, signalId: target.id }];
     });
-    await ctx.repo.newsletters.update({ ...n, items: renumber(items) });
+    changes.push({
+      collection: "newsletters", id: edition.id, before: edition,
+      after: { ...edition, items: renumber(items) },
+    });
   }
-  for (const id of ids) await ctx.repo.signals.remove(id);
-
-  const company = companyId ? await ctx.repo.companies.get(companyId) : undefined;
   const merged: SignalRecord = {
     ...target,
     companyId,
     themes: target.companyId ? target.themes : [...(company?.themes ?? [])],
-    observationIds: [...target.observationIds, ...movedObs],
-    articleId,
+    observationIds: finalObsIds,
+    articleId: linkedArticles[0]?.id ?? null,
     review: target.review?.kind === "fusion_incertaine" || companyId ? null : target.review,
-    matchConfidence: Math.max(target.matchConfidence, ...others.map((o) => o.matchConfidence)),
-    tags: [...new Set([...target.tags, ...others.flatMap((o) => o.tags)])].slice(0, 6),
+    matchConfidence: Math.max(target.matchConfidence, ...others.map((signal) => signal.matchConfidence)),
+    tags: [...new Set([...target.tags, ...others.flatMap((signal) => signal.tags)])].slice(0, 6),
   };
-  const rebuilt = await rebuild(
-    ctx,
-    merged,
-    await activeGrid(ctx.repo),
-    await ctx.repo.signals.list(),
-  );
-  await audit(
-    ctx,
-    "signal.merge",
-    "signal",
-    target.id,
-    `Fusion de ${ids.join(", ")} dans ${target.id} (${movedObs.length} observation(s))`,
-  );
-  return json(await signalDto(ctx, rebuilt.id));
+  const rebuilt = rebuildSignal({
+    signal: merged,
+    observations: finalObservations,
+    company: company ?? null,
+    grid,
+    others: allSignals.filter((signal) => !removed.has(signal.id)),
+    now: ctx.now,
+  });
+  changes.push({ collection: "signals", id: target.id, before: target, after: rebuilt.signal });
+  for (const source of others)
+    changes.push({ collection: "signals", id: source.id, before: source, after: null });
+  changes.push({
+    collection: "audit",
+    id: ctx.repo.nextId("aud"),
+    before: null,
+    after: {
+      id: "", at: "", actor: "", action: "", entity: "signal", entityId: "", details: "",
+    },
+  });
+  const last = changes[changes.length - 1]!;
+  if (last.collection !== "audit" || !last.after) throw new Error("Missing transaction audit");
+  last.after = {
+    id: last.id, at: ctx.now.toISOString(), actor: ctx.user.name,
+    action: "signal.merge", entity: "signal", entityId: target.id,
+    details: `Fusion de ${ids.join(", ")} dans ${target.id} (${movedObs.length} observation(s))`,
+  };
+  await ctx.repo.signalMutations.commit(changes);
+  return json(await signalDto(ctx, target.id));
 };
 
 export const splitSignal: Handler = async (ctx) => {
@@ -338,42 +383,48 @@ export const splitSignal: Handler = async (ctx) => {
   const { observationIds } = parse(schemas.split, ctx.body);
   const original = await getSignalOr404(ctx, ctx.params["id"]!);
   const moving = [...new Set(observationIds)];
-  const unknown = moving.filter((id) => !original.observationIds.includes(id));
-  if (unknown.length) {
-    throw unprocessable("invalid_split", "Ces observations n'appartiennent pas au signal.", {
-      observationIds: unknown,
-    });
-  }
-  if (moving.length >= original.observationIds.length) {
-    throw unprocessable(
-      "invalid_split",
-      "La défusion doit laisser au moins une observation dans le signal d'origine.",
-    );
-  }
-  const observations = await Promise.all(moving.map((id) => ctx.repo.observations.get(id)));
-  const first = observations
-    .filter((o): o is NonNullable<typeof o> => !!o)
-    .sort(
-      (a, b) =>
-        Date.parse(a.publishedAt ?? a.collectedAt) - Date.parse(b.publishedAt ?? b.collectedAt),
-    )[0]!;
+  if (moving.some((id) => !original.observationIds.includes(id)))
+    throw unprocessable("invalid_split", "Ces observations n'appartiennent pas au signal.", { observationIds: moving });
+  if (moving.length >= original.observationIds.length)
+    throw unprocessable("invalid_split", "La défusion doit laisser au moins une observation dans le signal d'origine.");
+
+  const [allObservations, grid, allSignals, company] = await Promise.all([
+    ctx.repo.observations.list(),
+    activeGrid(ctx.repo),
+    ctx.repo.signals.list(),
+    original.companyId ? ctx.repo.companies.get(original.companyId) : Promise.resolve(undefined),
+  ]);
+  const obsById = new Map(allObservations.map((observation) => [observation.id, observation]));
+  const selected = moving.map((id) => obsById.get(id));
+  if (selected.some((observation) => !observation || observation.signalId !== original.id))
+    throw conflict("signal_changed", "Les observations ont changé : rechargez le signal.");
+  const sorted = [...selected] as ObservationRecord[];
+  sorted.sort((a, b) =>
+    Date.parse(a.publishedAt ?? a.collectedAt) - Date.parse(b.publishedAt ?? b.collectedAt),
+  );
+  const first = sorted[0]!;
   const at = ctx.now.toISOString();
   const createdId = ctx.repo.nextId("sig");
-  for (const o of observations)
-    if (o) await ctx.repo.observations.update({ ...o, signalId: createdId });
-  const grid = await activeGrid(ctx.repo);
-  const remaining: SignalRecord = {
+  // Summary preparation (possibly billable) happens before the first business mutation.
+  const summaryInput = { title: first.title, text: first.excerpt };
+  const summary = await improveSummary(ctx, summaryInput, adapters().textModel.summarize(summaryInput));
+
+  const remainingIds = original.observationIds.filter((id) => !moving.includes(id));
+  const remainingObs = remainingIds.map((id) => obsById.get(id));
+  if (remainingObs.some((observation) => !observation))
+    throw conflict("signal_changed", "Une observation a disparu : rechargez le signal.");
+  const newObs = sorted.map((observation) => ({ ...observation, signalId: createdId }));
+  const source: SignalRecord = {
     ...original,
-    observationIds: original.observationIds.filter((id) => !moving.includes(id)),
+    observationIds: remainingIds,
     review: original.review?.kind === "fusion_incertaine" ? null : original.review,
     updatedAt: at,
   };
-  const summaryInput = { title: first.title, text: first.excerpt };
   const draft: SignalRecord = {
     ...original,
     id: createdId,
     title: first.title,
-    summary: await improveSummary(ctx, summaryInput, adapters().textModel.summarize(summaryInput)),
+    summary,
     status: "nouveau",
     statusReason: null,
     observationIds: moving,
@@ -382,22 +433,43 @@ export const splitSignal: Handler = async (ctx) => {
     createdAt: at,
     updatedAt: at,
   };
-  await ctx.repo.signals.insert(draft);
-  const all = await ctx.repo.signals.list();
-  const kept = await rebuild(ctx, remaining, grid, all);
-  const created = await rebuild(ctx, draft, grid, all);
-  await audit(
-    ctx,
-    "signal.split",
-    "signal",
-    original.id,
-    `Défusion : ${moving.length} observation(s) détachée(s) vers ${created.id}`,
-  );
+  const withoutNew = allSignals.filter((signal) => signal.id !== original.id);
+  const kept = rebuildSignal({
+    signal: source,
+    observations: remainingObs as ObservationRecord[],
+    company: company ?? null,
+    grid,
+    others: allSignals,
+    now: ctx.now,
+  }).signal;
+  const created = rebuildSignal({
+    signal: draft,
+    observations: newObs,
+    company: company ?? null,
+    grid,
+    others: [...withoutNew, kept],
+    now: ctx.now,
+  }).signal;
+  const changes: SignalMutation[] = [
+    ...sorted.map((observation): SignalMutation => ({
+      collection: "observations", id: observation.id, before: observation,
+      after: { ...observation, signalId: createdId },
+    })),
+    { collection: "signals", id: original.id, before: original, after: kept },
+    { collection: "signals", id: createdId, before: null, after: created },
+  ];
+  const auditId = ctx.repo.nextId("aud");
+  changes.push({
+    collection: "audit", id: auditId, before: null,
+    after: {
+      id: auditId, at, actor: ctx.user.name,
+      action: "signal.split", entity: "signal", entityId: original.id,
+      details: `Défusion : ${moving.length} observation(s) détachée(s) vers ${created.id}`,
+    },
+  });
+  await ctx.repo.signalMutations.commit(changes);
   const view = await loadSignalView(ctx.repo, ctx.now);
-  return json(
-    { original: toSignal(kept, view), created: toSignal(created, view) },
-    { status: 201 },
-  );
+  return json({ original: toSignal(kept, view), created: toSignal(created, view) }, { status: 201 });
 };
 
 /** Recalcul avec la grille active ; les signaux traités ou rejetés gardent leur grille d'origine. */
