@@ -1,5 +1,6 @@
 /** Real DbRepository + PostgREST + PostgreSQL; run only via scripts/test-a3-postgres.sh. */
 import assert from "node:assert/strict";
+import { setClock } from "../../../src/server/clock";
 import { DbRepository } from "../../../src/server/store/db";
 import { paidCall } from "../../../src/server/services/usage";
 import { monthTotals } from "../../../src/server/domain/budget";
@@ -162,6 +163,28 @@ async function main(): Promise<void> {
   await repo.idempotency.uncertain(uncertainId);
   assert.deepEqual(await repo.idempotency.begin(pending), { kind: "uncertain" });
   await assert.rejects(repo.idempotency.complete(uncertainId, 201, "{}"));
+
+  // A4 characterization: two independent repositories and actual PostgREST/PostgreSQL.
+  // The clock is injected only in this test process; no production database is used.
+  const lockKey = "a4-test-expiry-overlap";
+  const secondRepo = new DbRepository();
+  const clockBase = Date.now();
+  let clockNow = clockBase;
+  setClock(() => new Date(clockNow));
+  try {
+    const firstToken = await repo.acquireLock(lockKey, 1000);
+    assert.ok(firstToken);
+    assert.equal(await secondRepo.acquireLock(lockKey, 1000), null);
+    clockNow += 1001;
+    const secondToken = await secondRepo.acquireLock(lockKey, 1000);
+    assert.ok(secondToken, "Expired lock should be reacquired in baseline");
+    await repo.releaseLock(lockKey, firstToken);
+    assert.equal(await repo.acquireLock(lockKey, 1000), null, "Stale token released new lock");
+    await secondRepo.releaseLock(lockKey, secondToken);
+    console.log(JSON.stringify({ event: "a4.db.lock_expiry.characterized", reacquiredAfterExpiry: true, staleReleasePreservedNewLock: true }));
+  } finally {
+    setClock(null);
+  }
   console.log(
     JSON.stringify({
       event: "a3.db_repository.integration_pass",
