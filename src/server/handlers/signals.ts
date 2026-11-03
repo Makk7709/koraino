@@ -290,6 +290,11 @@ export const mergeSignals: Handler = async (ctx) => {
       "La fusion de signaux possédant plusieurs articles nécessite un arbitrage éditorial.",
       { articleIds: linkedArticles.map((a) => a.id) },
     );
+  if (target.articleId && linkedArticles.length && target.articleId !== linkedArticles[0]!.id)
+    throw conflict(
+      "merge_article_conflict",
+      "Le signal cible possède un rattachement d'article incohérent : vérification requise.",
+    );
   const movedObs = others.flatMap((signal) => signal.observationIds);
   const finalObsIds = [...new Set([...target.observationIds, ...movedObs])];
   const obsById = new Map(allObservations.map((obs) => [obs.id, obs]));
@@ -349,7 +354,7 @@ export const mergeSignals: Handler = async (ctx) => {
     companyId,
     themes: target.companyId ? target.themes : [...(company?.themes ?? [])],
     observationIds: finalObsIds,
-    articleId: linkedArticles[0]?.id ?? null,
+    articleId: target.articleId ?? linkedArticles[0]?.id ?? null,
     review: target.review?.kind === "fusion_incertaine" || companyId ? null : target.review,
     matchConfidence: Math.max(
       target.matchConfidence,
