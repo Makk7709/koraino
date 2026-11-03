@@ -10,9 +10,19 @@ const fake = vi.hoisted(() => ({
   settings: [] as unknown[],
   deletions: [] as [string, unknown][][],
   deleteError: null as { message: string } | null,
+  initializeError: null as { code: string } | null,
 }));
 vi.mock("@/integrations/supabase/client.server", () => ({
   supabaseAdmin: {
+    rpc(name: string, args: { p_data: unknown }) {
+      expect(name).toBe("kora_settings_initialize");
+      return {
+        abortSignal: async (_signal: AbortSignal) => {
+          if (!fake.initializeError) fake.settings.push(args.p_data);
+          return { data: !fake.initializeError, error: fake.initializeError };
+        },
+      };
+    },
     from(table: string) {
       if (table === "app_user_connections") {
         return {
@@ -37,9 +47,8 @@ vi.mock("@/integrations/supabase/client.server", () => ({
           select: () => ({
             eq: () => ({ maybeSingle: async () => ({ data: fake.workspace, error: null }) }),
           }),
-          upsert: async (row: unknown) => {
-            fake.settings.push(row);
-            return { error: null };
+          upsert: () => {
+            throw new Error("Direct settings writes forbidden");
           },
         };
       }
@@ -67,6 +76,7 @@ beforeEach(() => {
   fake.settings = [];
   fake.deletions = [];
   fake.deleteError = null;
+  fake.initializeError = null;
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -88,6 +98,16 @@ describe("E2 — aucun utilisateur de démonstration en production", () => {
     await new DbRepository().ensureReady();
     expect(fake.records).toHaveLength(0);
     expect(fake.settings).toHaveLength(0);
+  });
+
+  it("refuse le démarrage si la RPC d'initialisation échoue, puis permet une reprise", async () => {
+    const repo = new DbRepository();
+    fake.initializeError = { code: "42501" };
+    await expect(repo.ensureReady()).rejects.toThrow("Settings initialization failed: 42501");
+    expect(fake.settings).toHaveLength(0);
+    fake.initializeError = null;
+    await repo.ensureReady();
+    expect(fake.settings).toHaveLength(1);
   });
 
   it("Vitest et le développement local gardent les 4 utilisateurs de démonstration", async () => {

@@ -21,7 +21,7 @@ Statut : correctif soumis à revue, **non homologué pour la production**.
 
 ## Banc de vérification
 
-Les tests sont dans `tests/integration/a3/recovery-characterization.sql`, `tests/integration/a3/recovery-admin.sql` et `src/test/server/a4-3-http-recovery.test.ts`. Le script `scripts/test-a3-postgres.sh` exécute les scénarios sur un projet Docker éphémère, après les migrations 0000 et 0002 à 0010. Les assertions SQL utilisent une transaction `BEGIN ... ROLLBACK`.
+Les tests sont dans `tests/integration/a3/recovery-characterization.sql`, `tests/integration/a3/recovery-admin.sql` et `src/test/server/a4-3-http-recovery.test.ts`. Le script `scripts/test-a3-postgres.sh` exécute les scénarios sur un projet Docker éphémère, après les migrations 0000 et 0002 à 0011. Les assertions SQL utilisent une transaction `BEGIN ... ROLLBACK`.
 
 Scénarios : rapprochement financier sans libération A4, article terminé avec HTTP pendant, refus des rôles non privilégiés, absence de preuve, refus des appels incertains, rejeu exact et conflit de preuve, tombstone de l'ancienne clé, nouvelle intention explicitement autorisée après clôture prouvée, restauration HTTP sans nouveau fournisseur.
 
@@ -30,7 +30,7 @@ Les résultats GitHub Actions et les résultats locaux doivent être conservés 
 ## Limites / travaux restants avant tout déploiement
 
 - **A4.3.3** : procédure d'instruction humaine pour `in_flight`, `uncertain` et historique non lié, avec preuve du devenir du résultat fournisseur. Ne pas transformer une simple confirmation `not_billed` en permission de réexécuter.
-- **Sécurité base** : `service_role` conserve historiquement des droits d'écriture génériques sur `kora_records` (migration 0000). La restriction d'appel des fonctions DBA **ne signifie donc pas** que ce rôle ne pourrait jamais altérer les lignes financières/HTTP par une autre requête SQL. Durcir les protections des collections A3/A3.1 avant homologation réglementée.
+- **Sécurité base** : le [durcissement A4.3.3](2026-11-03-a4-3-3-durcissement-postgresql.md) ajoute la migration 0011, des protections contre les écritures directes et une validation SQL des transitions. La portée et les limites face à une clé de service compromise y sont précisées. Vérifier la CI du SHA exact et les droits réels sur copie avant homologation.
 - Le référentiel de pièces justificatives, la revue à deux personnes, l'identité réelle derrière le compte DBA, le rapprochement avec le fournisseur, et les tests de concurrence DBA sous charge ne sont pas encore homologués.
 - Vérifier les migrations et les données anciennes sur copie, prendre sauvegarde et établir une procédure de retour arrière **avant toute opération réelle**.
 - Aucun test ou déploiement de la base de production n'est couvert par ce jalon.

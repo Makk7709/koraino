@@ -413,9 +413,10 @@ export class DbRepository implements Repository {
         notifiedAlerts: [],
       };
       const s = await client
-        .from("kora_settings")
-        .upsert({ workspace_id: WORKSPACE, data: settings as never });
-      if (s.error) throw new Error(s.error.message);
+        .rpc("kora_settings_initialize" as never, { p_data: settings } as never)
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (s.error || s.data !== true)
+        throw new Error("Settings initialization failed: " + (s.error?.code ?? "invalid_response"));
     })().catch((e) => {
       this.ready = null;
       throw e;

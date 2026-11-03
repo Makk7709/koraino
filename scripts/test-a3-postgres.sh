@@ -44,12 +44,20 @@ trap cleanup EXIT
 echo "=== Disposable A3 project: $PROJECT ==="
 compose up --detach --wait db
 sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$DB"; }
+sql_migration() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$DB" --single-transaction -f -; }
 for m in 0000_kora_records 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations 0010_kora_article_recovery; do
   f="$ROOT/drizzle/migrations/$m.sql"
   test -s "$f"
   echo "Applying $m (disposable DB ONLY)"
-  sql < "$f" >/dev/null
+  sql_migration < "$f" >/dev/null
 done
+echo "=== A4.3.3 pre-fix permission characterization (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/permissions-characterization.sql"
+echo "Applying 0011_kora_postgres_hardening (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0011_kora_postgres_hardening.sql" >/dev/null
+sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
+echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
 sql <<'SQL' >/dev/null
 INSERT INTO public.kora_settings(workspace_id,data)
 VALUES ('kora',jsonb_build_object(

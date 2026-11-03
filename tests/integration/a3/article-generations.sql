@@ -25,7 +25,20 @@ BEGIN
   IF r->>'ok' <> 'false' OR EXISTS (SELECT 1 FROM public.kora_article_generations)
      OR EXISTS (SELECT 1 FROM public.kora_records WHERE id = 'a4-sql-attempt')
   THEN RAISE EXCEPTION 'budget denial created a claim'; END IF;
-  UPDATE public.kora_settings SET data = data || '{"paidCallsSuspended":false,"suspendedMonth":null}';
+END $$;
+RESET ROLE;
+-- Reset only the denied-budget fixture as DBA; the app must no longer reset suspension.
+UPDATE public.kora_settings SET data = data || '{"paidCallsSuspended":false,"suspendedMonth":null}';
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  s jsonb := '{"id":"a4-sql-signal","status":"nouveau","articleId":null}';
+  a jsonb := '{"id":"a4-sql-article","signalId":"a4-sql-signal","origin":"kora","status":"brouillon","currentVersion":1,"versions":[{}],"updatedAt":"2026-11-03T00:00:00Z"}';
+  attempt jsonb := '{"id":"a4-sql-attempt","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"SQL test","createdAt":"2026-11-03T00:00:00Z"}';
+  token uuid := '10000000-0000-4000-8000-000000000001';
+  other_token uuid := '10000000-0000-4000-8000-000000000002';
+  r jsonb;
+BEGIN
   r := public.kora_article_generation_reserve(token,s,attempt);
   IF r->>'ok' <> 'true' THEN RAISE EXCEPTION 'claim failed: %',r; END IF;
   r := public.kora_article_generation_reserve(other_token,s,attempt || '{"id":"a4-other-attempt"}');

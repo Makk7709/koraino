@@ -87,6 +87,72 @@ async function main(): Promise<void> {
     repo.paidAttempts.overrun(id, [{ ...attempt.estimatedUsageLines![0]!, costEur: 0.04 }]),
   );
 
+  // A4.3.3: exercise the real HTTP data API with its BYPASSRLS service JWT.
+  // Each request must return PostgreSQL insufficient_privilege, without any mutation.
+  const beforeProtection = {
+    attempt: await repo.paidAttempts.get(id),
+    settings: await repo.getSettings(),
+    usage: await repo.usage.list(),
+  };
+  const httpId = "43".repeat(32);
+  await repo.idempotency.begin({
+    id: httpId,
+    workspaceId: "kora",
+    actorId: "a433-http-test",
+    route: "POST /articles",
+    fingerprint: "34".repeat(32),
+  });
+  const expectDenied = async (
+    label: string,
+    request: PromiseLike<{ error: { code?: string } | null }>,
+  ): Promise<void> => {
+    const response = await request;
+    assert.equal(response.error?.code, "42501", label);
+  };
+  await expectDenied(
+    "direct paid attempt update",
+    supabaseAdmin
+      .from("kora_records")
+      .update({ data: { status: "reserved" } })
+      .eq("collection", "paid_attempts")
+      .eq("id", id)
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct HTTP deletion",
+    supabaseAdmin
+      .from("kora_records")
+      .delete()
+      .eq("collection", "http_idempotency")
+      .eq("id", httpId)
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct usage deletion",
+    supabaseAdmin
+      .from("kora_records")
+      .delete()
+      .eq("collection", "usage")
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct budget update",
+    supabaseAdmin
+      .from("kora_settings")
+      .update({ data: { reservedEur: 0 } })
+      .eq("workspace_id", "kora")
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  const nullFinish = await supabaseAdmin
+    .rpc("kora_paid_finish" as never, { p_id: id, p_lines: [], p_status: null } as never)
+    .abortSignal(AbortSignal.timeout(10_000));
+  assert.equal(nullFinish.error?.code, "P0001", "NULL settlement rejected through HTTP");
+  assert.deepEqual(await repo.paidAttempts.get(id), beforeProtection.attempt);
+  assert.deepEqual(await repo.getSettings(), beforeProtection.settings);
+  assert.deepEqual(await repo.usage.list(), beforeProtection.usage);
+  assert.equal((await repo.idempotency.get(httpId))?.state, "pending");
+  console.log(JSON.stringify({ event: "a433.http.protected_writes.pass", statePreserved: true }));
+
   // SQL must reject fractional-cent reservations even from a direct service_role RPC.
   const fractional = await supabaseAdmin.rpc(
     "kora_paid_reserve" as never,
