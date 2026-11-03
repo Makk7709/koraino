@@ -76,6 +76,8 @@ echo "=== A4.2 SQL atomic merge/split rollback checks (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/signal-mutations.sql"
 echo "=== A4.3.1 recovery characterization (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/recovery-characterization.sql"
+echo "=== A4.3.2 DBA recovery SQL tests (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/recovery-admin.sql"
 compose up --detach api
 endpoint="$(compose port api 3000)"
 port="$(printf '%s\n' "$endpoint" | sed -E 's/^.*:([0-9]+)$/\1/')"
