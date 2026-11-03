@@ -66,7 +66,7 @@ sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
 echo "=== A4.3 legacy-data migration rehearsal (SECOND disposable PostgreSQL DB ONLY) ==="
 HIST_DB="kora_a43_legacy_ci"
 compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c "CREATE DATABASE $HIST_DB" >/dev/null
-hist_sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB"; }
+hist_sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB" "$@"; }
 hist_migration() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB" --single-transaction -f -; }
 hist_sql <<'SQL' >/dev/null
 GRANT USAGE ON SCHEMA public TO service_role, anon, authenticated;
@@ -77,7 +77,7 @@ for m in 0000_kora_records 0001_app_user_connections 0002_kora_paid_attempts 000
 done
 hist_sql < "$ROOT/tests/integration/a3/historical-fixture-seed.sql" >/dev/null
 hist_fingerprint() {
-  hist_sql <<'SQL' | tail -n 1
+  hist_sql -At <<'SQL'
 SELECT md5(
   COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.collection,r.id)::text
     FROM public.kora_records r),'[]')
