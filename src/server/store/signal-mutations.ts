@@ -16,7 +16,12 @@ export type SignalMutation =
       before: ObservationRecord | null;
       after: ObservationRecord | null;
     }
-  | { collection: "articles"; id: string; before: ArticleRecord | null; after: ArticleRecord | null }
+  | {
+      collection: "articles";
+      id: string;
+      before: ArticleRecord | null;
+      after: ArticleRecord | null;
+    }
   | {
       collection: "linkedin";
       id: string;
