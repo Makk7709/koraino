@@ -13,9 +13,8 @@ function cell(value: unknown): string {
 
     // On protège la chaîne finale.
     s = sanitizeString(s);
-    
   } else if (typeof value === "object") {
-    s = JSON.stringify(value);
+    s = sanitizeString(JSON.stringify(value));
   } else {
     s = String(value);
   }
@@ -31,7 +30,7 @@ export function toCsv(columns: string[], rows: Record<string, unknown>[]): strin
 
 function sanitizeString(value: string): string {
   const trimmed = value.trimStart();
-  if (/^[=+\-@\t\r]/.test(trimmed)) {
+  if (/^[=+\-@]/.test(trimmed)) {
     return `'${value}`;
   }
 

@@ -3,13 +3,13 @@ import { describe, it, expect } from "vitest";
 import { toCsv } from "../../../server/domain/csv";
 
 describe("toCsv - sécurité des formules", () => {
-    it.each([["=1+1"], ["+1"], ["-1"], ["@SUM(1)"]])(
-        "neutralise %s, seul ou dans un tableau",
-        (input) => {
-            expect(toCsv(["v"], [{ v: input }])).toBe(`v\r\n'${input}\r\n`);
-            expect(toCsv(["v"], [{ v: [input] }])).toBe(`v\r\n'${input}\r\n`);
-        },
-        );
+  it.each([["=1+1"], ["+1"], ["-1"], ["@SUM(1)"]])(
+    "neutralise %s, seul ou dans un tableau",
+    (input) => {
+      expect(toCsv(["v"], [{ v: input }])).toBe(`v\r\n'${input}\r\n`);
+      expect(toCsv(["v"], [{ v: [input] }])).toBe(`v\r\n'${input}\r\n`);
+    },
+  );
 
   it("neutralise les formules contenues dans un tableau de chaînes", () => {
     const rows = [
@@ -53,7 +53,7 @@ describe("toCsv - sécurité des formules", () => {
 
   it("neutralise un tableau dont le premier élément est un nombre négatif", () => {
     const result = toCsv(["valeurs"], [{ valeurs: [-5, 2] }]);
-  
+
     expect(result).toBe("valeurs\r\n'-5 | 2\r\n");
   });
   it("neutralise une formule retournée par toJSON() d'un objet", () => {
@@ -62,12 +62,11 @@ describe("toCsv - sécurité des formules", () => {
         return "=1+1";
       },
     };
-  
-    const result = toCsv(["informations"], [{ informations: value }]);
-  
-    expect(result).toBe("informations\r\n=1+1\r\n");
-  });
 
+    const result = toCsv(["informations"], [{ informations: value }]);
+
+    expect(result).toBe('informations\r\n"""=1+1"""\r\n');
+  });
 });
 
 describe("toCsv - conservation des données", () => {
