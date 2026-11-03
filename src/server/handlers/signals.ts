@@ -311,7 +311,9 @@ export const mergeSignals: Handler = async (ctx) => {
   for (const article of allArticles) {
     if (article.signalId && removed.has(article.signalId)) {
       changes.push({
-        collection: "articles", id: article.id, before: article,
+        collection: "articles",
+        id: article.id,
+        before: article,
         after: { ...article, signalId: target.id },
       });
     }
@@ -319,7 +321,9 @@ export const mergeSignals: Handler = async (ctx) => {
   for (const post of allPosts) {
     if (post.signalId && removed.has(post.signalId)) {
       changes.push({
-        collection: "linkedin", id: post.id, before: post,
+        collection: "linkedin",
+        id: post.id,
+        before: post,
         after: { ...post, signalId: target.id },
       });
     }
@@ -334,7 +338,9 @@ export const mergeSignals: Handler = async (ctx) => {
       return [{ ...item, signalId: target.id }];
     });
     changes.push({
-      collection: "newsletters", id: edition.id, before: edition,
+      collection: "newsletters",
+      id: edition.id,
+      before: edition,
       after: { ...edition, items: renumber(items) },
     });
   }
@@ -345,7 +351,10 @@ export const mergeSignals: Handler = async (ctx) => {
     observationIds: finalObsIds,
     articleId: linkedArticles[0]?.id ?? null,
     review: target.review?.kind === "fusion_incertaine" || companyId ? null : target.review,
-    matchConfidence: Math.max(target.matchConfidence, ...others.map((signal) => signal.matchConfidence)),
+    matchConfidence: Math.max(
+      target.matchConfidence,
+      ...others.map((signal) => signal.matchConfidence),
+    ),
     tags: [...new Set([...target.tags, ...others.flatMap((signal) => signal.tags)])].slice(0, 6),
   };
   const rebuilt = rebuildSignal({
@@ -359,21 +368,21 @@ export const mergeSignals: Handler = async (ctx) => {
   changes.push({ collection: "signals", id: target.id, before: target, after: rebuilt.signal });
   for (const source of others)
     changes.push({ collection: "signals", id: source.id, before: source, after: null });
+  const auditId = ctx.repo.nextId("aud");
   changes.push({
     collection: "audit",
-    id: ctx.repo.nextId("aud"),
+    id: auditId,
     before: null,
     after: {
-      id: "", at: "", actor: "", action: "", entity: "signal", entityId: "", details: "",
+      id: auditId,
+      at: ctx.now.toISOString(),
+      actor: ctx.user.name,
+      action: "signal.merge",
+      entity: "signal",
+      entityId: target.id,
+      details: `Fusion de ${ids.join(", ")} dans ${target.id} (${movedObs.length} observation(s))`,
     },
   });
-  const last = changes[changes.length - 1]!;
-  if (last.collection !== "audit" || !last.after) throw new Error("Missing transaction audit");
-  last.after = {
-    id: last.id, at: ctx.now.toISOString(), actor: ctx.user.name,
-    action: "signal.merge", entity: "signal", entityId: target.id,
-    details: `Fusion de ${ids.join(", ")} dans ${target.id} (${movedObs.length} observation(s))`,
-  };
   await ctx.repo.signalMutations.commit(changes);
   return json(await signalDto(ctx, target.id));
 };
@@ -384,9 +393,14 @@ export const splitSignal: Handler = async (ctx) => {
   const original = await getSignalOr404(ctx, ctx.params["id"]!);
   const moving = [...new Set(observationIds)];
   if (moving.some((id) => !original.observationIds.includes(id)))
-    throw unprocessable("invalid_split", "Ces observations n'appartiennent pas au signal.", { observationIds: moving });
+    throw unprocessable("invalid_split", "Ces observations n'appartiennent pas au signal.", {
+      observationIds: moving,
+    });
   if (moving.length >= original.observationIds.length)
-    throw unprocessable("invalid_split", "La défusion doit laisser au moins une observation dans le signal d'origine.");
+    throw unprocessable(
+      "invalid_split",
+      "La défusion doit laisser au moins une observation dans le signal d'origine.",
+    );
 
   const [allObservations, grid, allSignals, company] = await Promise.all([
     ctx.repo.observations.list(),
@@ -399,15 +413,20 @@ export const splitSignal: Handler = async (ctx) => {
   if (selected.some((observation) => !observation || observation.signalId !== original.id))
     throw conflict("signal_changed", "Les observations ont changé : rechargez le signal.");
   const sorted = [...selected] as ObservationRecord[];
-  sorted.sort((a, b) =>
-    Date.parse(a.publishedAt ?? a.collectedAt) - Date.parse(b.publishedAt ?? b.collectedAt),
+  sorted.sort(
+    (a, b) =>
+      Date.parse(a.publishedAt ?? a.collectedAt) - Date.parse(b.publishedAt ?? b.collectedAt),
   );
   const first = sorted[0]!;
   const at = ctx.now.toISOString();
   const createdId = ctx.repo.nextId("sig");
   // Summary preparation (possibly billable) happens before the first business mutation.
   const summaryInput = { title: first.title, text: first.excerpt };
-  const summary = await improveSummary(ctx, summaryInput, adapters().textModel.summarize(summaryInput));
+  const summary = await improveSummary(
+    ctx,
+    summaryInput,
+    adapters().textModel.summarize(summaryInput),
+  );
 
   const remainingIds = original.observationIds.filter((id) => !moving.includes(id));
   const remainingObs = remainingIds.map((id) => obsById.get(id));
@@ -452,7 +471,9 @@ export const splitSignal: Handler = async (ctx) => {
   }).signal;
   const changes: SignalMutation[] = [
     ...sorted.map((observation): SignalMutation => ({
-      collection: "observations", id: observation.id, before: observation,
+      collection: "observations",
+      id: observation.id,
+      before: observation,
       after: { ...observation, signalId: createdId },
     })),
     { collection: "signals", id: original.id, before: original, after: kept },
@@ -460,16 +481,25 @@ export const splitSignal: Handler = async (ctx) => {
   ];
   const auditId = ctx.repo.nextId("aud");
   changes.push({
-    collection: "audit", id: auditId, before: null,
+    collection: "audit",
+    id: auditId,
+    before: null,
     after: {
-      id: auditId, at, actor: ctx.user.name,
-      action: "signal.split", entity: "signal", entityId: original.id,
+      id: auditId,
+      at,
+      actor: ctx.user.name,
+      action: "signal.split",
+      entity: "signal",
+      entityId: original.id,
       details: `Défusion : ${moving.length} observation(s) détachée(s) vers ${created.id}`,
     },
   });
   await ctx.repo.signalMutations.commit(changes);
   const view = await loadSignalView(ctx.repo, ctx.now);
-  return json({ original: toSignal(kept, view), created: toSignal(created, view) }, { status: 201 });
+  return json(
+    { original: toSignal(kept, view), created: toSignal(created, view) },
+    { status: 201 },
+  );
 };
 
 /** Recalcul avec la grille active ; les signaux traités ou rejetés gardent leur grille d'origine. */
