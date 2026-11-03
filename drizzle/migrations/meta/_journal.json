@@ -71,6 +71,13 @@
       "when": 1793980800001,
       "tag": "0009_kora_signal_mutations",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793980800002,
+      "tag": "0010_kora_article_recovery",
+      "breakpoints": true
     }
   ]
 }
