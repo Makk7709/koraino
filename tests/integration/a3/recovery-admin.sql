@@ -34,6 +34,8 @@ BEGIN
     v_http
   );
   IF v_result->>'ok' <> 'true' THEN RAISE EXCEPTION 'A43 safe reservation'; END IF;
+  -- HTTP may be marked uncertain even though durable A3/A4 both prove "not sent".
+  PERFORM public.kora_http_idempotency_uncertain(v_http);
 
   v_result := public.kora_http_idempotency_begin(v_done_http,'kora','a43-actor','POST /articles',repeat('2',64));
   IF v_result->>'kind' <> 'claimed' THEN RAISE EXCEPTION 'A43 done HTTP claim'; END IF;
