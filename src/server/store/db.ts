@@ -16,6 +16,7 @@ import type { UsageEntry } from "./records";
 import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
 import type { Collection, Repository } from "./repository";
+import type { SignalMutationsRepository } from "./signal-mutations";
 import type { Settings } from "./records";
 import { buildSeed } from "./seed";
 import { WORDPRESS_SETTINGS, wordpressSettingsOf } from "./settings";
@@ -131,6 +132,16 @@ export class DbRepository implements Repository {
   examples = new DbCollection<any>("examples");
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
+  signalMutations: SignalMutationsRepository = {
+    commit: async (changes) => {
+      if (!changes.length || changes.length > 2000) throw new Error("Invalid signal transaction size");
+      const { data, error } = await (await db())
+        .rpc("kora_signal_mutations_commit" as never, { p_changes: changes } as never)
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (error || data !== true)
+        throw new Error("Atomic signal mutation failed: " + (error?.code ?? "invalid_response"));
+    },
+  };
   articleGenerations: ArticleGenerationsRepository = {
     reserve: async (claim, attempt) => {
       paidAttemptSchema.parse(attempt);
