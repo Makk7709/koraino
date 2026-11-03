@@ -161,7 +161,8 @@ export class DbRepository implements Repository {
           } as never,
         )
         .abortSignal(AbortSignal.timeout(10_000));
-      if (error) throw new Error("Linked article reservation failed: " + (error.code ?? "database_error"));
+      if (error)
+        throw new Error("Linked article reservation failed: " + (error.code ?? "database_error"));
       return generationReservationSchema.parse(data);
     },
     reserve: async (claim, attempt) => {
