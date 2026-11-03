@@ -365,6 +365,14 @@ export const mergeSignals: Handler = async (ctx) => {
     others: allSignals.filter((signal) => !removed.has(signal.id)),
     now: ctx.now,
   });
+  if (isDecided(target.status)) {
+    rebuilt.signal = {
+      ...rebuilt.signal,
+      score: target.score,
+      whyInteresting: target.whyInteresting,
+      suggestedAngle: target.suggestedAngle,
+    };
+  }
   changes.push({ collection: "signals", id: target.id, before: target, after: rebuilt.signal });
   for (const source of others)
     changes.push({ collection: "signals", id: source.id, before: source, after: null });
@@ -461,12 +469,20 @@ export const splitSignal: Handler = async (ctx) => {
     others: allSignals,
     now: ctx.now,
   }).signal;
+  const stableKept = isDecided(original.status)
+    ? {
+        ...kept,
+        score: original.score,
+        whyInteresting: original.whyInteresting,
+        suggestedAngle: original.suggestedAngle,
+      }
+    : kept;
   const created = rebuildSignal({
     signal: draft,
     observations: newObs,
     company: company ?? null,
     grid,
-    others: [...withoutNew, kept],
+    others: [...withoutNew, stableKept],
     now: ctx.now,
   }).signal;
   const changes: SignalMutation[] = [
@@ -476,7 +492,7 @@ export const splitSignal: Handler = async (ctx) => {
       before: observation,
       after: { ...observation, signalId: createdId },
     })),
-    { collection: "signals", id: original.id, before: original, after: kept },
+    { collection: "signals", id: original.id, before: original, after: stableKept },
     { collection: "signals", id: createdId, before: null, after: created },
   ];
   const auditId = ctx.repo.nextId("aud");
@@ -497,7 +513,7 @@ export const splitSignal: Handler = async (ctx) => {
   await ctx.repo.signalMutations.commit(changes);
   const view = await loadSignalView(ctx.repo, ctx.now);
   return json(
-    { original: toSignal(kept, view), created: toSignal(created, view) },
+    { original: toSignal(stableKept, view), created: toSignal(created, view) },
     { status: 201 },
   );
 };
