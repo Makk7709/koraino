@@ -1,3 +1,4 @@
+import type { ArticleGenerationsRepository } from "./article-generations";
 import type { PaidAttemptsRepository } from "./paid-attempts";
 import type { IdempotencyRepository } from "../services/http-idempotency";
 import type { WordPressSettings } from "@/lib/api/types";
@@ -55,6 +56,7 @@ export interface Repository {
   ruleProposals: Collection<RuleProposalRecord>;
   usage: Collection<UsageEntry>;
   paidAttempts: PaidAttemptsRepository;
+  articleGenerations: ArticleGenerationsRepository;
   idempotency: IdempotencyRepository;
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;
@@ -77,8 +79,9 @@ export interface Repository {
   /**
    * Verrou exclusif à expiration (la base n'offre pas de transaction côté application).
    * Renvoie un jeton de détention, ou `null` si un autre détenteur non expiré le possède.
-   * L'expiration libère le verrou d'un détenteur interrompu : `ttlMs` doit couvrir
-   * toute la durée de l'opération protégée.
+   * L'expiration autorise un successeur sans arrêter l'ancien détenteur. Ce verrou seul
+   * ne protège donc pas les écritures après le TTL : utiliser une transaction et/ou
+   * une propriété durable pour les opérations qui peuvent dépasser cette durée.
    */
   acquireLock(key: string, ttlMs: number): Promise<string | null>;
   /**

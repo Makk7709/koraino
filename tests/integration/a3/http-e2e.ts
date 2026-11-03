@@ -268,15 +268,19 @@ try {
 
   // A4: process dies while the instrumented provider is still processing.
   let reportProviderStart!: () => void;
-  const providerStarted = new Promise<void>((resolve) => { reportProviderStart = resolve; });
-  const heldProvider = await listen(createServer((req, res) => {
-    assert.equal(req.method, "POST");
-    invocations += 1;
-    req.resume();
-    reportProviderStart();
-    // Deliberately retain the response until the KORA process is killed.
-    res.on("error", () => {});
-  }));
+  const providerStarted = new Promise<void>((resolve) => {
+    reportProviderStart = resolve;
+  });
+  const heldProvider = await listen(
+    createServer((req, res) => {
+      assert.equal(req.method, "POST");
+      invocations += 1;
+      req.resume();
+      reportProviderStart();
+      // Deliberately retain the response until the KORA process is killed.
+      res.on("error", () => {});
+    }),
+  );
   await stop();
   await start(heldProvider);
   const crashKey = "a4-e2e-crash-during-call-001";
@@ -286,7 +290,9 @@ try {
   );
   await Promise.race([
     providerStarted,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Provider not reached")), 4000)),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Provider not reached")), 4000),
+    ),
   ]);
   const beforeCrash = await snapshot(crashKey);
   assert.equal(beforeCrash.operation?.state, "pending");
@@ -304,69 +310,100 @@ try {
   const afterRetry = await snapshot(crashKey);
   assert.equal(afterRetry.operation?.state, "pending");
   assert.equal(afterRetry.settings.reservedEur, beforeCrash.settings.reservedEur);
-  console.log(JSON.stringify({
-    event: "a4.e2e.crash_during_call.characterized",
-    providerCalls: 1,
-    sameKeyRetryStatus: retryAfterCrash.status,
-    operationState: afterRetry.operation?.state,
-    reservationRetained: true,
-  }));
+  // A new HTTP key cannot bypass the durable signal claim after process death and TTL expiry.
+  const crashedLock = await supabaseAdmin
+    .from("kora_records")
+    .delete()
+    .eq("collection", "locks")
+    .eq("id", "article-create:" + signals[2]!.id);
+  assert.equal(crashedLock.error, null);
+  const differentKeyAfterCrash = await post(upstream, signals[2]!.id, "a4-e2e-crash-different-key");
+  assert.equal(differentKeyAfterCrash.status, 409);
+  assert.equal((await differentKeyAfterCrash.json()).error.code, "generation_unresolved");
+  assert.equal(invocations, 3);
+  assert.equal((await repo.getSettings()).reservedEur, beforeCrash.settings.reservedEur);
+  console.log(
+    JSON.stringify({
+      event: "a4.e2e.crash_during_call.pass",
+      providerCalls: 1,
+      sameKeyRetryStatus: retryAfterCrash.status,
+      differentKeyRetryStatus: differentKeyAfterCrash.status,
+      operationState: afterRetry.operation?.state,
+      reservationRetained: true,
+    }),
+  );
 
-  // Characterize two different HTTP keys for one signal after simulated lock expiry.
+  // Regression: two different HTTP keys after expiry must produce only one paid result.
   const raceSignal = { ...signals[0]!, id: "a4-signal-expiry-race" };
   await repo.signals.insert(raceSignal);
   let calls = 0;
   let startedFirst!: () => void;
-  let startedSecond!: () => void;
-  const firstStarted = new Promise<void>((resolve) => { startedFirst = resolve; });
-  const secondStarted = new Promise<void>((resolve) => { startedSecond = resolve; });
+  const firstStarted = new Promise<void>((resolve) => {
+    startedFirst = resolve;
+  });
   const waitingResponses: import("node:http").ServerResponse[] = [];
-  const raceProvider = await listen(createServer((req, res) => {
-    req.resume();
-    calls += 1;
-    waitingResponses.push(res);
-    if (calls === 1) startedFirst();
-    if (calls === 2) startedSecond();
-  }));
+  const raceProvider = await listen(
+    createServer((req, res) => {
+      req.resume();
+      calls += 1;
+      waitingResponses.push(res);
+      if (calls === 1) startedFirst();
+    }),
+  );
   await stop();
   await start(raceProvider);
   const firstRace = post(upstream, raceSignal.id, "a4-race-first-key-00000001");
   await Promise.race([
     firstStarted,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("First provider call timeout")), 4000)),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("First provider call timeout")), 4000),
+    ),
   ]);
   // Fixture-only forced expiry on the disposable database, while first call is held.
   const lockId = "article-create:" + raceSignal.id;
-  const lockRead = await supabaseAdmin.from("kora_records").select("data")
-    .eq("collection", "locks").eq("id", lockId).single();
+  const lockRead = await supabaseAdmin
+    .from("kora_records")
+    .select("data")
+    .eq("collection", "locks")
+    .eq("id", lockId)
+    .single();
   assert.equal(lockRead.error, null);
   assert.ok(lockRead.data);
   const lock = lockRead.data.data as { id: string; token: string; expiresAt: string };
   assert.ok(lock.token && lock.expiresAt);
-  const lockUpdate = await supabaseAdmin.from("kora_records")
+  const lockUpdate = await supabaseAdmin
+    .from("kora_records")
     .update({ data: { ...lock, expiresAt: "2000-01-01T00:00:00.000Z" } as never })
-    .eq("collection", "locks").eq("id", lockId).eq("data->>token", lock.token)
+    .eq("collection", "locks")
+    .eq("id", lockId)
+    .eq("data->>token", lock.token)
     .select("id");
   assert.equal(lockUpdate.error, null);
   assert.equal(lockUpdate.data?.length, 1);
-  const secondRace = post(upstream, raceSignal.id, "a4-race-second-key-0000002");
-  await Promise.race([
-    secondStarted,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Second provider call not observed")), 4000)),
-  ]);
-  assert.equal(calls, 2);
-  for (const response of waitingResponses) { response.writeHead(204); response.end(); }
-  const raceResponses = await Promise.all([firstRace, secondRace]);
-  const raceStatuses = raceResponses.map((response) => response.status);
-  const raceBodies = await Promise.all(raceResponses.map((response) => response.text()));
-  const raceArticles = (await repo.articles.list()).filter((article) => article.signalId === raceSignal.id);
-  console.log(JSON.stringify({
-    event: "a4.e2e.expired_lock_two_keys.characterized",
-    providerCalls: calls,
-    statuses: raceStatuses,
-    articles: raceArticles.length,
-    responseBodies: raceBodies,
-  }));
+  const secondRace = await post(upstream, raceSignal.id, "a4-race-second-key-0000002");
+  assert.equal(secondRace.status, 409);
+  assert.equal((await secondRace.json()).error.code, "generation_unresolved");
+  assert.equal(calls, 1);
+  for (const response of waitingResponses) {
+    response.writeHead(204);
+    response.end();
+  }
+  const firstResponse = await firstRace;
+  assert.equal(firstResponse.status, 201, await firstResponse.text());
+  const raceArticles = (await repo.articles.list()).filter(
+    (article) => article.signalId === raceSignal.id,
+  );
+  assert.equal(raceArticles.length, 1);
+  assert.equal((await repo.signals.get(raceSignal.id))?.articleId, raceArticles[0]!.id);
+  assert.equal(calls, 1);
+  console.log(
+    JSON.stringify({
+      event: "a4.e2e.expired_lock_two_keys.pass",
+      providerCalls: calls,
+      statuses: [firstResponse.status, secondRace.status],
+      articles: raceArticles.length,
+    }),
+  );
 } catch (error: unknown) {
   console.error(error);
   throw error;

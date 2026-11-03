@@ -115,72 +115,80 @@ async function generateArticle(
     ctx.repo.rules.list(),
   ]);
   const ids = new Set(signal.observationIds);
-  const dossier = await paidCall(
-    ctx,
-    {
-      kind: "generation_article",
-      estimate: estimatedTextAiCost(COSTS.article),
-      units: 1,
-      label: `Dossier et brouillon : ${signal.title}`,
-    },
-    async () => {
-      const dossierInput = {
-        signal,
-        company: company ?? null,
-        observations: observations.filter((o) => ids.has(o.id)),
-        angle: input.angle ?? null,
-        rules: rules.filter((r) => r.active),
-      };
-      const base = adapters().textModel.generateDossier(dossierInput);
-      return (await adapters().ai?.enhanceDossier(dossierInput, base)) ?? base;
-    },
-  );
-  const id = ctx.repo.nextId("art");
-  const at = ctx.now.toISOString();
-  const v1: ArticleVersion = {
-    n: 1,
-    ...dossier.draft,
-    createdAt: at,
-    createdBy: KORA_AUTHOR,
-    note: "Brouillon généré par KORA à partir du dossier",
-  };
-  const rec: ArticleRecord = {
-    id,
-    signalId: signal.id,
-    companyId: signal.companyId,
-    origin: "kora",
-    author: null,
-    status: "brouillon",
-    currentVersion: 1,
-    title: v1.title,
-    excerpt: v1.excerpt,
-    angles: dossier.angles,
-    plan: dossier.plan,
-    factChecks: dossier.factChecks.map((f, i) => ({ ...f, id: `fc_${id}_${i + 1}` })),
-    approvals: [],
-    wordpress: { remoteId: null, status: "aucun", lastSyncAt: null },
-    createdAt: at,
-    updatedAt: at,
-    versions: [v1],
-    publishedAt: null,
-    createdBy: ctx.user.name,
-  };
-  await ctx.repo.articles.insert(rec);
-  await ctx.repo.signals.update({
-    ...signal,
-    articleId: id,
-    status: signal.status === "traite" ? signal.status : "en_revue",
-    updatedAt: at,
-  });
-  const contradictions = unresolvedContradictions(rec.factChecks).length;
-  await audit(
-    ctx,
-    "article.create",
-    "article",
-    id,
-    `Dossier factuel et brouillon v1 générés depuis le signal ${signal.id}${contradictions ? ` — ${contradictions} contradiction(s) à arbitrer` : ""}`,
-  );
-  return detail(ctx, rec, 201);
+  const token = crypto.randomUUID();
+  try {
+    const dossier = await paidCall(
+      ctx,
+      {
+        articleGeneration: { token, signal },
+        kind: "generation_article",
+        estimate: estimatedTextAiCost(COSTS.article),
+        units: 1,
+        label: `Dossier et brouillon : ${signal.title}`,
+      },
+      async () => {
+        const dossierInput = {
+          signal,
+          company: company ?? null,
+          observations: observations.filter((o) => ids.has(o.id)),
+          angle: input.angle ?? null,
+          rules: rules.filter((r) => r.active),
+        };
+        const base = adapters().textModel.generateDossier(dossierInput);
+        return (await adapters().ai?.enhanceDossier(dossierInput, base)) ?? base;
+      },
+    );
+    const id = ctx.repo.nextId("art");
+    const at = ctx.now.toISOString();
+    const v1: ArticleVersion = {
+      n: 1,
+      ...dossier.draft,
+      createdAt: at,
+      createdBy: KORA_AUTHOR,
+      note: "Brouillon généré par KORA à partir du dossier",
+    };
+    const rec: ArticleRecord = {
+      id,
+      signalId: signal.id,
+      companyId: signal.companyId,
+      origin: "kora",
+      author: null,
+      status: "brouillon",
+      currentVersion: 1,
+      title: v1.title,
+      excerpt: v1.excerpt,
+      angles: dossier.angles,
+      plan: dossier.plan,
+      factChecks: dossier.factChecks.map((f, i) => ({ ...f, id: `fc_${id}_${i + 1}` })),
+      approvals: [],
+      wordpress: { remoteId: null, status: "aucun", lastSyncAt: null },
+      createdAt: at,
+      updatedAt: at,
+      versions: [v1],
+      publishedAt: null,
+      createdBy: ctx.user.name,
+    };
+    await ctx.repo.articleGenerations.complete(signal.id, token, rec);
+    const contradictions = unresolvedContradictions(rec.factChecks).length;
+    await audit(
+      ctx,
+      "article.create",
+      "article",
+      id,
+      `Dossier factuel et brouillon v1 générés depuis le signal ${signal.id}${contradictions ? ` — ${contradictions} contradiction(s) à arbitrer` : ""}`,
+    );
+    return detail(ctx, rec, 201);
+  } catch (error: unknown) {
+    await ctx.repo.articleGenerations.uncertain(signal.id, token).catch(() => {
+      console.error(
+        JSON.stringify({
+          event: "kora.article_generation.uncertainty_persist_failed",
+          signalId: signal.id,
+        }),
+      );
+    });
+    throw error;
+  }
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
+import type { ArticleGenerationsRepository } from "./article-generations";
+import type { ArticleRecord, SignalRecord } from "./records";
 import type { IdempotencyRecord, IdempotencyClaim } from "../services/http-idempotency";
 import {
   paidAttemptSchema,
@@ -21,29 +24,49 @@ import { buildSeed, type SeedData } from "./seed";
 class MemoryCollection<T extends { id: string }> implements Collection<T> {
   private items = new Map<string, T>();
 
-  constructor(initial: T[]) {
+  constructor(
+    initial: T[],
+    private validateWrite?: (item: T, previous: T | undefined) => void,
+  ) {
     for (const item of initial) this.items.set(item.id, structuredClone(item));
   }
 
-  async get(id: string) {
+  read(id: string) {
     const item = this.items.get(id);
     return item ? structuredClone(item) : undefined;
   }
 
-  async list() {
+  all() {
     return Array.from(this.items.values(), (item) => structuredClone(item));
   }
 
-  async insert(item: T) {
+  async get(id: string) {
+    return this.read(id);
+  }
+  async list() {
+    return this.all();
+  }
+
+  insertSync(item: T) {
     if (this.items.has(item.id)) throw new Error(`Doublon d'identifiant : ${item.id}`);
+    this.validateWrite?.(item, undefined);
+    this.items.set(item.id, structuredClone(item));
+    return item;
+  }
+
+  async insert(item: T) {
+    return this.insertSync(item);
+  }
+
+  updateSync(item: T) {
+    if (!this.items.has(item.id)) throw new Error(`Enregistrement absent : ${item.id}`);
+    this.validateWrite?.(item, this.read(item.id));
     this.items.set(item.id, structuredClone(item));
     return item;
   }
 
   async update(item: T) {
-    if (!this.items.has(item.id)) throw new Error(`Enregistrement absent : ${item.id}`);
-    this.items.set(item.id, structuredClone(item));
-    return item;
+    return this.updateSync(item);
   }
 
   async remove(id: string) {
@@ -125,33 +148,34 @@ export class MemoryRepository implements Repository {
       return r ? structuredClone(r) : undefined;
     },
   };
+  private reservePaid(attempt: PaidAttemptInput): ReserveResult {
+    paidAttemptSchema.parse(attempt);
+    if (this.attempts.has(attempt.id)) throw new Error("Duplicate paid attempt");
+    const spentEur = monthTotals(this.usage.all(), attempt.month).costEur;
+    const decision = decideReservation({
+      settings: this.settings,
+      spentEur,
+      estimateEur: attempt.estimateEur,
+      month: attempt.month,
+    });
+    if (!decision.ok) {
+      const suspending =
+        !this.settings.paidCallsSuspended || this.settings.suspendedMonth !== attempt.month;
+      this.settings.paidCallsSuspended = true;
+      this.settings.suspendedMonth = attempt.month;
+      return { ...decision, suspending };
+    }
+    this.attempts.set(attempt.id, {
+      ...attempt,
+      status: "reserved",
+      billingStatus: "not_sent",
+      usageLines: [],
+    });
+    this.settings.reservedEur += attempt.estimateEur;
+    return { ok: true as const };
+  }
   paidAttempts = {
-    reserve: async (attempt: PaidAttemptInput): Promise<ReserveResult> => {
-      paidAttemptSchema.parse(attempt);
-      if (this.attempts.has(attempt.id)) throw new Error("Duplicate paid attempt");
-      const spentEur = monthTotals(await this.usage.list(), attempt.month).costEur;
-      const decision = decideReservation({
-        settings: this.settings,
-        spentEur,
-        estimateEur: attempt.estimateEur,
-        month: attempt.month,
-      });
-      if (!decision.ok) {
-        const suspending =
-          !this.settings.paidCallsSuspended || this.settings.suspendedMonth !== attempt.month;
-        this.settings.paidCallsSuspended = true;
-        this.settings.suspendedMonth = attempt.month;
-        return { ...decision, suspending };
-      }
-      this.attempts.set(attempt.id, {
-        ...attempt,
-        status: "reserved",
-        billingStatus: "not_sent",
-        usageLines: [],
-      });
-      this.settings.reservedEur += attempt.estimateEur;
-      return { ok: true as const };
-    },
+    reserve: async (attempt: PaidAttemptInput): Promise<ReserveResult> => this.reservePaid(attempt),
     start: async (id: string): Promise<void> => {
       const a = this.attempts.get(id);
       if (!a || a.status !== "reserved") throw new Error("Paid attempt not reserved");
@@ -236,6 +260,100 @@ export class MemoryRepository implements Repository {
       return a ? structuredClone(a) : undefined;
     },
   };
+  private generations = new Map<
+    string,
+    {
+      token: string;
+      attemptId: string;
+      signal: SignalRecord;
+      state: "reserved" | "in_flight" | "uncertain" | "completed";
+      article?: ArticleRecord;
+    }
+  >();
+  articleGenerations: ArticleGenerationsRepository = {
+    reserve: async (claim, attempt) => {
+      if (
+        !claim.token ||
+        attempt.workspaceId !== this.workspaceId ||
+        attempt.kind !== "generation_article"
+      )
+        throw new Error("Invalid article generation claim");
+      const signal = this.signals.read(claim.signal.id);
+      if (!signal || !isDeepStrictEqual(signal, claim.signal) || signal.status === "rejete")
+        return { blocked: "signal_changed" };
+      if (this.articles.all().some((a) => a.signalId === signal.id))
+        return { blocked: "article_exists" };
+      if (this.generations.has(signal.id)) return { blocked: "busy" };
+      // No await between the claim check, budget reservation and claim write.
+      const result = this.reservePaid(attempt);
+      if (!result.ok) return result;
+      this.generations.set(signal.id, {
+        token: claim.token,
+        attemptId: attempt.id,
+        signal,
+        state: "reserved",
+      });
+      return result;
+    },
+    start: async (signalId, token, attemptId) => {
+      const op = this.generations.get(signalId);
+      const paid = this.attempts.get(attemptId);
+      if (
+        !op ||
+        op.token !== token ||
+        op.attemptId !== attemptId ||
+        op.state !== "reserved" ||
+        paid?.status !== "reserved"
+      )
+        throw new Error("Article generation ownership conflict");
+      this.attempts.set(attemptId, { ...paid, status: "in_flight", billingStatus: "unknown" });
+      this.generations.set(signalId, { ...op, state: "in_flight" });
+    },
+    complete: async (signalId, token, article) => {
+      const op = this.generations.get(signalId);
+      if (!op || op.token !== token) throw new Error("Article generation ownership conflict");
+      if (op.state === "completed") {
+        if (isDeepStrictEqual(op.article, article)) return;
+        throw new Error("Article generation replay conflict");
+      }
+      if (op.state !== "in_flight") throw new Error("Article generation not in flight");
+      if (
+        !article.id ||
+        article.signalId !== signalId ||
+        article.origin !== "kora" ||
+        article.status !== "brouillon" ||
+        article.currentVersion !== 1 ||
+        article.versions.length !== 1 ||
+        !article.updatedAt
+      )
+        throw new Error("Invalid generated article");
+      const paid = this.attempts.get(op.attemptId);
+      if (
+        !paid ||
+        !["settled", "unknown", "reconciled_billed", "reconciled_not_billed"].includes(paid.status)
+      )
+        throw new Error("Article generation accounting incomplete");
+      const signal = this.signals.read(signalId);
+      if (!signal || !isDeepStrictEqual(signal, op.signal))
+        throw new Error("Article generation signal changed");
+      const saved = structuredClone(article);
+      const nextSignal = {
+        ...signal,
+        articleId: article.id,
+        status: signal.status === "traite" ? ("traite" as const) : ("en_revue" as const),
+        updatedAt: article.updatedAt,
+      };
+      // All validation above; synchronous writes cannot interleave with another request.
+      this.articles.insertSync(saved);
+      this.signals.updateSync(nextSignal);
+      this.generations.set(signalId, { ...op, state: "completed", article: saved });
+    },
+    uncertain: async (signalId, token) => {
+      const op = this.generations.get(signalId);
+      if (op?.token === token && op.state !== "completed")
+        this.generations.set(signalId, { ...op, state: "uncertain" });
+    },
+  };
   private counter = 1000;
   private locks = new Map<string, { token: string; expiresAt: number }>();
 
@@ -246,9 +364,22 @@ export class MemoryRepository implements Repository {
     this.sources = new MemoryCollection(seed.sources);
     this.runs = new MemoryCollection(seed.runs);
     this.observations = new MemoryCollection(seed.observations);
-    this.signals = new MemoryCollection(seed.signals);
+    this.signals = new MemoryCollection(seed.signals, (item, previous) => {
+      if (
+        previous &&
+        this.generations.get(item.id)?.state === "completed" &&
+        previous.articleId !== item.articleId
+      )
+        throw new Error("Completed article association is immutable");
+    });
     this.grids = new MemoryCollection(seed.grids);
-    this.articles = new MemoryCollection(seed.articles);
+    this.articles = new MemoryCollection(seed.articles, (item, previous) => {
+      if (item.signalId && item.signalId !== previous?.signalId) {
+        if (!this.signals.read(item.signalId)) throw new Error("Article signal missing");
+        if (this.articles.all().some((a) => a.id !== item.id && a.signalId === item.signalId))
+          throw new Error("Article already exists for signal");
+      }
+    });
     this.publications = new MemoryCollection(seed.publications);
     this.imports = new MemoryCollection(seed.imports);
     this.linkedin = new MemoryCollection(seed.linkedin);

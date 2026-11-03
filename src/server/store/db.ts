@@ -8,6 +8,10 @@ import {
   type PaidAttemptRecord,
   type ReserveResult,
 } from "./paid-attempts";
+import {
+  generationReservationSchema,
+  type ArticleGenerationsRepository,
+} from "./article-generations";
 import type { UsageEntry } from "./records";
 import type { WordPressSettings } from "@/lib/api/types";
 import { now } from "../clock";
@@ -127,6 +131,63 @@ export class DbRepository implements Repository {
   examples = new DbCollection<any>("examples");
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
+  articleGenerations: ArticleGenerationsRepository = {
+    reserve: async (claim, attempt) => {
+      paidAttemptSchema.parse(attempt);
+      const { data, error } = await (
+        await db()
+      )
+        .rpc(
+          "kora_article_generation_reserve" as never,
+          { p_token: claim.token, p_signal: claim.signal, p_attempt: attempt } as never,
+        )
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (error) throw new Error("Article generation reservation failed: " + error.code);
+      return generationReservationSchema.parse(data);
+    },
+    start: async (signalId, token, attemptId) => {
+      const { data, error } = await (
+        await db()
+      )
+        .rpc(
+          "kora_article_generation_start" as never,
+          { p_signal_id: signalId, p_token: token, p_attempt_id: attemptId } as never,
+        )
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (error || data !== true) throw new Error("Article generation start failed");
+    },
+    complete: async (signalId, token, article) => {
+      // An exact replay is safe even when the first transaction committed but its reply was lost.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const { data, error } = await (
+            await db()
+          )
+            .rpc(
+              "kora_article_generation_complete" as never,
+              { p_signal_id: signalId, p_token: token, p_article: article } as never,
+            )
+            .abortSignal(AbortSignal.timeout(10_000));
+          if (error || data !== true) throw new Error("Article generation completion failed");
+          return;
+        } catch (error: unknown) {
+          if (attempt === 1) throw error;
+        }
+      }
+    },
+    uncertain: async (signalId, token) => {
+      const { data, error } = await (
+        await db()
+      )
+        .rpc(
+          "kora_article_generation_uncertain" as never,
+          { p_signal_id: signalId, p_token: token } as never,
+        )
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (error || data !== true)
+        throw new Error("Article generation uncertainty persistence failed");
+    },
+  };
   idempotency = {
     begin: async (input: {
       id: string;

@@ -18,8 +18,12 @@ describe("A4 - caractérisation de l'expiration des verrous", () => {
     setClock(() => new Date(instant));
     let unlockFirst!: () => void;
     let signalStarted!: () => void;
-    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
-    const pending = new Promise<void>((resolve) => { unlockFirst = resolve; });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      unlockFirst = resolve;
+    });
     const options = { ttlMs: 1000, busy: () => conflict("busy", "busy") };
     let firstFinished = false;
     let secondToken: string | null = null;

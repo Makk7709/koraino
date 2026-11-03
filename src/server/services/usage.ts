@@ -11,6 +11,7 @@ import {
 import { monthKey } from "../domain/dates";
 import type { QuotaKey, UsageKind, UsageEntry } from "../store/records";
 import { conflict } from "../http";
+import type { ArticleGenerationClaim } from "../store/article-generations";
 import type { Repository } from "../store/repository";
 import { isFourDecimalMoney, validateEstimatedUsageLines } from "../store/paid-attempts";
 import { audit, notify } from "./journal";
@@ -118,6 +119,7 @@ export async function checkAlerts(repo: Repository, now: Date): Promise<void> {
 }
 
 export interface PaidCall {
+  articleGeneration?: ArticleGenerationClaim;
   kind: UsageKind;
   /** Coût maximal estimé, réservé avant l'appel. */
   estimate: number;
@@ -150,18 +152,34 @@ export async function paidCall<T>(
   }
   // Unique attempt per invocation. Persisted before any potentially paid work.
   const id = repo.nextId("pat");
+  const attempt = {
+    id,
+    workspaceId: repo.workspaceId,
+    month,
+    kind: call.kind,
+    estimateEur: call.estimate,
+    units: call.units,
+    label: call.label,
+    createdAt: now.toISOString(),
+  };
   const reservation = await withBudgetLock(repo, () =>
-    repo.paidAttempts.reserve({
-      id,
-      workspaceId: repo.workspaceId,
-      month,
-      kind: call.kind,
-      estimateEur: call.estimate,
-      units: call.units,
-      label: call.label,
-      createdAt: now.toISOString(),
-    }),
+    call.articleGeneration
+      ? repo.articleGenerations.reserve(call.articleGeneration, attempt)
+      : repo.paidAttempts.reserve(attempt),
   );
+  if ("blocked" in reservation) {
+    if (reservation.blocked === "article_exists")
+      throw conflict("article_exists", "Un article existe déjà pour ce signal.");
+    if (reservation.blocked === "signal_changed")
+      throw conflict(
+        "signal_changed",
+        "Le signal a été modifié : rechargez-le avant de réessayer.",
+      );
+    throw conflict(
+      "generation_unresolved",
+      "Une génération est en cours ou doit être vérifiée après une interruption. Aucun nouvel appel payant n'a été lancé.",
+    );
+  }
   if (!reservation.ok) {
     if (reservation.suspending) {
       await audit(ctx, "quota.suspension", "quota", "api_budget_eur", reservation.reason, "KORA");
@@ -178,7 +196,15 @@ export async function paidCall<T>(
   // A failed acknowledgement is ambiguous: the database may have committed start().
   // The provider callback has NOT run. Resolve only from a confirmed durable state.
   try {
-    await repo.paidAttempts.start(id);
+    if (call.articleGeneration) {
+      await repo.articleGenerations.start(
+        call.articleGeneration.signal.id,
+        call.articleGeneration.token,
+        id,
+      );
+    } else {
+      await repo.paidAttempts.start(id);
+    }
   } catch (error: unknown) {
     let disposition = "unresolved";
     try {

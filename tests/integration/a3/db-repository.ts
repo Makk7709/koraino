@@ -181,7 +181,13 @@ async function main(): Promise<void> {
     await repo.releaseLock(lockKey, firstToken);
     assert.equal(await repo.acquireLock(lockKey, 1000), null, "Stale token released new lock");
     await secondRepo.releaseLock(lockKey, secondToken);
-    console.log(JSON.stringify({ event: "a4.db.lock_expiry.characterized", reacquiredAfterExpiry: true, staleReleasePreservedNewLock: true }));
+    console.log(
+      JSON.stringify({
+        event: "a4.db.lock_expiry.characterized",
+        reacquiredAfterExpiry: true,
+        staleReleasePreservedNewLock: true,
+      }),
+    );
   } finally {
     setClock(null);
   }
