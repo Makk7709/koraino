@@ -93,6 +93,9 @@ for m in 0010_kora_article_recovery 0011_kora_postgres_hardening 0012_kora_paid_
   hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
 done
 hist_sql < "$ROOT/tests/integration/a3/historical-migration-verify.sql"
+echo "=== Read-only A4.3 preflight SQL on second disposable DB ==="
+hist_sql < "$ROOT/scripts/a43-preflight-readonly.sql" >/dev/null
+echo "PASS: A4.3 read-only preflight catalog/ACL/state inventory executed on disposable historical DB"
 historical_after="$(hist_fingerprint)"
 if [[ "$historical_before" != "$historical_after" ]]; then
   echo "ERROR: historic records/settings digest changed across 0010-0012" >&2
