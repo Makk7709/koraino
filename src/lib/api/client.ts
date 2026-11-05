@@ -133,8 +133,11 @@ export const downloadUrl = {
   export: (entity: ExportEntity, format: "csv" | "json") =>
     `/api/export/${entity}${toQuery({ format })}`,
   exportManifest: () => `/api/export/manifest`,
-  newsletter: (id: string, format: "html" | "txt") =>
-    `/api/newsletters/${id}/export${toQuery({ format })}`,
+  newsletter: (
+    id: string,
+    format: "html" | "txt",
+    expected?: Pick<NewsletterEdition, "version" | "revision">,
+  ) => `/api/newsletters/${id}/export${toQuery({ format, ...expected })}`,
   linkedin: (id: string) => `/api/linkedin/${id}/export`,
 };
 
@@ -296,19 +299,26 @@ export const api = {
   updateNewsletter: (
     id: string,
     input: {
+      version: number;
+      revision: number;
       title?: string;
       intro?: string;
       items?: Pick<NewsletterItem, "id" | "summary" | "order">[];
     },
   ) => apiFetch<NewsletterEdition>(`/newsletters/${id}`, json("PATCH", input)),
-  addNewsletterItem: (id: string, input: { signalId?: string; articleId?: string }) =>
-    apiFetch<NewsletterEdition>(`/newsletters/${id}/items`, json("POST", input)),
-  removeNewsletterItem: (id: string, itemId: string) =>
-    apiFetch<NewsletterEdition>(`/newsletters/${id}/items/${itemId}`, json("DELETE")),
-  approveNewsletter: (id: string, version: number) =>
-    apiFetch<NewsletterEdition>(`/newsletters/${id}/approve`, json("POST", { version })),
-  recordNewsletterExport: (id: string) =>
-    apiFetch<NewsletterEdition>(`/newsletters/${id}/export`, json("POST")),
+  addNewsletterItem: (
+    id: string,
+    input: { signalId?: string; articleId?: string; version: number; revision: number },
+  ) => apiFetch<NewsletterEdition>(`/newsletters/${id}/items`, json("POST", input)),
+  removeNewsletterItem: (
+    id: string,
+    itemId: string,
+    expected: Pick<NewsletterEdition, "version" | "revision">,
+  ) => apiFetch<NewsletterEdition>(`/newsletters/${id}/items/${itemId}`, json("DELETE", expected)),
+  approveNewsletter: (id: string, expected: Pick<NewsletterEdition, "version" | "revision">) =>
+    apiFetch<NewsletterEdition>(`/newsletters/${id}/approve`, json("POST", expected)),
+  recordNewsletterExport: (id: string, expected: Pick<NewsletterEdition, "version" | "revision">) =>
+    apiFetch<NewsletterEdition>(`/newsletters/${id}/export`, json("POST", expected)),
   setNewsletterIncludeNext: (signalId: string, include: boolean) =>
     apiFetch<Signal>(`/signals/${signalId}`, json("PATCH", { inNewsletter: include })),
 

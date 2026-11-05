@@ -6,10 +6,12 @@ on:
       - fix/kora-a4-concurrence-reprise
       - fix/kora-a4-2-fusion-defusion
       - fix/kora-a4-3-recuperation-admin
+      - fix/kora-p0-01-newsletter-concurrency
   pull_request:
     branches:
       - main
       - fix/kora-a3-tracabilite-appels-payants
+      - fix/kora-a4-3-recuperation-admin
   workflow_dispatch:
 permissions:
   contents: read
@@ -47,3 +49,10 @@ jobs:
           SUPABASE_URL: ""
           SUPABASE_SERVICE_ROLE_KEY: ""
         run: bash scripts/test-a3-postgres.sh
+
+      - name: Newsletter CAS on two application processes and disposable PostgreSQL
+        env:
+          SUPABASE_URL: ""
+          SUPABASE_SERVICE_ROLE_KEY: ""
+          DATABASE_URL: ""
+        run: bash scripts/test-newsletter-postgres.sh

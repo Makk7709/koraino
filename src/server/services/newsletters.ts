@@ -7,7 +7,8 @@ import { addDays, dayStart, HOUR, mondayOf } from "../domain/dates";
 import { invalidateApproval, MODIFIED_AFTER_APPROVAL } from "../domain/workflow";
 import { conflict, notFound } from "../http";
 import type { ArticleRecord, NewsletterRecord, SignalRecord } from "../store/records";
-import { audit } from "./journal";
+import { revisionOf } from "../store/newsletter-mutations";
+import type { PublicationRecord } from "../store/records";
 import { GENERATION_LOCK_TTL_MS, WRITE_LOCK_TTL_MS, withLock } from "./locks";
 import { assertQuota, paidCall } from "./usage";
 import { currentEdition } from "./view";
@@ -34,15 +35,14 @@ export async function createEdition(
     items: [],
     status: "composition",
     version: 1,
+    revision: 0,
     approval: null,
     scheduledFor: scheduled.toISOString(),
     createdAt: ctx.now.toISOString(),
     updatedAt: ctx.now.toISOString(),
     createdBy: ctx.user.name,
   };
-  await ctx.repo.newsletters.insert(rec);
-  await audit(ctx, "newsletter.create", "newsletter", rec.id, rec.title);
-  return rec;
+  return commitEdition(ctx, null, rec, "newsletter.create", rec.title);
 }
 
 /** Sous verrou : deux ajouts simultanés sans édition en cours n'en créent qu'une. */
@@ -71,6 +71,7 @@ export function touchEdition(rec: NewsletterRecord, now: Date): NewsletterRecord
   return {
     ...rec,
     version: rec.version + 1,
+    revision: revisionOf(rec) + 1,
     approval: invalidateApproval(rec.approval, at, MODIFIED_AFTER_APPROVAL),
     status: "composition",
     updatedAt: at,
@@ -81,7 +82,7 @@ export function renumber(items: NewsletterItem[]): NewsletterItem[] {
   return [...items].sort((a, b) => a.order - b.order).map((item, i) => ({ ...item, order: i + 1 }));
 }
 
-function assertNotExported(edition: NewsletterRecord) {
+export function assertNotExported(edition: NewsletterRecord) {
   if (edition.status === "exportee") {
     throw conflict(
       "invalid_state",
@@ -92,8 +93,8 @@ function assertNotExported(edition: NewsletterRecord) {
 
 /**
  * Ajoute un signal ou un article à une édition (résumé généré : appel payant). Verrou par sujet
- * contre le double ajout ; l'édition est relue après l'appel pour ne pas écraser une
- * modification faite pendant la génération.
+ * contre le double ajout ; le CAS de l'état initial refuse toute modification concurrente
+ * intervenue pendant la génération, même après expiration du verrou.
  */
 export async function addItem(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
@@ -118,30 +119,17 @@ export async function addItem(
         ),
     },
     () =>
-      insertItem(
-        ctx,
-        edition.id,
-        { signalId, articleId: input.articleId ?? null },
-        article,
-        signal,
-      ),
+      insertItem(ctx, edition, { signalId, articleId: input.articleId ?? null }, article, signal),
   );
 }
 
 async function insertItem(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
-  editionId: string,
+  edition: NewsletterRecord,
   input: { signalId: string | null; articleId: string | null },
   article: ArticleRecord | undefined,
   signal: SignalRecord | undefined,
 ): Promise<NewsletterRecord> {
-  const current = async () => {
-    const rec = await ctx.repo.newsletters.get(editionId);
-    if (!rec) throw notFound("Édition introuvable.");
-    assertNotExported(rec);
-    return rec;
-  };
-  const edition = await current();
   const duplicate = edition.items.find(
     (i) =>
       (input.signalId && i.signalId === input.signalId) ||
@@ -168,38 +156,18 @@ async function insertItem(
       return (await adapters().ai?.enhanceSummary(input, base)) ?? base;
     },
   );
-  const next = await withLock(
-    ctx.repo,
-    `newsletter-write:${editionId}`,
-    {
-      ttlMs: WRITE_LOCK_TTL_MS,
-      waitMs: 5_000,
-      busy: () =>
-        conflict(
-          "newsletter_busy",
-          "L'édition est en cours de mise à jour : réessayez dans quelques secondes.",
-        ),
-    },
-    async () => {
-      const latest = await current();
-      const item: NewsletterItem = {
-        id: ctx.repo.nextId("nli"),
-        signalId: input.signalId,
-        articleId: article?.id ?? signal?.articleId ?? null,
-        title,
-        summary,
-        order: latest.items.length + 1,
-      };
-      const updated = touchEdition(
-        { ...latest, items: renumber([...latest.items, item]) },
-        ctx.now,
-      );
-      await ctx.repo.newsletters.update(updated);
-      return updated;
-    },
-  );
-  await audit(ctx, "newsletter.item_add", "newsletter", editionId, `Ajout : ${title}`);
-  return next;
+  // The summary may take longer than the lease. Commit against the original state:
+  // a concurrent change is a 409, never silently rebased after a paid call.
+  const item: NewsletterItem = {
+    id: ctx.repo.nextId("nli"),
+    signalId: input.signalId,
+    articleId: article?.id ?? signal?.articleId ?? null,
+    title,
+    summary,
+    order: edition.items.length + 1,
+  };
+  const next = touchEdition({ ...edition, items: renumber([...edition.items, item]) }, ctx.now);
+  return commitEdition(ctx, edition, next, "newsletter.item_add", `Ajout : ${title}`);
 }
 
 export async function removeItems(
@@ -219,13 +187,36 @@ export async function removeItems(
     { ...edition, items: renumber(edition.items.filter((i) => !predicate(i))) },
     ctx.now,
   );
-  await ctx.repo.newsletters.update(next);
-  await audit(
+  return commitEdition(
     ctx,
+    edition,
+    next,
     "newsletter.item_remove",
-    "newsletter",
-    edition.id,
     `Retrait : ${removed.map((i) => i.title).join(" ; ")}`,
   );
-  return next;
+}
+
+/** Single persistence boundary for editorial mutations, decisions and their audit. */
+export function commitEdition(
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
+  before: NewsletterRecord | null,
+  after: NewsletterRecord,
+  action: string,
+  details: string,
+  publication: PublicationRecord | null = null,
+): Promise<NewsletterRecord> {
+  return ctx.repo.newsletterMutations.commit({
+    before,
+    after,
+    publication,
+    audit: {
+      id: ctx.repo.nextId("aud"),
+      at: ctx.now.toISOString(),
+      actor: ctx.user.name,
+      action,
+      entity: "newsletter",
+      entityId: after.id,
+      details: `${details} [actorId=${ctx.user.id}; revision=${revisionOf(after)}]`,
+    },
+  });
 }

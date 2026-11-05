@@ -1,3 +1,4 @@
+import { expectNewsletter, revisionOf } from "../store/newsletter-mutations";
 import { z } from "zod";
 import type { Approval, LinkedInStatus, PublicationAttempt } from "@/lib/api/types";
 import { publishWithConnectionKey, type LinkedInPostOutcome } from "../linkedin/publish";
@@ -41,6 +42,7 @@ import { GENERATION_LOCK_TTL_MS, WRITE_LOCK_TTL_MS, withLock } from "../services
 import {
   addItem,
   createEdition,
+  commitEdition,
   removeItems,
   renumber,
   touchEdition,
@@ -679,6 +681,7 @@ export const updateNewsletter: Handler = async (ctx) => {
   const rec = await getEditionOr404(ctx);
   assertEditable(rec);
   const input = parse(schemas.updateNewsletter, ctx.body);
+  expectNewsletter(rec, input);
   let items = rec.items;
   if (input.items) {
     const byId = new Map(input.items.map((i) => [i.id, i]));
@@ -706,7 +709,6 @@ export const updateNewsletter: Handler = async (ctx) => {
     JSON.stringify(draft.items) !== JSON.stringify(rec.items);
   if (!changed) return json(toNewsletter(rec));
   const next = touchEdition(draft, ctx.now);
-  await ctx.repo.newsletters.update(next);
   const fields = [
     input.title !== undefined && "titre",
     input.intro !== undefined && "introduction",
@@ -714,11 +716,11 @@ export const updateNewsletter: Handler = async (ctx) => {
   ]
     .filter(Boolean)
     .join(", ");
-  await audit(
+  await commitEdition(
     ctx,
+    rec,
+    next,
     "newsletter.update",
-    "newsletter",
-    rec.id,
     `Version ${next.version} : ${fields}${rec.approval?.valid ? ` — approbation invalidée : ${MODIFIED_AFTER_APPROVAL.toLowerCase()}` : ""}`,
   );
   return json(toNewsletter(next));
@@ -729,6 +731,7 @@ export const addNewsletterItem: Handler = async (ctx) => {
   const rec = await getEditionOr404(ctx);
   assertEditable(rec);
   const input = parse(schemas.newsletterItem, ctx.body);
+  expectNewsletter(rec, input);
   const next = await addItem(ctx, rec, input);
   return json(toNewsletter(next), { status: 201 });
 };
@@ -736,6 +739,7 @@ export const addNewsletterItem: Handler = async (ctx) => {
 export const removeNewsletterItem: Handler = async (ctx) => {
   assertCan(ctx.user, "newsletter.write");
   const rec = await getEditionOr404(ctx);
+  expectNewsletter(rec, parse(schemas.newsletterExpectation, ctx.body));
   const itemId = ctx.params["itemId"];
   if (!rec.items.some((i) => i.id === itemId))
     throw notFound("Élément introuvable dans cette édition.");
@@ -747,30 +751,24 @@ export const approveNewsletter: Handler = async (ctx) => {
   assertCan(ctx.user, "newsletter.decide");
   const rec = await getEditionOr404(ctx);
   assertEditable(rec);
-  const { version } = parse(schemas.versionOnly, ctx.body);
-  if (version !== rec.version) {
-    throw conflict(
-      "version_mismatch",
-      `Vous avez relu la version ${version}, la version courante est la ${rec.version}.`,
-      {
-        currentVersion: rec.version,
-      },
-    );
-  }
+  const input = parse(schemas.newsletterExpectation, ctx.body);
+  expectNewsletter(rec, input);
+  const { version } = input;
+  if (rec.status === "approuvee") return json(toNewsletter(rec));
   if (!rec.items.length)
     throw unprocessable("newsletter_empty", "Impossible d'approuver une édition sans sujet.");
   const next: NewsletterRecord = {
     ...rec,
+    revision: revisionOf(rec) + 1,
     approval: newApproval(ctx, "newsletter", version),
     status: "approuvee",
     updatedAt: ctx.now.toISOString(),
   };
-  await ctx.repo.newsletters.update(next);
-  await audit(
+  await commitEdition(
     ctx,
+    rec,
+    next,
     "newsletter.approve",
-    "newsletter",
-    rec.id,
     `Version ${version} approuvée (${rec.items.length} sujets)`,
   );
   return json(toNewsletter(next));
@@ -786,6 +784,7 @@ const isApproved = (rec: NewsletterRecord) =>
 export const recordNewsletterExport: Handler = async (ctx) => {
   assertCan(ctx.user, "publish");
   const rec = await getEditionOr404(ctx);
+  expectNewsletter(rec, parse(schemas.newsletterExpectation, ctx.body), true);
   if (!isApproved(rec)) {
     throw conflict(
       "approval_missing",
@@ -793,10 +792,6 @@ export const recordNewsletterExport: Handler = async (ctx) => {
     );
   }
   const key = idempotencyKey(rec.id, rec.version, "newsletter");
-  const exists = (await ctx.repo.publications.list()).some(
-    (p) => p.idempotencyKey === key && p.status === "succes",
-  );
-  if (exists) return json(toNewsletter(rec));
   const at = ctx.now.toISOString();
   const attempt: PublicationAttempt = {
     id: ctx.repo.nextId("pub"),
@@ -817,22 +812,35 @@ export const recordNewsletterExport: Handler = async (ctx) => {
     by: ctx.user.name,
     byUserId: ctx.user.id,
   };
-  await ctx.repo.publications.insert(attempt);
-  const next: NewsletterRecord = { ...rec, status: "exportee", updatedAt: at };
-  await ctx.repo.newsletters.update(next);
-  await audit(
+  const next: NewsletterRecord = {
+    ...rec,
+    revision: revisionOf(rec) + 1,
+    status: "exportee",
+    updatedAt: at,
+  };
+  const committed = await commitEdition(
     ctx,
+    rec,
+    next,
     "publication.success",
-    "publication",
-    attempt.id,
     `Newsletter « ${rec.title} » exportée (version ${rec.version})`,
+    attempt,
   );
-  return json(toNewsletter(next));
+  return json(toNewsletter(committed));
 };
 
 /** Téléchargement HTML ou texte, sans effet (aperçu signalé si la version n'est pas approuvée). */
 export const exportNewsletter: Handler = async (ctx) => {
   const rec = await getEditionOr404(ctx);
+  if (ctx.query.has("version") || ctx.query.has("revision")) {
+    expectNewsletter(
+      rec,
+      parse(schemas.newsletterExpectation, {
+        version: Number(ctx.query.get("version")),
+        revision: ctx.query.has("revision") ? Number(ctx.query.get("revision")) : undefined,
+      }),
+    );
+  }
   const format = ctx.query.get("format") ?? "html";
   if (format !== "html" && format !== "txt")
     throw badRequest("invalid_format", "Format attendu : html ou txt.");

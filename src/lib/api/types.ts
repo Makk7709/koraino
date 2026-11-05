@@ -480,6 +480,8 @@ export interface NewsletterItem {
 }
 
 export interface NewsletterEdition {
+  /** Changes on every write, including approval and export. */
+  revision: number;
   id: string;
   title: string;
   weekOf: string;

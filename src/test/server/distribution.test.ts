@@ -130,26 +130,30 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
     expect(edition.items.map((i) => i.order)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
 
     const dup = await call<ApiErrorBody>("POST", "/newsletters/nl_current/items", {
-      body: { signalId: "sig_pasqal" },
+      body: { signalId: "sig_pasqal", version: 6, revision: 0 },
       user: EDITOR,
     });
     expect(dup.status).toBe(409);
     expect(dup.body.error.code).toBe("already_in_newsletter");
 
     const stale = await call<ApiErrorBody>("POST", "/newsletters/nl_current/approve", {
-      body: { version: 5 },
+      body: { version: 5, revision: 0 },
       user: VALIDATOR,
     });
     expect(stale.status).toBe(409);
     const approved = await call<NewsletterEdition>("POST", "/newsletters/nl_current/approve", {
-      body: { version: 6 },
+      body: { version: 6, revision: 0 },
       user: VALIDATOR,
     });
     expect(approved.body.status).toBe("approuvee");
 
     const [first, second] = edition.items;
     const reordered = await call<NewsletterEdition>("PATCH", "/newsletters/nl_current", {
-      body: { items: [{ id: first!.id, summary: "Résumé relu.", order: 20 }] },
+      body: {
+        version: 6,
+        revision: 1,
+        items: [{ id: first!.id, summary: "Résumé relu.", order: 20 }],
+      },
       user: EDITOR,
     });
     expect(reordered.body).toMatchObject({ status: "composition", version: 7 });
@@ -164,7 +168,7 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
       order: 12,
     });
     const unknown = await call<ApiErrorBody>("PATCH", "/newsletters/nl_current", {
-      body: { items: [{ id: "nli_absent", summary: "x", order: 1 }] },
+      body: { version: 7, revision: 2, items: [{ id: "nli_absent", summary: "x", order: 1 }] },
       user: EDITOR,
     });
     expect(unknown.status).toBe(422);
@@ -172,7 +176,7 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
     const removed = await call<NewsletterEdition>(
       "DELETE",
       `/newsletters/nl_current/items/${second!.id}`,
-      { user: EDITOR },
+      { user: EDITOR, body: { version: 7, revision: 2 } },
     );
     expect(removed.body.items).toHaveLength(11);
     expect(removed.body.version).toBe(8);
@@ -188,12 +192,13 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
 
     const early = await call<ApiErrorBody>("POST", "/newsletters/nl_current/export", {
       user: VALIDATOR,
+      body: { version: 8, revision: 3 },
     });
     expect(early.status).toBe(409);
     expect(early.body.error.code).toBe("approval_missing");
 
     await call("POST", "/newsletters/nl_current/approve", {
-      body: { version: 8 },
+      body: { version: 8, revision: 3 },
       user: VALIDATOR,
     });
     const exported = await call("GET", "/newsletters/nl_current/export?format=txt", {
@@ -211,14 +216,18 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
     expect(byEditor.status).toBe(403);
     const recorded = await call<NewsletterEdition>("POST", "/newsletters/nl_current/export", {
       user: VALIDATOR,
+      body: { version: 8, revision: 4 },
     });
     expect(recorded.body.status).toBe("exportee");
-    await call("POST", "/newsletters/nl_current/export", { user: VALIDATOR });
+    await call("POST", "/newsletters/nl_current/export", {
+      user: VALIDATOR,
+      body: { version: 8, revision: 4 },
+    });
     const attempts = await call<PublicationAttempt[]>("GET", "/publications?channel=newsletter");
     expect(attempts.body.filter((p) => p.newsletterId === "nl_current")).toHaveLength(1);
 
     const locked = await call<ApiErrorBody>("PATCH", "/newsletters/nl_current", {
-      body: { intro: "Nouveau" },
+      body: { intro: "Nouveau", version: 8, revision: 5 },
       user: EDITOR,
     });
     expect(locked.status).toBe(409);
@@ -252,7 +261,7 @@ describe("WF5 : newsletter (export, jamais d'envoi)", () => {
     });
     expect(created.status).toBe(201);
     const res = await call<ApiErrorBody>("POST", `/newsletters/${created.body.id}/approve`, {
-      body: { version: 1 },
+      body: { version: 1, revision: 0 },
       user: VALIDATOR,
     });
     expect(res.status).toBe(422);

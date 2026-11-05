@@ -1,3 +1,9 @@
+import {
+  isNewsletterExportReplay,
+  newsletterConflict,
+  validateNewsletterTransition,
+  type NewsletterMutationsRepository,
+} from "./newsletter-mutations";
 import { isDeepStrictEqual } from "node:util";
 import type { ArticleGenerationsRepository } from "./article-generations";
 import type { SignalMutationsRepository } from "./signal-mutations";
@@ -382,6 +388,52 @@ export class MemoryRepository implements Repository {
         this.generations.set(signalId, { ...op, state: "uncertain" });
     },
   };
+  newsletterMutations: NewsletterMutationsRepository = {
+    commit: async (input) => {
+      // No await before the commit: this is one indivisible in-memory transaction.
+      const current = this.newsletters.read(input.after.id) ?? null;
+      if (current && isNewsletterExportReplay(current, input)) {
+        const exists = this.publications
+          .all()
+          .some(
+            (p) =>
+              p.channel === "newsletter" &&
+              p.newsletterId === current.id &&
+              p.version === current.version &&
+              p.status === "succes",
+          );
+        if (exists) return current;
+      }
+      if (!isDeepStrictEqual(current, input.before)) throw newsletterConflict();
+      validateNewsletterTransition(current, input.after);
+      if (this.audit.read(input.audit.id)) throw new Error("Duplicate newsletter audit");
+      if (input.publication) {
+        const p = input.publication;
+        if (
+          input.after.status !== "exportee" ||
+          p.newsletterId !== input.after.id ||
+          p.version !== input.after.version ||
+          p.channel !== "newsletter" ||
+          p.status !== "succes" ||
+          this.publications.read(p.id) ||
+          this.publications
+            .all()
+            .some(
+              (x) =>
+                x.channel === "newsletter" &&
+                x.newsletterId === p.newsletterId &&
+                x.version === p.version,
+            )
+        )
+          throw new Error("Invalid newsletter export");
+      } else if (input.after.status === "exportee") throw new Error("Missing newsletter export");
+      this.newsletters.replaceCommitted(input.after, input.after.id);
+      if (input.publication)
+        this.publications.replaceCommitted(input.publication, input.publication.id);
+      this.audit.replaceCommitted(input.audit, input.audit.id);
+      return structuredClone(input.after);
+    },
+  };
   signalMutations: SignalMutationsRepository = {
     commit: async (changes) => {
       if (!changes.length || changes.length > 2000)
@@ -405,10 +457,16 @@ export class MemoryRepository implements Repository {
         seen.add(key);
         const store = stores[change.collection] as unknown as MemoryCollection<{ id: string }>;
         const current = store.read(change.id) ?? null;
-        if (!isDeepStrictEqual(current, change.before))
+        if (!isDeepStrictEqual(current, change.before)) {
+          if (change.collection === "newsletters") throw newsletterConflict();
           throw new Error("Signal transaction state changed");
+        }
         if (change.after && change.after.id !== change.id)
           throw new Error("Signal transaction identifier mismatch");
+        if (change.collection === "newsletters") {
+          if (!change.after) throw new Error("Newsletter deletion is forbidden");
+          validateNewsletterTransition(change.before, change.after);
+        }
         if (change.collection === "signals") {
           const generation = this.generations.get(change.id);
           if (

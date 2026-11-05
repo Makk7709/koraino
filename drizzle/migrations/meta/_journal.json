@@ -99,6 +99,13 @@
       "when": 1793980800005,
       "tag": "0013_kora_article_linked_only",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793880000000,
+      "tag": "0014_kora_newsletter_cas",
+      "breakpoints": true
     }
   ]
 }

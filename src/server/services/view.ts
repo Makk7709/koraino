@@ -221,7 +221,11 @@ export function toLinkedIn(rec: LinkedInPostRecord): LinkedInPost {
 
 export function toNewsletter(rec: NewsletterRecord): NewsletterEdition {
   const { createdBy: _c, ...dto } = rec;
-  return { ...dto, items: [...dto.items].sort((a, b) => a.order - b.order) };
+  return {
+    ...dto,
+    revision: rec.revision ?? 0,
+    items: [...dto.items].sort((a, b) => a.order - b.order),
+  };
 }
 
 export function toRule(rec: RuleRecord): EditorialRule {

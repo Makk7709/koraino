@@ -45,7 +45,11 @@ export function useAddToNewsletter() {
       const editions = await qc.fetchQuery({ queryKey: qk.newsletters, queryFn: api.newsletters });
       const target =
         editions.find((e) => e.status === "composition") ?? (await api.createNewsletter({}));
-      return api.addNewsletterItem(target.id, input);
+      return api.addNewsletterItem(target.id, {
+        ...input,
+        version: target.version,
+        revision: target.revision,
+      });
     },
     { success: (ed) => `Ajouté à l'édition « ${ed.title} »` },
   );
