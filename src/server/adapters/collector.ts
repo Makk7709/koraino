@@ -542,11 +542,12 @@ export class RealCollector implements Collector {
       items = feed.map((i) => ({ ...i, via }));
     } catch (e) {
       const err = e as Error & { code?: string };
+      const errCode = err.code ?? "NETWORK";
       const failure = {
         ok: false as const,
-        code: err.code ?? "NETWORK",
+        code: errCode,
         reason: err.message || "Erreur réseau",
-        transient: isTransientCollectError(err.code),
+        transient: isTransientCollectError(errCode),
       };
       // Google News indisponible : la recherche Perplexity suffit à mener la collecte.
       if (!search || (await search).outcome.status !== "ok") return failure;
