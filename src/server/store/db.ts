@@ -146,18 +146,29 @@ export class DbRepository implements Repository {
     },
   };
   articleGenerations: ArticleGenerationsRepository = {
-    reserve: async (claim, attempt) => {
+    reserveLinked: async (claim, attempt, httpOperationId) => {
       paidAttemptSchema.parse(attempt);
       const { data, error } = await (
         await db()
       )
         .rpc(
-          "kora_article_generation_reserve" as never,
-          { p_token: claim.token, p_signal: claim.signal, p_attempt: attempt } as never,
+          "kora_article_generation_reserve_linked" as never,
+          {
+            p_token: claim.token,
+            p_signal: claim.signal,
+            p_attempt: attempt,
+            p_http_id: httpOperationId,
+          } as never,
         )
         .abortSignal(AbortSignal.timeout(10_000));
-      if (error) throw new Error("Article generation reservation failed: " + error.code);
+      if (error)
+        throw new Error("Linked article reservation failed: " + (error.code ?? "database_error"));
       return generationReservationSchema.parse(data);
+    },
+    reserve: async () => {
+      // A4.3: PostgreSQL must never create a paid A4 claim without a durable HTTP link.
+      // In-memory legacy reservations remain available for isolated test scenarios.
+      throw new Error("Unlinked article generation reservation is forbidden on PostgreSQL");
     },
     start: async (signalId, token, attemptId) => {
       const { data, error } = await (
@@ -394,9 +405,10 @@ export class DbRepository implements Repository {
         notifiedAlerts: [],
       };
       const s = await client
-        .from("kora_settings")
-        .upsert({ workspace_id: WORKSPACE, data: settings as never });
-      if (s.error) throw new Error(s.error.message);
+        .rpc("kora_settings_initialize" as never, { p_data: settings } as never)
+        .abortSignal(AbortSignal.timeout(10_000));
+      if (s.error || s.data !== true)
+        throw new Error("Settings initialization failed: " + (s.error?.code ?? "invalid_response"));
     })().catch((e) => {
       this.ready = null;
       throw e;

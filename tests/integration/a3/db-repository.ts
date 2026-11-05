@@ -7,14 +7,14 @@ import { monthTotals } from "../../../src/server/domain/budget";
 import { supabaseAdmin } from "../../../src/integrations/supabase/client.server";
 
 async function main(): Promise<void> {
-  assert.equal(process.env.A3_DB_ISOLATED_TEST, "1");
-  const raw = process.env.SUPABASE_URL;
+  assert.equal(process.env["A3_DB_ISOLATED_TEST"], "1");
+  const raw = process.env["SUPABASE_URL"];
   assert.ok(raw, "Missing disposable PostgREST URL");
   const url = new URL(raw);
   assert.equal(url.protocol, "http:");
   assert.equal(url.hostname, "127.0.0.1");
   assert.ok(!["54321", "55321"].includes(url.port), "Protected Supabase port");
-  assert.ok(process.env.SUPABASE_SERVICE_ROLE_KEY, "Missing disposable JWT");
+  assert.ok(process.env["SUPABASE_SERVICE_ROLE_KEY"], "Missing disposable JWT");
 
   // Supabase-js targets /rest/v1; standalone PostgREST exposes the same routes at /.
   // Rewrite only requests to this disposable loopback server.
@@ -35,6 +35,25 @@ async function main(): Promise<void> {
   assert.equal(repo.workspaceId, "kora");
   assert.equal(settings.reservedEur, 0);
   assert.equal(settings.quotaLimits.api_budget_eur, 0.05);
+
+  // A4.3.5: both the PostgreSQL RPC and repository must reject unlinked reservations.
+  // This probe supplies invalid claim data so it cannot make a paid reservation on failure.
+  const legacyRpc = await supabaseAdmin
+    .rpc(
+      "kora_article_generation_reserve" as never,
+      {
+        p_token: "10000000-0000-4000-8000-000000000099",
+        p_signal: { id: "a43-test-no-signal" },
+        p_attempt: {},
+      } as never,
+    )
+    .abortSignal(AbortSignal.timeout(5_000));
+  assert.equal(legacyRpc.error?.code, "42501", "Unlinked reservation RPC must be denied");
+  await assert.rejects(
+    repo.articleGenerations.reserve({} as never, {} as never),
+    /Unlinked article generation reservation is forbidden on PostgreSQL/,
+  );
+  console.info(JSON.stringify({ event: "a43.unlinked_article_reservation.denied" }));
   assert.equal((await repo.usage.list()).length, 0);
   const now = new Date();
   const kind = "generation_summary" as const;
@@ -86,6 +105,72 @@ async function main(): Promise<void> {
   await assert.rejects(
     repo.paidAttempts.overrun(id, [{ ...attempt.estimatedUsageLines![0]!, costEur: 0.04 }]),
   );
+
+  // A4.3.3: exercise the real HTTP data API with its BYPASSRLS service JWT.
+  // Each request must return PostgreSQL insufficient_privilege, without any mutation.
+  const beforeProtection = {
+    attempt: await repo.paidAttempts.get(id),
+    settings: await repo.getSettings(),
+    usage: await repo.usage.list(),
+  };
+  const protectedHttpId = "43".repeat(32);
+  await repo.idempotency.begin({
+    id: protectedHttpId,
+    workspaceId: "kora",
+    actorId: "a433-http-test",
+    route: "POST /articles",
+    fingerprint: "34".repeat(32),
+  });
+  const expectDenied = async (
+    label: string,
+    request: PromiseLike<{ error: { code?: string } | null }>,
+  ): Promise<void> => {
+    const response = await request;
+    assert.equal(response.error?.code, "42501", label);
+  };
+  await expectDenied(
+    "direct paid attempt update",
+    supabaseAdmin
+      .from("kora_records")
+      .update({ data: { status: "reserved" } })
+      .eq("collection", "paid_attempts")
+      .eq("id", id)
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct HTTP deletion",
+    supabaseAdmin
+      .from("kora_records")
+      .delete()
+      .eq("collection", "http_idempotency")
+      .eq("id", protectedHttpId)
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct usage deletion",
+    supabaseAdmin
+      .from("kora_records")
+      .delete()
+      .eq("collection", "usage")
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  await expectDenied(
+    "direct budget update",
+    supabaseAdmin
+      .from("kora_settings")
+      .update({ data: { reservedEur: 0 } })
+      .eq("workspace_id", "kora")
+      .abortSignal(AbortSignal.timeout(10_000)),
+  );
+  const nullFinish = await supabaseAdmin
+    .rpc("kora_paid_finish" as never, { p_id: id, p_lines: [], p_status: null } as never)
+    .abortSignal(AbortSignal.timeout(10_000));
+  assert.equal(nullFinish.error?.code, "P0001", "NULL settlement rejected through HTTP");
+  assert.deepEqual(await repo.paidAttempts.get(id), beforeProtection.attempt);
+  assert.deepEqual(await repo.getSettings(), beforeProtection.settings);
+  assert.deepEqual(await repo.usage.list(), beforeProtection.usage);
+  assert.equal((await repo.idempotency.get(protectedHttpId))?.state, "pending");
+  console.log(JSON.stringify({ event: "a433.http.protected_writes.pass", statePreserved: true }));
 
   // SQL must reject fractional-cent reservations even from a direct service_role RPC.
   const fractional = await supabaseAdmin.rpc(

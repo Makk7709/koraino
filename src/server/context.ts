@@ -11,6 +11,8 @@ export interface Ctx {
   /** Enregistrement interne : passer par `toPublicUser` avant de le renvoyer. */
   user: UserRecord;
   now: Date;
+  /** Durable HTTP intent ID, set only by the idempotency middleware. */
+  httpOperationId?: string;
   /** Corps JSON (undefined si absent). */
   body: unknown;
   /** Corps multipart (imports). */

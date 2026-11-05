@@ -9,10 +9,23 @@ for tool in docker bun curl python3; do command -v "$tool" >/dev/null || { echo 
 docker compose version >/dev/null
 test -s "$ROOT/tests/integration/a3/roles.sql"
 test -s "$COMPOSE"
+# Fail before Docker setup if a versioned SQL migration is missing from Drizzle's journal.
+python3 - "$ROOT/drizzle/migrations" <<'PY'
+import json
+import pathlib
+import sys
+folder = pathlib.Path(sys.argv[1])
+journal = json.loads((folder / "meta/_journal.json").read_text())
+tags = [entry["tag"] for entry in journal["entries"]]
+disk = sorted(p.stem for p in folder.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+if tags != disk or len(tags) != len(set(tags)):
+    raise SystemExit(f"STOP: migration journal mismatch: journal={tags}, SQL={disk}")
+PY
 if [[ -n "$(printenv SUPABASE_URL || true)" || -n "$(printenv SUPABASE_SERVICE_ROLE_KEY || true)" ]]; then
   echo "STOP: inherited Supabase credentials: run with SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY=" >&2
   exit 1
 fi
+bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
 PROJECT="koraa3ci$(date -u +%s)$$"
 compose() { docker compose --project-name "$PROJECT" --file "$COMPOSE" "$@"; }
 cleanup() {
@@ -44,12 +57,68 @@ trap cleanup EXIT
 echo "=== Disposable A3 project: $PROJECT ==="
 compose up --detach --wait db
 sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$DB"; }
-for m in 0000_kora_records 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations; do
+sql_migration() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$DB" --single-transaction -f -; }
+for m in 0000_kora_records 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations 0010_kora_article_recovery; do
   f="$ROOT/drizzle/migrations/$m.sql"
   test -s "$f"
   echo "Applying $m (disposable DB ONLY)"
-  sql < "$f" >/dev/null
+  sql_migration < "$f" >/dev/null
 done
+echo "=== A4.3.3 pre-fix permission characterization (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/permissions-characterization.sql"
+echo "Applying 0011_kora_postgres_hardening (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0011_kora_postgres_hardening.sql" >/dev/null
+echo "=== A4.3.4 pre-fix cross-ledger characterization (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/financial-generation-characterization.sql"
+echo "Applying 0012_kora_paid_a4_ownership_guard (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0012_kora_paid_a4_ownership_guard.sql" >/dev/null
+echo "Applying 0013_kora_article_linked_only (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0013_kora_article_linked_only.sql" >/dev/null
+echo "=== A4.3.4 post-fix financial/A4 transactional guard (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/financial-generation-guard.sql"
+sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
+echo "=== A4.3 legacy-data migration rehearsal (SECOND disposable PostgreSQL DB ONLY) ==="
+HIST_DB="kora_a43_legacy_ci"
+compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c "CREATE DATABASE $HIST_DB" >/dev/null
+hist_sql() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB" "$@"; }
+hist_migration() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d "$HIST_DB" --single-transaction -f -; }
+hist_sql <<'SQL' >/dev/null
+GRANT USAGE ON SCHEMA public TO service_role, anon, authenticated;
+SQL
+for m in 0000_kora_records 0001_app_user_connections 0002_kora_paid_attempts 0003_kora_settings_safe_write 0004_kora_paid_reconcile 0005_kora_paid_overrun 0006_kora_paid_accounting_guards 0007_kora_http_idempotency 0008_kora_article_generations 0009_kora_signal_mutations; do
+  echo "Historical replay: applying $m (second disposable DB ONLY)"
+  hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
+done
+hist_sql < "$ROOT/tests/integration/a3/historical-fixture-seed.sql" >/dev/null
+hist_fingerprint() {
+  hist_sql -At <<'SQL'
+SELECT md5(
+  COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.collection,r.id)::text
+    FROM public.kora_records r),'[]')
+  || COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.workspace_id)::text
+    FROM public.kora_settings s),'[]')
+);
+SQL
+}
+historical_before="$(hist_fingerprint)"
+test -n "$historical_before"
+for m in 0010_kora_article_recovery 0011_kora_postgres_hardening 0012_kora_paid_a4_ownership_guard 0013_kora_article_linked_only; do
+  echo "Historical replay: applying $m (second disposable DB ONLY)"
+  hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
+done
+hist_sql < "$ROOT/tests/integration/a3/historical-migration-verify.sql"
+echo "=== Read-only A4.3 preflight SQL on second disposable DB ==="
+hist_sql < "$ROOT/scripts/a43-preflight-readonly.sql" >/dev/null
+echo "PASS: A4.3 read-only preflight catalog/ACL/state inventory executed on disposable historical DB"
+historical_after="$(hist_fingerprint)"
+if [[ "$historical_before" != "$historical_after" ]]; then
+  echo "ERROR: historic records/settings digest changed across 0010-0013" >&2
+  exit 1
+fi
+echo "PASS: synthetic historical records/settings preserved byte-equivalently across migrations 0010-0013"
+
+echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
 sql <<'SQL' >/dev/null
 INSERT INTO public.kora_settings(workspace_id,data)
 VALUES ('kora',jsonb_build_object(
@@ -74,6 +143,10 @@ echo "=== A4 SQL transaction and ownership checks (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/article-generations.sql"
 echo "=== A4.2 SQL atomic merge/split rollback checks (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/signal-mutations.sql"
+echo "=== A4.3.1 recovery characterization (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/recovery-characterization.sql"
+echo "=== A4.3.2 DBA recovery SQL tests (disposable DB ONLY) ==="
+sql < "$ROOT/tests/integration/a3/recovery-admin.sql"
 compose up --detach api
 endpoint="$(compose port api 3000)"
 port="$(printf '%s\n' "$endpoint" | sed -E 's/^.*:([0-9]+)$/\1/')"
@@ -132,7 +205,6 @@ UPDATE public.kora_settings
 SET data = data || '{"paidCallsSuspended":false,"suspendedMonth":null}'::jsonb
 WHERE workspace_id='kora';
 SQL
-bunx tsc --noEmit -p "$ROOT/tests/integration/a3/tsconfig.json"
 echo "=== A3.1 real HTTP loss and process restart (disposable DB ONLY) ==="
 (
  cd "$ROOT"

@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Ctx, Handler } from "../context";
-import { conflict, HttpError } from "../http";
+import { conflict, HttpError, json } from "../http";
+import { assertCan } from "../domain/permissions";
+import { articleDetail } from "./view";
 
 const keySchema = z.string().regex(/^[a-zA-Z0-9_-]{16,128}$/);
 const hexDigest = (input: string): string => createHash("sha256").update(input).digest("hex");
 export type IdempotencyClaim =
   | { kind: "claimed" }
-  | { kind: "pending" | "uncertain" | "conflict" }
+  | { kind: "pending" | "uncertain" | "conflict" | "closed_not_sent" }
+  | { kind: "recovered_completed"; articleId: string }
   | { kind: "completed"; status: number; bodyText: string };
 export type IdempotencyRecord = {
   id: string;
@@ -32,6 +35,11 @@ const claimSchema: z.ZodType<IdempotencyClaim> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("pending") }),
   z.object({ kind: z.literal("uncertain") }),
   z.object({ kind: z.literal("conflict") }),
+  z.object({
+    kind: z.literal("recovered_completed"),
+    articleId: z.string().min(1),
+  }),
+  z.object({ kind: z.literal("closed_not_sent") }),
   z.object({
     kind: z.literal("completed"),
     status: z.number().int().min(200).max(299),
@@ -78,6 +86,36 @@ export async function withHttpIdempotency(
       "idempotency_uncertain",
       "Statut incertain : réexécution payante bloquée, rapprochement requis.",
     );
+  if (claim.kind === "closed_not_sent")
+    throw conflict(
+      "idempotency_closed_not_sent",
+      "Cette tentative a été clôturée administrativement. Utilisez une nouvelle demande.",
+    );
+  if (claim.kind === "recovered_completed") {
+    if (route !== "POST /articles")
+      throw conflict("recovery_route_mismatch", "Réponse récupérée sur une route incorrecte.");
+    assertCan(ctx.user, "article.write");
+    const article = await ctx.repo.articles.get(claim.articleId);
+    if (
+      !article ||
+      !article.signalId ||
+      (await ctx.repo.signals.get(article.signalId))?.articleId !== article.id
+    )
+      throw conflict(
+        "recovery_inconsistent",
+        "L’article récupéré ne correspond plus à son signal.",
+      );
+    console.info(
+      JSON.stringify({
+        event: "kora.idempotency.recovery_replayed",
+        operationId: id,
+        articleId: article.id,
+      }),
+    );
+    const response = json(await articleDetail(ctx.repo, article, ctx.now), { status: 201 });
+    response.headers.set("x-kora-idempotency", "recovered");
+    return response;
+  }
   if (claim.kind === "completed") {
     console.info(JSON.stringify({ event: "kora.idempotency.replayed", operationId: id }));
     return new Response(claim.bodyText, {
@@ -90,7 +128,7 @@ export async function withHttpIdempotency(
   }
 
   try {
-    const response = await fn(ctx);
+    const response = await fn({ ...ctx, httpOperationId: id });
     if (response.status < 200 || response.status > 299) {
       throw new Error("Idempotent handler returned a non-successful response");
     }

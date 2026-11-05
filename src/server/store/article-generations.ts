@@ -20,6 +20,12 @@ export type GenerationReservation =
 export interface ArticleGenerationsRepository {
   /** Claim and financial reservation commit together, before any provider work. */
   reserve(claim: ArticleGenerationClaim, attempt: PaidAttemptInput): Promise<GenerationReservation>;
+  /** Bind the exact authenticated HTTP intent to the ownership claim. */
+  reserveLinked(
+    claim: ArticleGenerationClaim,
+    attempt: PaidAttemptInput,
+    httpOperationId: string,
+  ): Promise<GenerationReservation>;
   start(signalId: string, token: string, attemptId: string): Promise<void>;
   /** Atomically create the article, link the unchanged signal, and complete the claim. */
   complete(signalId: string, token: string, article: ArticleRecord): Promise<void>;

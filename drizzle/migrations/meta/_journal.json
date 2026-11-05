@@ -71,6 +71,34 @@
       "when": 1793980800001,
       "tag": "0009_kora_signal_mutations",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793980800002,
+      "tag": "0010_kora_article_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793980800003,
+      "tag": "0011_kora_postgres_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793980800004,
+      "tag": "0012_kora_paid_a4_ownership_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793980800005,
+      "tag": "0013_kora_article_linked_only",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ on:
       - fix/kora-a3-tracabilite-appels-payants
       - fix/kora-a4-concurrence-reprise
       - fix/kora-a4-2-fusion-defusion
+      - fix/kora-a4-3-recuperation-admin
   pull_request:
     branches:
       - main
