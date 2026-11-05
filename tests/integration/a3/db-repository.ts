@@ -39,11 +39,14 @@ async function main(): Promise<void> {
   // A4.3.5: both the PostgreSQL RPC and repository must reject unlinked reservations.
   // This probe supplies invalid claim data so it cannot make a paid reservation on failure.
   const legacyRpc = await supabaseAdmin
-    .rpc("kora_article_generation_reserve" as never, {
-      p_token: "10000000-0000-4000-8000-000000000099",
-      p_signal: { id: "a43-test-no-signal" },
-      p_attempt: {},
-    } as never)
+    .rpc(
+      "kora_article_generation_reserve" as never,
+      {
+        p_token: "10000000-0000-4000-8000-000000000099",
+        p_signal: { id: "a43-test-no-signal" },
+        p_attempt: {},
+      } as never,
+    )
     .abortSignal(AbortSignal.timeout(5_000));
   assert.equal(legacyRpc.error?.code, "42501", "Unlinked reservation RPC must be denied");
   await assert.rejects(
