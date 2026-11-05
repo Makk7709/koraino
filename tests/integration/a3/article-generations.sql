@@ -11,17 +11,31 @@ DECLARE
   attempt jsonb := '{"id":"a4-sql-attempt","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"SQL test","createdAt":"2026-11-03T00:00:00Z"}';
   token uuid := '10000000-0000-4000-8000-000000000001';
   other_token uuid := '10000000-0000-4000-8000-000000000002';
+  v_http_id text := repeat('a',64);
   r jsonb;
 BEGIN
   IF has_table_privilege('service_role','public.kora_article_generations','INSERT')
      OR has_table_privilege('service_role','public.kora_article_generations','UPDATE')
      OR has_table_privilege('service_role','public.kora_article_generations','DELETE')
      OR has_function_privilege('anon','public.kora_article_generation_reserve(uuid,jsonb,jsonb)','EXECUTE')
+     OR has_function_privilege('service_role','public.kora_article_generation_reserve(uuid,jsonb,jsonb)','EXECUTE')
      OR has_function_privilege('authenticated','public.kora_article_generation_complete(text,uuid,jsonb)','EXECUTE')
      OR NOT has_function_privilege('service_role','public.kora_article_generation_complete(text,uuid,jsonb)','EXECUTE')
   THEN RAISE EXCEPTION 'invalid A4 privileges'; END IF;
-  -- Budget denial must not leave a generation or a paid attempt.
-  r := public.kora_article_generation_reserve(token,s,attempt || '{"estimateEur":100000}');
+  -- The obsolete unlinked RPC must reject even a service-role caller.
+  BEGIN
+    PERFORM public.kora_article_generation_reserve(token,s,attempt);
+    RAISE EXCEPTION 'unlinked article reservation unexpectedly accepted';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- A valid linked HTTP intent must still enforce the A3 budget and roll back atomically.
+  r := public.kora_http_idempotency_begin(
+    v_http_id,'kora','a4-sql-actor','POST /articles',repeat('1',64)
+  );
+  IF r->>'kind' <> 'claimed' THEN RAISE EXCEPTION 'A4 HTTP claim failed'; END IF;
+  r := public.kora_article_generation_reserve_linked(
+    token,s,attempt || '{"estimateEur":100000}',v_http_id
+  );
   IF r->>'ok' <> 'false' OR EXISTS (SELECT 1 FROM public.kora_article_generations)
      OR EXISTS (SELECT 1 FROM public.kora_records WHERE id = 'a4-sql-attempt')
   THEN RAISE EXCEPTION 'budget denial created a claim'; END IF;
@@ -37,11 +51,20 @@ DECLARE
   attempt jsonb := '{"id":"a4-sql-attempt","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"SQL test","createdAt":"2026-11-03T00:00:00Z"}';
   token uuid := '10000000-0000-4000-8000-000000000001';
   other_token uuid := '10000000-0000-4000-8000-000000000002';
+  v_http_id text := repeat('a',64);
+  v_other_http_id text := repeat('b',64);
   r jsonb;
 BEGIN
-  r := public.kora_article_generation_reserve(token,s,attempt);
+  -- Reuse the pending HTTP claim from the budget-denied operation; it has no A4 owner.
+  r := public.kora_article_generation_reserve_linked(token,s,attempt,v_http_id);
   IF r->>'ok' <> 'true' THEN RAISE EXCEPTION 'claim failed: %',r; END IF;
-  r := public.kora_article_generation_reserve(other_token,s,attempt || '{"id":"a4-other-attempt"}');
+  r := public.kora_http_idempotency_begin(
+    v_other_http_id,'kora','a4-sql-actor','POST /articles',repeat('2',64)
+  );
+  IF r->>'kind' <> 'claimed' THEN RAISE EXCEPTION 'A4 competing HTTP claim failed'; END IF;
+  r := public.kora_article_generation_reserve_linked(
+    other_token,s,attempt || '{"id":"a4-other-attempt"}',v_other_http_id
+  );
   IF r->>'blocked' <> 'busy' THEN RAISE EXCEPTION 'duplicate claim accepted'; END IF;
   BEGIN
     PERFORM public.kora_article_generation_start(s->>'id',other_token,attempt->>'id');

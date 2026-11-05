@@ -35,6 +35,22 @@ async function main(): Promise<void> {
   assert.equal(repo.workspaceId, "kora");
   assert.equal(settings.reservedEur, 0);
   assert.equal(settings.quotaLimits.api_budget_eur, 0.05);
+
+  // A4.3.5: both the PostgreSQL RPC and repository must reject unlinked reservations.
+  // This probe supplies invalid claim data so it cannot make a paid reservation on failure.
+  const legacyRpc = await supabaseAdmin
+    .rpc("kora_article_generation_reserve" as never, {
+      p_token: "10000000-0000-4000-8000-000000000099",
+      p_signal: { id: "a43-test-no-signal" },
+      p_attempt: {},
+    } as never)
+    .abortSignal(AbortSignal.timeout(5_000));
+  assert.equal(legacyRpc.error?.code, "42501", "Unlinked reservation RPC must be denied");
+  await assert.rejects(
+    repo.articleGenerations.reserve({} as never, {} as never),
+    /Unlinked article generation reservation is forbidden on PostgreSQL/,
+  );
+  console.info(JSON.stringify({ event: "a43.unlinked_article_reservation.denied" }));
   assert.equal((await repo.usage.list()).length, 0);
   const now = new Date();
   const kind = "generation_summary" as const;

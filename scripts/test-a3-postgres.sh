@@ -60,6 +60,8 @@ echo "=== A4.3.4 pre-fix cross-ledger characterization (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/financial-generation-characterization.sql"
 echo "Applying 0012_kora_paid_a4_ownership_guard (disposable DB ONLY)"
 sql_migration < "$ROOT/drizzle/migrations/0012_kora_paid_a4_ownership_guard.sql" >/dev/null
+echo "Applying 0013_kora_article_linked_only (disposable DB ONLY)"
+sql_migration < "$ROOT/drizzle/migrations/0013_kora_article_linked_only.sql" >/dev/null
 echo "=== A4.3.4 post-fix financial/A4 transactional guard (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/financial-generation-guard.sql"
 sql < "$ROOT/tests/integration/a3/permissions-audit.sql"
@@ -88,7 +90,7 @@ SQL
 }
 historical_before="$(hist_fingerprint)"
 test -n "$historical_before"
-for m in 0010_kora_article_recovery 0011_kora_postgres_hardening 0012_kora_paid_a4_ownership_guard; do
+for m in 0010_kora_article_recovery 0011_kora_postgres_hardening 0012_kora_paid_a4_ownership_guard 0013_kora_article_linked_only; do
   echo "Historical replay: applying $m (second disposable DB ONLY)"
   hist_migration < "$ROOT/drizzle/migrations/$m.sql" >/dev/null
 done
@@ -98,10 +100,10 @@ hist_sql < "$ROOT/scripts/a43-preflight-readonly.sql" >/dev/null
 echo "PASS: A4.3 read-only preflight catalog/ACL/state inventory executed on disposable historical DB"
 historical_after="$(hist_fingerprint)"
 if [[ "$historical_before" != "$historical_after" ]]; then
-  echo "ERROR: historic records/settings digest changed across 0010-0012" >&2
+  echo "ERROR: historic records/settings digest changed across 0010-0013" >&2
   exit 1
 fi
-echo "PASS: synthetic historical records/settings preserved byte-equivalently across migrations 0010-0012"
+echo "PASS: synthetic historical records/settings preserved byte-equivalently across migrations 0010-0013"
 
 echo "=== A4.3.3 PostgreSQL hardening (disposable DB ONLY) ==="
 sql < "$ROOT/tests/integration/a3/postgres-hardening.sql"
