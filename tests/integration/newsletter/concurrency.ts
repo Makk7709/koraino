@@ -175,6 +175,20 @@ try {
     await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('signals',${signal.id},${JSON.stringify(signal)})`;
   const [a, b] = await Promise.all([start(), start()]);
   assert.notEqual(a.pid, b.pid);
+  // Exercise first boot on the empty disposable workspace, rather than pre-seeding
+  // settings and concealing a mismatch between the demo seed and the SQL contract.
+  const bootstrap = await Promise.all(
+    [a, b].map(async ({ origin }) => {
+      const response = await fetch(`${origin}/api/newsletters`, {
+        signal: AbortSignal.timeout(25_000),
+      });
+      assert.equal(response.status, 200, "Concurrent empty-workspace initialization");
+    }),
+  );
+  assert.equal(bootstrap.length, 2);
+  const settings = await sql`SELECT data FROM public.kora_settings WHERE workspace_id='kora'`;
+  assert.equal(settings[0]!["data"].workspaceId, "kora");
+  report("concurrent first boot uses SQL workspace identity");
   const origins = [a.origin, b.origin];
   for (const scenario of ["two edits", "edit versus approval", "two approvals"] as const) {
     const e = await fixture();

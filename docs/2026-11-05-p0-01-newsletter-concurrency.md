@@ -37,6 +37,8 @@ Les actions d'ajout, retrait, ordre et export sont bloquées tant que le texte l
 
 ## Déploiement et retour arrière
 
+Le premier passage CI a également révélé un défaut préalable au test newsletter : sur une base vide, `DbRepository.ensureReady()` transmettait le `workspaceId` du seed de démonstration (`ws_inovallee`) à une RPC exigeant `kora`, ce qui produisait `500` avant toute mutation. Le correctif aligne ce seul champ sur `Repository.workspaceId` ; le banc vérifie maintenant le premier démarrage concurrent sans préremplir les paramètres. Cela ne clôture pas l'audit plus large de l'initialisation non destructive (B07).
+
 1. Revoir cette PR et ses branches parentes, puis vérifier la base réellement intégrée. Rejouer les tests après intégration.
 2. Sur une copie isolée récente, appliquer `0014` après `0013`. L'index refuse les doublons d'exports historiques : les examiner et les réconcilier manuellement, sans purge automatique. Mesurer les verrous DDL et vérifier les privilèges.
 3. Tester sauvegarde et restauration. Déployer migration, API et interface de façon coordonnée : les anciens clients échouent volontairement ; les anciens handlers ne peuvent plus écrire directement.

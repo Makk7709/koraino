@@ -428,6 +428,8 @@ export class DbRepository implements Repository {
       if (ins.error) throw new Error(ins.error.message);
       const settings: Settings = {
         ...seed.settings,
+        // The SQL workspace is not the demonstration seed's ws_inovallee.
+        workspaceId: WORKSPACE,
         reservedEur: 0,
         notifiedAlerts: [],
       };
