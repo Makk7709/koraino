@@ -9,6 +9,18 @@ for tool in docker bun curl python3; do command -v "$tool" >/dev/null || { echo 
 docker compose version >/dev/null
 test -s "$ROOT/tests/integration/a3/roles.sql"
 test -s "$COMPOSE"
+# Fail before Docker setup if a versioned SQL migration is missing from Drizzle's journal.
+python3 - "$ROOT/drizzle/migrations" <<'PY'
+import json
+import pathlib
+import sys
+folder = pathlib.Path(sys.argv[1])
+journal = json.loads((folder / "meta/_journal.json").read_text())
+tags = [entry["tag"] for entry in journal["entries"]]
+disk = sorted(p.stem for p in folder.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+if tags != disk or len(tags) != len(set(tags)):
+    raise SystemExit(f"STOP: migration journal mismatch: journal={tags}, SQL={disk}")
+PY
 if [[ -n "$(printenv SUPABASE_URL || true)" || -n "$(printenv SUPABASE_SERVICE_ROLE_KEY || true)" ]]; then
   echo "STOP: inherited Supabase credentials: run with SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY=" >&2
   exit 1

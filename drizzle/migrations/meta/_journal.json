@@ -92,6 +92,13 @@
       "when": 1793980800004,
       "tag": "0012_kora_paid_a4_ownership_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793980800005,
+      "tag": "0013_kora_article_linked_only",
+      "breakpoints": true
     }
   ]
 }
