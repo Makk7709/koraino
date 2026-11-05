@@ -1,5 +1,5 @@
 -- A4.3.1 CHARACTERIZATION TESTS ONLY. Do not run against production.
--- Execute after migrations 0000..0009 and disposable settings seed.
+-- Execute after migrations 0000..0013 and disposable settings seed.
 -- These checks deliberately demonstrate CURRENT recovery gaps, not a fix.
 -- Each fixture is rolled back, including finance, articles, HTTP records and audit.
 BEGIN;
@@ -15,9 +15,16 @@ DECLARE
   signal_data jsonb := '{"id":"a43-fin-signal","status":"nouveau","articleId":null}'::jsonb;
   attempt jsonb := '{"id":"a43-fin-attempt","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"A4.3 fixture: financial reconciliation","createdAt":"2026-11-03T00:00:00Z"}'::jsonb;
   token uuid := 'a4300000-0000-4000-8000-000000000001';
+  http_id text := repeat('a',64);
   response jsonb;
 BEGIN
-  response := public.kora_article_generation_reserve(token, signal_data, attempt);
+  response := public.kora_http_idempotency_begin(
+    http_id,'kora','a43-actor','POST /articles',repeat('1',64)
+  );
+  IF response->>'kind' <> 'claimed' THEN
+    RAISE EXCEPTION 'A4.3 case 1 HTTP claim failed: %',response;
+  END IF;
+  response := public.kora_article_generation_reserve_linked(token, signal_data, attempt,http_id);
   IF response->>'ok' IS DISTINCT FROM 'true' THEN
     RAISE EXCEPTION 'A4.3 case 1 reservation failed: %', response;
   END IF;
@@ -51,6 +58,7 @@ DECLARE
   signal_data jsonb := '{"id":"a43-fin-signal","status":"nouveau","articleId":null}'::jsonb;
   attempt jsonb := '{"id":"a43-fin-retry","workspaceId":"kora","month":"2026-11","kind":"generation_article","estimateEur":0.01,"units":1,"label":"A4.3 fixture: blocked reattempt","createdAt":"2026-11-03T00:00:00Z"}'::jsonb;
   response jsonb;
+  retry_http_id text := repeat('d',64);
 BEGIN
   IF (SELECT data->>'status' FROM public.kora_records
       WHERE collection='paid_attempts' AND id='a43-fin-attempt') <> 'reconciled_not_billed'
@@ -62,8 +70,14 @@ BEGIN
       WHERE workspace_id='kora') <> 0
   THEN RAISE EXCEPTION 'A4.3 case 1 setup/reconciliation mismatch'; END IF;
 
-  response := public.kora_article_generation_reserve(
-    'a4300000-0000-4000-8000-000000000002', signal_data, attempt
+  response := public.kora_http_idempotency_begin(
+    retry_http_id,'kora','a43-actor','POST /articles',repeat('2',64)
+  );
+  IF response->>'kind' <> 'claimed' THEN
+    RAISE EXCEPTION 'A4.3 case 1 retry HTTP claim failed: %',response;
+  END IF;
+  response := public.kora_article_generation_reserve_linked(
+    'a4300000-0000-4000-8000-000000000002', signal_data, attempt,retry_http_id
   );
   IF response->>'blocked' IS DISTINCT FROM 'busy' OR
      EXISTS (SELECT 1 FROM public.kora_records
@@ -95,7 +109,7 @@ BEGIN
   IF response->>'kind' <> 'claimed' THEN
     RAISE EXCEPTION 'A4.3 case 2 HTTP claim failed: %', response;
   END IF;
-  response := public.kora_article_generation_reserve(token, signal_data, attempt);
+  response := public.kora_article_generation_reserve_linked(token, signal_data, attempt,http_id);
   IF response->>'ok' <> 'true' THEN
     RAISE EXCEPTION 'A4.3 case 2 reservation failed: %', response;
   END IF;
@@ -129,9 +143,15 @@ BEGIN
   IF response->>'kind' <> 'pending' THEN
     RAISE EXCEPTION 'A4.3 case 2 HTTP retry was not blocked: %',response;
   END IF;
-  response := public.kora_article_generation_reserve(
+  response := public.kora_http_idempotency_begin(
+    repeat('e',64),'kora','a43-actor','POST /articles',repeat('4',64)
+  );
+  IF response->>'kind' <> 'claimed' THEN
+    RAISE EXCEPTION 'A4.3 case 2 retry HTTP claim failed: %',response;
+  END IF;
+  response := public.kora_article_generation_reserve_linked(
     'a4300000-0000-4000-8000-000000000004',signal_data,
-    attempt || '{"id":"a43-http-retry"}'::jsonb
+    attempt || '{"id":"a43-http-retry"}'::jsonb,repeat('e',64)
   );
   -- The original signal snapshot no longer matches because an article was linked.
   -- Either signal_changed or article_exists is a safe rejection.
