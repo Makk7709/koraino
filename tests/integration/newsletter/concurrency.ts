@@ -307,15 +307,17 @@ try {
 
   const crash = await fixture();
   const interrupted = mutation(crash, "Uncommitted edit");
-  const connection = await sql.reserve();
+  // Use a dedicated one-connection client: a reserved handle cannot reliably
+  // execute COMMIT after its socket has been terminated by another session.
+  const connection = postgres(pgUrl.href, { max: 1, connect_timeout: 5, idle_timeout: 5 });
   try {
     await connection`BEGIN`;
     const pid = (await connection`SELECT pg_backend_pid() AS pid`)[0]!["pid"] as number;
     await connection`SELECT public.kora_newsletter_commit(${jsonb(interrupted)}::jsonb)`;
-    await sql`SELECT pg_terminate_backend(${pid})`;
-    await assert.rejects(connection`COMMIT`);
+    const termination = await sql`SELECT pg_terminate_backend(${pid}, 5000) AS terminated`;
+    assert.equal(termination[0]!["terminated"], true);
   } finally {
-    connection.release();
+    await connection.end({ timeout: 1 });
   }
   assert.deepEqual(await read(crash), crash);
   assert.equal(
