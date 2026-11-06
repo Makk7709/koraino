@@ -144,8 +144,9 @@ export class DbRepository implements Repository {
         await db()
       )
         .rpc("kora_newsletter_commit" as never, { p_input: input } as never)
+        .retry(false)
         .abortSignal(AbortSignal.timeout(20_000));
-      if (error?.code === "40001") throw newsletterConflict();
+      if (error?.code === "PT409" || error?.code === "40001") throw newsletterConflict();
       const parsed = newsletterRecordSchema.safeParse(data);
       if (error || !parsed.success || parsed.data.id !== input.after.id)
         throw new Error(
@@ -163,7 +164,11 @@ export class DbRepository implements Repository {
       )
         .rpc("kora_signal_mutations_commit" as never, { p_changes: changes } as never)
         .abortSignal(AbortSignal.timeout(10_000));
-      if (error?.code === "40001" || error?.message === "signal transaction state changed")
+      if (
+        error?.code === "PT409" ||
+        error?.code === "40001" ||
+        error?.message === "signal transaction state changed"
+      )
         throw conflict(
           "version_mismatch",
           "Le dossier a changé pendant l'opération. Rechargez les données avant de réessayer.",

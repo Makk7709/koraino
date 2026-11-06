@@ -331,10 +331,24 @@ try {
   await rpc(mutation(lease, "Successor"));
   await assert.rejects(
     rpc(mutation(lease, "Expired owner")),
-    (err: unknown) => err instanceof Error && "code" in err && err.code === "40001",
+    (err: unknown) => err instanceof Error && "code" in err && err.code === "PT409",
   );
+  // Verify the PostgREST boundary itself: a stale revision must be a terminal
+  // HTTP 409, not serialization_failure (40001), which PostgREST 14 retries.
+  const staleRpc = await fetch(new URL("/rpc/kora_newsletter_commit", apiUrl), {
+    method: "POST",
+    signal: AbortSignal.timeout(5_000),
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env["SUPABASE_SERVICE_ROLE_KEY"]}`,
+    },
+    body: JSON.stringify({ p_input: mutation(lease, "Stale through PostgREST") }),
+  });
+  assert.equal(staleRpc.status, 409);
+  const staleError = z.object({ code: z.literal("PT409") }).parse(await staleRpc.json());
+  assert.equal(staleError.code, "PT409");
   assert.equal((await read(lease)).intro, "Successor");
-  report("expired application lease does not bypass CAS");
+  report("expired application lease does not bypass CAS; HTTP conflict is terminal");
 
   const merge = await fixture(true);
   const valid = mutation(merge, "Merge invalidates approval");

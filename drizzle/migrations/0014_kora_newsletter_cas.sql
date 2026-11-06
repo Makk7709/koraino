@@ -1,5 +1,7 @@
 -- P0-01: deploy with the matching API/UI, after A4.3, on an isolated copy first.
 -- Historical duplicates deliberately STOP migration; never delete evidence automatically.
+-- PT409 is a terminal business conflict. Never raise 40001 here: PostgREST 14
+-- treats serialization_failure as transient and can retry stale revisions indefinitely.
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM public.kora_records WHERE collection='publications'
     AND data->>'channel'='newsletter'
@@ -44,7 +46,7 @@ BEGIN
       OR (a->>'version')::numeric < 1 OR (a->>'version')::numeric > 9007199254740991
       OR (a->>'version')::numeric <> trunc((a->>'version')::numeric)
       OR (a->>'revision')::numeric <> COALESCE((b->>'revision')::numeric,0)+1
-    THEN RAISE EXCEPTION 'Newsletter state changed' USING ERRCODE='40001'; END IF;
+    THEN RAISE EXCEPTION 'Newsletter state changed' USING ERRCODE='PT409'; END IF;
     IF a->>'createdAt' IS DISTINCT FROM b->>'createdAt' OR a->>'createdBy' IS DISTINCT FROM b->>'createdBy' THEN
       RAISE EXCEPTION 'Newsletter creation metadata is immutable';
     END IF;
@@ -127,7 +129,7 @@ BEGIN
     (b<>'null'::jsonb AND v_current IS DISTINCT FROM b)
   THEN
     RAISE LOG '%', jsonb_build_object('event','kora.newsletter.cas_conflict','newsletterId',v_id);
-    RAISE EXCEPTION 'Newsletter state changed' USING ERRCODE='40001';
+    RAISE EXCEPTION 'Newsletter state changed' USING ERRCODE='PT409';
   END IF;
   IF b='null'::jsonb AND (a->>'version'<>'1' OR a->>'revision'<>'0'
       OR a->>'status' IS DISTINCT FROM 'composition' OR a->'approval' IS DISTINCT FROM 'null'::jsonb
