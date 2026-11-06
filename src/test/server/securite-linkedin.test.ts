@@ -416,12 +416,15 @@ describe("F4 — résolution réservée à l'auteur de la tentative ou à un adm
     expect(
       (
         await call("POST", "/newsletters/nl_current/approve", {
-          body: { version: nl.version },
+          body: { version: nl.version, revision: nl.revision },
           user: VALIDATOR,
         })
       ).status,
     ).toBe(200);
-    await call("POST", "/newsletters/nl_current/export", { user: VALIDATOR });
+    await call("POST", "/newsletters/nl_current/export", {
+      user: VALIDATOR,
+      body: { version: nl.version, revision: nl.revision + 1 },
+    });
     const exports = await call<PublicationAttempt[]>("GET", "/publications?channel=newsletter");
     expect(exports.body.find((p) => p.newsletterId === "nl_current")).toMatchObject({
       byUserId: VALIDATOR,

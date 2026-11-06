@@ -9,7 +9,14 @@ import type { GridRecord, ObservationRecord, SignalRecord } from "../store/recor
 import type { SignalMutation } from "../store/signal-mutations";
 import { collectAll, collectOne } from "../services/collection";
 import { audit } from "../services/journal";
-import { addItem, ensureCurrentEdition, removeItems, renumber } from "../services/newsletters";
+import {
+  addItem,
+  ensureCurrentEdition,
+  removeItems,
+  renumber,
+  touchEdition,
+  assertNotExported,
+} from "../services/newsletters";
 import { improveSummary } from "../services/summary-ai";
 import {
   activeGrid,
@@ -333,6 +340,7 @@ export const mergeSignals: Handler = async (ctx) => {
   }
   for (const edition of allNewsletters) {
     if (!edition.items.some((item) => item.signalId && removed.has(item.signalId))) continue;
+    assertNotExported(edition);
     let seen = edition.items.some((item) => item.signalId === target.id);
     const items = edition.items.flatMap((item) => {
       if (!item.signalId || !removed.has(item.signalId)) return [item];
@@ -344,7 +352,7 @@ export const mergeSignals: Handler = async (ctx) => {
       collection: "newsletters",
       id: edition.id,
       before: edition,
-      after: { ...edition, items: renumber(items) },
+      after: touchEdition({ ...edition, items: renumber(items) }, ctx.now),
     });
   }
   const merged: SignalRecord = {

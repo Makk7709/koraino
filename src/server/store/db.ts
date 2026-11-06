@@ -1,3 +1,9 @@
+import {
+  newsletterConflict,
+  newsletterRecordSchema,
+  type NewsletterMutationsRepository,
+} from "./newsletter-mutations";
+import { conflict } from "../http";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { parseIdempotencyClaim, type IdempotencyRecord } from "../services/http-idempotency";
 import {
@@ -132,6 +138,23 @@ export class DbRepository implements Repository {
   examples = new DbCollection<any>("examples");
   ruleProposals = new DbCollection<any>("ruleProposals");
   usage = new DbCollection<any>("usage");
+  newsletterMutations: NewsletterMutationsRepository = {
+    commit: async (input) => {
+      const { data, error } = await (
+        await db()
+      )
+        .rpc("kora_newsletter_commit" as never, { p_input: input } as never)
+        .retry(false)
+        .abortSignal(AbortSignal.timeout(20_000));
+      if (error?.code === "PT409" || error?.code === "40001") throw newsletterConflict();
+      const parsed = newsletterRecordSchema.safeParse(data);
+      if (error || !parsed.success || parsed.data.id !== input.after.id)
+        throw new Error(
+          "Atomic newsletter mutation failed: " + (error?.code ?? "invalid_response"),
+        );
+      return parsed.data;
+    },
+  };
   signalMutations: SignalMutationsRepository = {
     commit: async (changes) => {
       if (!changes.length || changes.length > 2000)
@@ -141,6 +164,15 @@ export class DbRepository implements Repository {
       )
         .rpc("kora_signal_mutations_commit" as never, { p_changes: changes } as never)
         .abortSignal(AbortSignal.timeout(10_000));
+      if (
+        error?.code === "PT409" ||
+        error?.code === "40001" ||
+        error?.message === "signal transaction state changed"
+      )
+        throw conflict(
+          "version_mismatch",
+          "Le dossier a changé pendant l'opération. Rechargez les données avant de réessayer.",
+        );
       if (error || data !== true)
         throw new Error("Atomic signal mutation failed: " + (error?.code ?? "invalid_response"));
     },
@@ -401,6 +433,8 @@ export class DbRepository implements Repository {
       if (ins.error) throw new Error(ins.error.message);
       const settings: Settings = {
         ...seed.settings,
+        // The SQL workspace is not the demonstration seed's ws_inovallee.
+        workspaceId: WORKSPACE,
         reservedEur: 0,
         notifiedAlerts: [],
       };

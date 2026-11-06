@@ -1,3 +1,4 @@
+import type { NewsletterMutationsRepository } from "./newsletter-mutations";
 import type { ArticleGenerationsRepository } from "./article-generations";
 import type { SignalMutationsRepository } from "./signal-mutations";
 import type { PaidAttemptsRepository } from "./paid-attempts";
@@ -59,6 +60,7 @@ export interface Repository {
   paidAttempts: PaidAttemptsRepository;
   articleGenerations: ArticleGenerationsRepository;
   signalMutations: SignalMutationsRepository;
+  newsletterMutations: NewsletterMutationsRepository;
   idempotency: IdempotencyRepository;
   audit: Collection<AuditEvent>;
   notifications: Collection<Notification>;

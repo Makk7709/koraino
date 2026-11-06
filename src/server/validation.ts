@@ -1,3 +1,4 @@
+import { newsletterExpectation } from "./store/newsletter-mutations";
 import { z } from "zod";
 import { badRequest } from "./http";
 import { CATEGORY_LABEL } from "./store/catalog";
@@ -186,7 +187,8 @@ export const schemas = {
     title: z.string().trim().min(1).max(200).optional(),
     weekOf: isoDate.optional(),
   }),
-  updateNewsletter: z.object({
+  newsletterExpectation,
+  updateNewsletter: newsletterExpectation.extend({
     title: z.string().trim().min(1).max(200).optional(),
     intro: z.string().trim().max(3000).optional(),
     items: z
@@ -200,8 +202,8 @@ export const schemas = {
       .max(100)
       .optional(),
   }),
-  newsletterItem: z
-    .object({ signalId: text(64).optional(), articleId: text(64).optional() })
+  newsletterItem: newsletterExpectation
+    .extend({ signalId: text(64).optional(), articleId: text(64).optional() })
     .refine((v) => !!v.signalId || !!v.articleId, "signalId ou articleId est requis"),
   createRule: z.object({ kind: z.enum(RULE_KINDS), text: text(500) }),
   updateRule: z.object({ text: text(500).optional(), active: z.boolean().optional() }),

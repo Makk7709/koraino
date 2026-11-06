@@ -12,7 +12,7 @@ import {
   Save,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { GhostButton, Pill, PrimaryButton } from "@/components/kora/primitives";
 import { NEWSLETTER_STATUS, formatDate, formatRelative } from "@/components/kora/labels";
 import { Input } from "@/components/ui/input";
@@ -83,13 +83,18 @@ export function EditionWorkspace({
   const [meta, setMeta] = useState<MetaEdits>({});
   const [summaries, setSummaries] = useState<Record<string, string>>({});
 
-  const items = sortItems(edition.items);
-  const title = meta.title ?? edition.title;
-  const intro = meta.intro ?? edition.intro;
+  const [draftBase, setDraftBase] = useState<NewsletterEdition | null>(null);
+  const working = draftBase ?? edition;
+  const expected = { version: working.version, revision: working.revision };
+  const remoteChanged = draftBase !== null && draftBase.revision !== edition.revision;
+  const beginEdit = () => setDraftBase((base) => base ?? edition);
+  const items = sortItems(working.items);
+  const title = meta.title ?? working.title;
+  const intro = meta.intro ?? working.intro;
   const summaryOf = (it: NewsletterItem) => summaries[it.id] ?? it.summary;
   const dirty =
-    title !== edition.title ||
-    intro !== edition.intro ||
+    title !== working.title ||
+    intro !== working.intro ||
     items.some((it) => summaryOf(it) !== it.summary);
   const approved = !!edition.approval?.valid && edition.approval.version === edition.version;
   const status = NEWSLETTER_STATUS[edition.status];
@@ -97,22 +102,42 @@ export function EditionWorkspace({
   const canEdit = perms.canWrite && !locked;
   const exportsQuery = usePublications({ channel: "newsletter" });
   const exports = (exportsQuery.data ?? []).filter((p) => p.newsletterId === edition.id);
-  const setEdition = (e: NewsletterEdition) =>
+  const setEdition = (e: NewsletterEdition) => {
     qc.setQueryData<NewsletterEdition[]>(qk.newsletters, (old) =>
       old?.map((x) => (x.id === e.id ? e : x)),
     );
+    setMeta({});
+    setSummaries({});
+    setDraftBase(null);
+  };
 
-  const recordExport = useKoraMutation(() => api.recordNewsletterExport(edition.id), {
+  const recordExport = useKoraMutation(() => api.recordNewsletterExport(edition.id, expected), {
     onSuccess: setEdition,
   });
-  const onExported = () => {
-    if (approved && !locked && perms.canValidate && !recordExport.isPending)
-      recordExport.mutate(undefined);
+  const onExported = (event: MouseEvent<HTMLAnchorElement>, format: "html" | "txt") => {
+    if (dirty || remoteChanged || busy) {
+      event.preventDefault();
+      return;
+    }
+    if (approved && !locked && perms.canValidate) {
+      event.preventDefault();
+      void recordExport
+        .mutateAsync(undefined)
+        .then((e) => {
+          window.location.assign(
+            downloadUrl.newsletter(e.id, format, { version: e.version, revision: e.revision }),
+          );
+        })
+        .catch(() => {
+          /* useKoraMutation displays the error; no download on conflict. */
+        });
+    }
   };
 
   const save = useKoraMutation(
     () =>
       api.updateNewsletter(edition.id, {
+        ...expected,
         title: title.trim(),
         intro,
         items: items.map((it, i) => ({ id: it.id, summary: summaryOf(it), order: i + 1 })),
@@ -123,30 +148,38 @@ export function EditionWorkspace({
         setEdition(e);
         setMeta({});
         setSummaries({});
+        setDraftBase(null);
       },
     },
   );
   const reorder = useKoraMutation(
     (ordered: NewsletterItem[]) =>
       api.updateNewsletter(edition.id, {
+        ...expected,
         items: ordered.map((it, i) => ({ id: it.id, summary: it.summary, order: i + 1 })),
       }),
     { success: "", onSuccess: setEdition },
   );
-  const add = useKoraMutation((ref: TopicRef) => api.addNewsletterItem(edition.id, ref), {
-    success: "Sujet ajouté à l'édition",
-    onSuccess: setEdition,
-  });
-  const remove = useKoraMutation((itemId: string) => api.removeNewsletterItem(edition.id, itemId), {
-    success: "Sujet retiré de l'édition",
-    onSuccess: (e) => {
-      setEdition(e);
-      setSummaries((s) =>
-        Object.fromEntries(Object.entries(s).filter(([id]) => e.items.some((i) => i.id === id))),
-      );
+  const add = useKoraMutation(
+    (ref: TopicRef) => api.addNewsletterItem(edition.id, { ...ref, ...expected }),
+    {
+      success: "Sujet ajouté à l'édition",
+      onSuccess: setEdition,
     },
-  });
-  const approve = useKoraMutation(() => api.approveNewsletter(edition.id, edition.version), {
+  );
+  const remove = useKoraMutation(
+    (itemId: string) => api.removeNewsletterItem(edition.id, itemId, expected),
+    {
+      success: "Sujet retiré de l'édition",
+      onSuccess: (e) => {
+        setEdition(e);
+        setSummaries((s) =>
+          Object.fromEntries(Object.entries(s).filter(([id]) => e.items.some((i) => i.id === id))),
+        );
+      },
+    },
+  );
+  const approve = useKoraMutation(() => api.approveNewsletter(edition.id, expected), {
     success: (e) => `Version ${e.version} approuvée`,
     onSuccess: setEdition,
   });
@@ -158,7 +191,13 @@ export function EditionWorkspace({
     next.splice(index + delta, 0, moved);
     reorder.mutate(next);
   };
-  const busy = reorder.isPending || remove.isPending || add.isPending || save.isPending;
+  const busy =
+    reorder.isPending ||
+    remove.isPending ||
+    add.isPending ||
+    save.isPending ||
+    approve.isPending ||
+    recordExport.isPending;
 
   const approveHint = locked
     ? "Édition exportée : elle n'est plus modifiable."
@@ -202,24 +241,24 @@ export function EditionWorkspace({
         <div className="mt-3.5 flex flex-wrap gap-2">
           <PrimaryButton
             className="flex-1"
-            disabled={!!approveHint || approve.isPending}
+            disabled={!!approveHint || busy || remoteChanged}
             title={approveHint ?? undefined}
             onClick={() => approve.mutate(undefined)}
           >
             <ShieldCheck className="size-4" /> Approuver la version {edition.version}
           </PrimaryButton>
           <GhostLink
-            href={downloadUrl.newsletter(edition.id, "html")}
+            href={downloadUrl.newsletter(edition.id, "html", expected)}
             download
-            onClick={onExported}
+            onClick={(e) => onExported(e, "html")}
             className="flex-1"
           >
             <FileCode2 className="size-4" /> Export HTML
           </GhostLink>
           <GhostLink
-            href={downloadUrl.newsletter(edition.id, "txt")}
+            href={downloadUrl.newsletter(edition.id, "txt", expected)}
             download
-            onClick={onExported}
+            onClick={(e) => onExported(e, "txt")}
             className="flex-1"
           >
             <FileText className="size-4" /> Export texte
@@ -244,6 +283,17 @@ export function EditionWorkspace({
         <div className="flex min-w-0 flex-col gap-4">
           <section className="kora-card p-4">
             <SectionTitle icon={ListOrdered}>Composition</SectionTitle>
+            {(remoteChanged || save.isError) && (
+              <Banner tone="danger" title="Enregistrement non effectué">
+                Vos saisies sont conservées ci-dessous. Une autre version peut être disponible.
+                Copiez les textes à conserver, puis utilisez Annuler pour recharger l&apos;édition.
+              </Banner>
+            )}
+            {dirty && (
+              <p className="mb-3 text-sm">
+                Enregistrez vos textes avant de réordonner, ajouter, retirer ou exporter un sujet.
+              </p>
+            )}
             {locked && (
               <Banner
                 tone="success"
@@ -269,8 +319,11 @@ export function EditionWorkspace({
                 <Input
                   id="nl-edit-title"
                   value={title}
-                  onChange={(e) => setMeta((m) => ({ ...m, title: e.target.value }))}
-                  readOnly={!canEdit}
+                  onChange={(e) => {
+                    beginEdit();
+                    setMeta((m) => ({ ...m, title: e.target.value }));
+                  }}
+                  readOnly={!canEdit || busy}
                   className={cn(inputClass, "h-10 text-[15px] font-semibold md:text-[15px]")}
                 />
               </Field>
@@ -278,8 +331,11 @@ export function EditionWorkspace({
                 <Textarea
                   id="nl-edit-intro"
                   value={intro}
-                  onChange={(e) => setMeta((m) => ({ ...m, intro: e.target.value }))}
-                  readOnly={!canEdit}
+                  onChange={(e) => {
+                    beginEdit();
+                    setMeta((m) => ({ ...m, intro: e.target.value }));
+                  }}
+                  readOnly={!canEdit || busy}
                   rows={4}
                   className={cn(inputClass, "min-h-[96px] leading-relaxed")}
                 />
@@ -296,33 +352,43 @@ export function EditionWorkspace({
                 <ItemsList
                   items={items}
                   summaries={summaries}
-                  onSummary={(id, s) => setSummaries((m) => ({ ...m, [id]: s }))}
-                  onMove={move}
-                  onRemove={(id) => remove.mutate(id)}
-                  busy={busy}
-                  readOnly={!canEdit}
+                  onSummary={(id, s) => {
+                    beginEdit();
+                    setSummaries((m) => ({ ...m, [id]: s }));
+                  }}
+                  onMove={(index, delta) => {
+                    if (!dirty && !remoteChanged) move(index, delta);
+                  }}
+                  onRemove={(id) => {
+                    if (!dirty && !remoteChanged) remove.mutate(id);
+                  }}
+                  busy={busy || dirty || remoteChanged}
+                  readOnly={!canEdit || busy}
                 />
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border/70 pt-3.5">
-              {dirty && (
+              {(dirty || remoteChanged) && (
                 <span className="mr-auto text-[11.5px] font-semibold text-kora-amber">
                   Modifications non enregistrées
                 </span>
               )}
-              {dirty && (
+              {(dirty || remoteChanged) && (
                 <GhostButton
                   disabled={save.isPending}
                   onClick={() => {
                     setMeta({});
                     setSummaries({});
+                    setDraftBase(null);
+                    save.reset();
+                    void qc.invalidateQueries({ queryKey: qk.newsletters });
                   }}
                 >
                   <RotateCcw className="size-4" /> Annuler
                 </GhostButton>
               )}
               <PrimaryButton
-                disabled={!dirty || !canEdit || !title.trim() || busy}
+                disabled={!dirty || !canEdit || !title.trim() || busy || remoteChanged}
                 onClick={() => save.mutate(undefined)}
               >
                 <Save className="size-4" /> Enregistrer la version {edition.version + 1}
@@ -335,7 +401,7 @@ export function EditionWorkspace({
             companies={companies}
             onAdd={(ref) => add.mutate(ref)}
             pending={busy}
-            disabled={!canEdit}
+            disabled={!canEdit || dirty || remoteChanged}
           />
         </div>
 

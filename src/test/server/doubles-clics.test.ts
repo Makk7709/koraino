@@ -61,22 +61,32 @@ describe("deux demandes simultanées : une seule création", () => {
     const [signalId] = await freeSignals(1);
     const before = (await repo.newsletters.get("nl_current"))!.items.length;
     const res = await twice(() =>
-      call("POST", "/newsletters/nl_current/items", { body: { signalId } }),
+      call("POST", "/newsletters/nl_current/items", {
+        body: { signalId, version: 6, revision: 0 },
+      }),
     );
     expect(statuses(res)).toEqual([201, 409]);
     expect((await repo.newsletters.get("nl_current"))!.items).toHaveLength(before + 1);
   });
 
-  it("newsletter : deux sujets ajoutés en même temps sont tous les deux conservés", async () => {
+  it("newsletter : deux ajouts obsolètes produisent un conflit puis une reprise explicite", async () => {
     const repo = await getRepository();
     const [a, b] = await freeSignals(2);
     const before = (await repo.newsletters.get("nl_current"))!.items.length;
     const res = await Promise.all(
       [a, b].map((signalId) =>
-        call("POST", "/newsletters/nl_current/items", { body: { signalId } }),
+        call("POST", "/newsletters/nl_current/items", {
+          body: { signalId, version: 6, revision: 0 },
+        }),
       ),
     );
-    expect(statuses(res)).toEqual([201, 201]);
+    expect(statuses(res)).toEqual([201, 409]);
+    const current = (await repo.newsletters.get("nl_current"))!;
+    const missing = [a, b].find((id) => !current.items.some((i) => i.signalId === id));
+    const retry = await call("POST", "/newsletters/nl_current/items", {
+      body: { signalId: missing, version: current.version, revision: current.revision ?? 0 },
+    });
+    expect(retry.status).toBe(201);
     const items = (await repo.newsletters.get("nl_current"))!.items;
     expect(items).toHaveLength(before + 2);
     expect(items.map((i) => i.signalId)).toEqual(expect.arrayContaining([a, b]));

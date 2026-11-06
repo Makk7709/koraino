@@ -87,7 +87,9 @@ export type ArticleRecord = Omit<Article, "wordpress"> & {
 
 export type LinkedInPostRecord = LinkedInPost & { createdBy: string };
 
-export type NewsletterRecord = Omit<NewsletterEdition, "scheduledFor"> & {
+export type NewsletterRecord = Omit<NewsletterEdition, "scheduledFor" | "revision"> & {
+  /** Legacy rows are read as revision 0. */
+  revision?: number;
   scheduledFor: string;
   createdBy: string;
 };

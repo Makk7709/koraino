@@ -163,7 +163,11 @@ describe("marqueur « [À vérifier] » : canaux", () => {
 
     const edition = await call<NewsletterEdition>("GET", "/newsletters/nl_current");
     const added = await call<NewsletterEdition>("POST", `/newsletters/${edition.body.id}/items`, {
-      body: { articleId: art.body.id },
+      body: {
+        articleId: art.body.id,
+        version: edition.body.version,
+        revision: edition.body.revision,
+      },
     });
     expect(added.status).toBe(201);
     const item = added.body.items.find((i) => i.articleId === art.body.id)!;

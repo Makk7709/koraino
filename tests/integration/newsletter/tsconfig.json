@@ -1,0 +1,5 @@
+{
+  "extends": "../../../tsconfig.json",
+  "include": ["concurrency.ts", "http-fixture.ts"],
+  "compilerOptions": { "types": ["node", "vite/client"] }
+}

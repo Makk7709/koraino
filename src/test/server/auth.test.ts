@@ -197,7 +197,7 @@ describe("mode supabase : session obligatoire", () => {
     });
     const approved = await call<NewsletterEdition>("POST", "/newsletters/nl_current/approve", {
       headers: bearer(token),
-      body: { version: edition.body.version },
+      body: { version: edition.body.version, revision: edition.body.revision },
     });
     expect(approved.body.status).toBe("approuvee");
     const publications = (await repo.publications.list()).length;
@@ -226,6 +226,7 @@ describe("mode supabase : session obligatoire", () => {
     );
     const recorded = await call<NewsletterEdition>("POST", "/newsletters/nl_current/export", {
       headers: bearer(token),
+      body: { version: approved.body.version, revision: approved.body.revision },
     });
     expect(recorded.body.status).toBe("exportee");
     expect(await repo.publications.list()).toHaveLength(publications + 1);

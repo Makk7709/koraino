@@ -515,7 +515,7 @@ export function GhostLink({
   href: string;
   children: ReactNode;
   download?: boolean;
-  onClick?: () => void;
+  onClick?: import("react").MouseEventHandler<HTMLAnchorElement>;
   className?: string;
 }) {
   return (
