@@ -19,6 +19,9 @@ for (const u of [pgUrl, apiUrl]) {
 }
 assert.equal(pgUrl.pathname, "/kora_a3_ci");
 const sql = postgres(pgUrl.href, { max: 6, connect_timeout: 5, idle_timeout: 5 });
+// postgres.js serializes jsonb parameters itself. Passing a JSON string would
+// persist a JSON scalar instead of the record object expected by the repository.
+const jsonb = (value: object) => sql.json(JSON.parse(JSON.stringify(value)) as postgres.JSONValue);
 const children: ChildProcess[] = [];
 const at = new Date().toISOString();
 let seq = 0;
@@ -129,7 +132,8 @@ async function fixture(approved = false): Promise<NewsletterRecord> {
         }
       : null,
   };
-  await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('newsletters',${e.id},${JSON.stringify(e)})`;
+  await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('newsletters',${e.id},${jsonb(e)})`;
+  assert.deepEqual(await read(e), e, "Newsletter fixture must round-trip as a JSON object");
   return e;
 }
 function mutation(before: NewsletterRecord, intro: string): NewsletterMutation {
@@ -151,7 +155,7 @@ function mutation(before: NewsletterRecord, intro: string): NewsletterMutation {
 async function rpc(m: NewsletterMutation) {
   return sql.begin(async (tx) => {
     await tx`SET LOCAL ROLE service_role`;
-    return tx`SELECT public.kora_newsletter_commit(${JSON.stringify(m)}::jsonb)`;
+    return tx`SELECT public.kora_newsletter_commit(${jsonb(m)}::jsonb)`;
   });
 }
 try {
@@ -167,12 +171,15 @@ try {
   }
   const seed = buildSeed(new Date());
   for (const user of seed.users)
-    await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('users',${user.id},${JSON.stringify(user)})`;
+    await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('users',${user.id},${jsonb(user)})`;
   const signals = seed.signals
     .slice(0, 2)
     .map((s, i) => ({ ...s, id: `nl_ci_signal_${i}`, articleId: null }));
   for (const signal of signals)
-    await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('signals',${signal.id},${JSON.stringify(signal)})`;
+    await sql`INSERT INTO public.kora_records(collection,id,data) VALUES ('signals',${signal.id},${jsonb(signal)})`;
+  const malformed = await sql`SELECT count(*)::integer AS n FROM public.kora_records
+    WHERE collection IN ('users','signals') AND jsonb_typeof(data) <> 'object'`;
+  assert.equal(malformed[0]!["n"], 0, "Fixture rows must contain JSON objects");
   const [a, b] = await Promise.all([start(), start()]);
   assert.notEqual(a.pid, b.pid);
   // Exercise first boot on the empty disposable workspace, rather than pre-seeding
@@ -287,7 +294,7 @@ try {
     version: rollback.version,
   };
   m.audit.action = "publication.success";
-  await sql`INSERT INTO public.kora_records(collection,id,data) VALUES('audit',${m.audit.id},${JSON.stringify(m.audit)})`;
+  await sql`INSERT INTO public.kora_records(collection,id,data) VALUES('audit',${m.audit.id},${jsonb(m.audit)})`;
   await assert.rejects(rpc(m));
   assert.deepEqual(await read(rollback), rollback);
   assert.equal(
@@ -304,7 +311,7 @@ try {
   try {
     await connection`BEGIN`;
     const pid = (await connection`SELECT pg_backend_pid() AS pid`)[0]!["pid"] as number;
-    await connection`SELECT public.kora_newsletter_commit(${JSON.stringify(interrupted)}::jsonb)`;
+    await connection`SELECT public.kora_newsletter_commit(${jsonb(interrupted)}::jsonb)`;
     await sql`SELECT pg_terminate_backend(${pid})`;
     await assert.rejects(connection`COMMIT`);
   } finally {
@@ -331,7 +338,7 @@ try {
 
   const merge = await fixture(true);
   const valid = mutation(merge, "Merge invalidates approval");
-  await sql`SELECT public.kora_signal_mutations_commit(${JSON.stringify([
+  await sql`SELECT public.kora_signal_mutations_commit(${jsonb([
     { collection: "newsletters", id: merge.id, before: merge, after: valid.after },
     { collection: "audit", id: valid.audit.id, before: null, after: valid.audit },
   ])}::jsonb)`;
