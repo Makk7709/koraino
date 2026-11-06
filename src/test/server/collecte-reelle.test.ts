@@ -837,7 +837,63 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
     });
     expect(updated.failureCode).not.toBe("23");
   });
-
+  it("réessaie après une TypeError réseau sans code (C01-T1)", async () => {
+    const source = await pasqalCommuniques();
+  
+    let fetchCalls = 0;
+  
+    const fetchMock = vi.fn(async () => {
+      fetchCalls += 1;
+  
+      if (fetchCalls === 1) {
+        throw new TypeError("Failed to fetch");
+      }
+  
+      return new Response(
+        `<?xml version="1.0"?>
+        <rss>
+          <channel>
+            <item>
+              <title>Pasqal publie une actualité</title>
+              <link>https://www.pasqal.com/actualite</link>
+              <pubDate>${new Date(NOW.getTime() - DAY).toUTCString()}</pubDate>
+            </item>
+          </channel>
+        </rss>`,
+        {
+          status: 200,
+          headers: { "content-type": "application/rss+xml" },
+        },
+      );
+    });
+  
+    vi.stubGlobal("fetch", fetchMock);
+  
+    const run = await call<CollectionRun>(
+      "POST",
+      `/sources/${source.id}/collect`,
+      { user: USERS.admin },
+    );
+  
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  
+    expect(run.body).toMatchObject({
+      status: "succes",
+      newObservations: 1,
+    });
+  
+    const sources = await call<Source[]>(
+      "GET",
+      "/sources?companyId=co_pasqal",
+    );
+  
+    expect(
+      sources.body.find((s) => s.id === source.id),
+    ).toMatchObject({
+      access: "ok",
+      attempts: 0,
+    });
+  });
 
   it("arrête les retries après MAX_ATTEMPTS (C01-02)", async () => {
     const source = await pasqalCommuniques();
