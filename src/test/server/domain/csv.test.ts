@@ -122,4 +122,9 @@ describe("toCsv - conservation des données", () => {
 
     expect(result).toContain(date.toISOString());
   });
+
+  it("neutralise une cellule qui commence par une tabulation, même sans formule", () => {
+    const result = toCsv(["nom"], [{ nom: "\tvaleur" }]);
+    expect(result).toBe("nom\r\n'\tvaleur\r\n");
+    });
 });
