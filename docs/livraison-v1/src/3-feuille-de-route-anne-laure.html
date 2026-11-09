@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>KORA — Livraison V1 — Feuille de route Anne-Laure</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="cover">
+  <div class="kicker">KORA Newsroom · Livraison V1 · Feuille de route</div>
+  <h1>Anne-Laure<br>Semaine du 9 au 13 novembre 2026</h1>
+  <div class="meta">
+    À lire avec le <b>plan commun</b> (périmètre, règles, ordre de fusion, recette).<br>
+    Aya est ta référente toute la semaine : si tu bloques plus de 30 minutes sur un point, appelle-la.
+  </div>
+</div>
+
+<h2 style="margin-top:4px">1. Ta semaine en bref</h2>
+
+<p>Tes trois correctifs font partie de la V1, et deux d'entre eux corrigent des anomalies classées <b>P1</b> (à corriger avant toute ouverture à des utilisateurs réels). Le fond de ton travail est bon et bien testé ; ce qui reste à faire, c'est surtout de <b>resserrer chaque PR sur son sujet</b> pour qu'elle passe la CI et se relise facilement.</p>
+
+<table>
+  <tr><th style="width:15%">Quand</th><th style="width:30%">PR</th><th>Ce qu'il reste à faire</th></tr>
+  <tr><td>Lundi 10 h</td><td>Relire la PR 0 d'Aya</td><td>Grille de relecture du plan commun (section 14). 20 minutes.</td></tr>
+  <tr><td>Lundi 10 h 30</td><td><b>P2-09</b> — fausse source directe</td><td>Corriger aussi <code>evidence.ts</code>, ajouter un test, mettre à jour <code>docs/11</code> et quatre autres documents, ouvrir la PR.</td></tr>
+  <tr><td>Lundi 14 h</td><td><a href="https://github.com/Makk7709/koraino/pull/5"><b>#5</b></a> — exports CSV (P1-06)</td><td>Mettre la branche à jour, retirer ce qui est hors sujet, corriger le cas de la tabulation, mettre à jour <code>docs/11</code>.</td></tr>
+  <tr><td>Mardi 9 h</td><td>Relecture de #5 et P2-09 avec Aya</td><td>Présenter chaque PR en 5 minutes (section 6).</td></tr>
+  <tr><td>Mardi, après la fusion de #5</td><td>Mise à jour de P2-09</td><td>Un conflit certain sur <code>docs/11</code>, résolution exacte en 3.2, étape 5.</td></tr>
+  <tr><td>Mardi 14 h</td><td><a href="https://github.com/Makk7709/koraino/pull/1"><b>#1</b></a> — sorties HTTP (P1-08)</td><td>Mettre à jour, résoudre un conflit de test, retirer les fichiers générés, formater, documenter les nouveaux codes d'erreur.</td></tr>
+  <tr><td>Mercredi 9 h</td><td>Test de collecte de #1 avec Aya</td><td>Tu conduis le test comparatif (plan commun, section 9).</td></tr>
+  <tr><td>Mercredi après-midi</td><td>Relire #3 d'Aya ; préparer la recette</td><td>Grille de relecture ; feuille de recette.</td></tr>
+  <tr><td>Jeudi</td><td>Recette</td><td>Partie locale le matin, partie production l'après-midi.</td></tr>
+</table>
+
+<h2>2. Avant de commencer (lundi, 15 minutes)</h2>
+
+<h3>2.1 Pourquoi tes CI étaient rouges</h3>
+<p>Ce n'était pas ton code. Sur <code>main</code>, ESLint échoue sur des fichiers <b>régénérés automatiquement par la plateforme</b> (<code>src/integrations/supabase/*</code>, <code>src/integrations/lovable/appUserConnector.ts</code>). Pour avoir une CI verte, tu les as reformatés dans chaque branche : c'était logique, mais ces fichiers sont réécrits par la plateforme à chaque synchronisation, et ce reformatage crée du bruit et des conflits. Lundi matin, la PR 0 d'Aya règle le problème une fois pour toutes sur <code>main</code>. Ensuite, tes branches doivent revenir à la version de <code>main</code> pour tous les fichiers qui ne concernent pas leur sujet.</p>
+
+<h3>2.2 Les règles qui comptent pour toi cette semaine</h3>
+<ul>
+  <li><b>Mettre une branche à jour = <code>git fetch origin</code> puis <code>git merge origin/main --no-edit</code>.</b> Jamais <code>git rebase</code>, jamais <code>git push --force</code>, jamais <code>git commit --amend</code> sur un commit déjà poussé. (Sans <code>--no-edit</code>, Git ouvre un éditeur dans le terminal pour le message. Si ça arrive, accepte le message proposé : dans vim, tape <code>:wq</code> puis Entrée ; dans nano, Ctrl+X.)</li>
+  <li><b>Si Git annonce un conflit qui n'est pas prévu dans ce document : <code>git merge --abort</code></b> (rien n'est perdu) et appelle Aya. Les conflits prévus sont tous décrits ici, avec leur résolution exacte.</li>
+  <li><b>Tu nommes toujours les fichiers que tu valides</b> : <code>git add &lt;fichier&gt;</code>. Jamais <code>git add -A</code>, <code>git add .</code> ni <code>git commit -a</code>. Avant chaque commit : <code>git status</code>. Si <code>.env</code> y apparaît, <code>git restore .env</code> et préviens Aya : ce fichier est versionné, et une clé ajoutée dedans serait publiée sur GitHub.</li>
+  <li><b>En local, toujours <code>SUPABASE_URL= bun run dev</code></b>, jamais <code>bun run dev</code> seul : le <code>.env</code> contient l'adresse de la base de production.</li>
+  <li><b>Rien dans l'éditeur de la plateforme</b> cette semaine : tout passe par une branche et une PR.</li>
+  <li><b>Une PR ne contient que son sujet.</b> Pas de reformatage d'autres fichiers, pas de changement de version de dépendance, pas de fichier de <code>src/integrations/</code>.</li>
+  <li><b>Ne jamais supprimer un test qui gêne</b> : comprendre pourquoi il échoue, puis corriger le code ou l'attendu, et l'expliquer dans le commit. (Tu l'as très bien fait le 6 novembre en rétablissant ton test.)</li>
+  <li><b>Garde ta méthode</b> : test rouge, correction minimale, test vert, un commit par étape. C'est exactement ce qu'on attend.</li>
+  <li><b>Messages de commit en français</b>, qui disent ce qui change et pourquoi, sans fautes de frappe (relis avant de valider). Aucune mention d'outil de génération de code.</li>
+</ul>
+
+<h3>2.3 Environnement</h3>
+<div class="box warn"><span class="t">À faire une seule fois, avant toute commande de ce document</span>
+Les commandes de ce document portent des commentaires en fin de ligne (<code># doit afficher 30</code>…). Par défaut, le terminal zsh de macOS ne les reconnaît pas : il les passe à la commande, qui échoue (<code>git commit --no-edit  # termine la fusion</code> donnerait une erreur). Lance une fois :
+<pre style="margin-bottom:0">echo 'setopt interactivecomments' &gt;&gt; ~/.zshrc &amp;&amp; source ~/.zshrc</pre>
+Et quand tu copies depuis ce PDF : un bloc à la fois, puis compare le résultat à ce qui est annoncé en commentaire avant de passer au suivant.</div>
+<pre>source ~/.nvm/nvm.sh &amp;&amp; nvm use 24     <span class="c"># Node 24</span>
+bun --version                           <span class="c"># 1.2.19 attendu</span>
+
+<span class="c"># Les cinq contrôles à lancer avant chaque push (branche à jour avec main)</span>
+git fetch origin
+bun install --frozen-lockfile
+bunx tsc --noEmit -p .              <span class="c"># 1. aucune erreur</span>
+bun run lint                        <span class="c"># 2. 0 erreur ; 6 avertissements react-refresh connus, à ignorer</span>
+bun --no-env-file run test          <span class="c"># 3. tous verts</span>
+bun --no-env-file run build         <span class="c"># 4. build OK</span>
+<span class="c"># 5. Hygiène du diff : chacune des quatre commandes ne doit RIEN afficher</span>
+git diff --check origin/main
+git diff origin/main --name-only | grep -E '^(\.env|drizzle/|db/|supabase/|src/integrations/)'
+git diff origin/main | grep '^+' | grep -i -E 'cursor|grok|chatgpt|claude|codex|copilot|gemini'
+git log origin/main..HEAD --format=%B | grep -i -E 'cursor|grok|chatgpt|claude|codex|copilot|gemini|co-authored'</pre>
+<p class="small">Le contrôle 5 attrape ce que les tests ne voient pas : espace en fin de ligne, marqueur de conflit oublié dans un document, fichier interdit, mention d'outil de génération de code. S'il affiche quelque chose, corrige avant de pousser, ou demande à Aya.</p>
+
+<h2>3. Tâche 1 — P2-09 : fausse « source directe » (lundi matin)</h2>
+
+<h3>3.1 Le problème, en entier</h3>
+<p>Ta branche <code>AL_P2-09_fausse_source_directe</code> corrige le test dans le collecteur (flux « propre » de l'entreprise). Mais l'anomalie P2-09 de <code>docs/11</code> signale le <b>même défaut</b> à un deuxième endroit : l'indicateur documentaire, dans <code>src/server/domain/evidence.ts</code> ligne 61. C'est lui qui affiche « source directe » sur un signal :</p>
+<pre>const isDirect = (o: Observation) =&gt;
+  !!company &amp;&amp; (o.outlet.domain === company.domain || hostOf(o.url).endsWith(company.domain));</pre>
+<p>Avec ce code, un article de <code>notpasqal.com</code> compte comme source officielle de Pasqal. On corrige les deux endroits avec <b>une seule fonction</b>, pour ne pas dupliquer la règle.</p>
+
+<h3>3.2 Les étapes</h3>
+<pre>git fetch origin
+git switch AL_P2-09_fausse_source_directe
+git pull --ff-only</pre>
+
+<p><b>Étape 1 — le test rouge.</b> Crée <code>src/test/server/domain/evidence.test.ts</code> :</p>
+<pre>import { describe, expect, it } from "vitest";
+
+import type { Observation } from "@/lib/api/types";
+import { computeEvidence, isCompanyHost } from "../../../server/domain/evidence";
+
+const NOW = new Date("2026-11-09T09:00:00.000Z");
+
+function observation(url: string, outletDomain: string): Observation {
+  return {
+    id: `obs_${outletDomain}`,
+    signalId: null,
+    sourceId: null,
+    companyId: "co_pasqal",
+    outlet: { name: outletDomain, domain: outletDomain, brand: { initials: "X", bg: "", fg: "" } },
+    url,
+    title: "Pasqal annonce un partenariat",
+    excerpt: "",
+    collectedAt: NOW.toISOString(),
+    publishedAt: NOW.toISOString(),
+    eventDate: null,
+    matchConfidence: 90,
+    isSyndicated: false,
+  };
+}
+
+describe("source directe (P2-09)", () =&gt; {
+  it("reconnaît le domaine et ses sous-domaines, pas un domaine qui se termine pareil", () =&gt; {
+    expect(isCompanyHost("pasqal.com", "pasqal.com")).toBe(true);
+    expect(isCompanyHost("blog.pasqal.com", "pasqal.com")).toBe(true);
+    expect(isCompanyHost("pasqal.com", "www.pasqal.com")).toBe(true);
+    expect(isCompanyHost("notpasqal.com", "pasqal.com")).toBe(false);
+    expect(isCompanyHost("pasqal.com", "")).toBe(false);
+  });
+
+  it("ne compte pas notpasqal.com comme source officielle de pasqal.com", () =&gt; {
+    const company = { name: "Pasqal", domain: "pasqal.com" };
+    const impostor = observation("https://notpasqal.com/actualite", "notpasqal.com");
+    expect(computeEvidence([impostor], company, NOW).directSource).toBe(false);
+
+    const official = observation("https://www.pasqal.com/fr/actualites/x", "pasqal.com");
+    expect(computeEvidence([official], company, NOW).directSource).toBe(true);
+  });
+});</pre>
+<pre>bunx vitest run src/test/server/domain/evidence.test.ts   <span class="c"># doit échouer : isCompanyHost n'existe pas encore</span>
+git add src/test/server/domain/evidence.test.ts
+git commit -m "Test : un domaine qui se termine comme celui de l'entreprise n'est pas une source directe (rouge)"</pre>
+
+<p><b>Étape 2 — la correction.</b> Dans <code>src/server/domain/evidence.ts</code>, juste au-dessus de <code>export function hostOf</code>, ajoute :</p>
+<pre>/** Vrai si `host` est le domaine de l'entreprise ou l'un de ses sous-domaines (« notpasqal.com » n'est pas « pasqal.com »). */
+export function isCompanyHost(host: string, domain: string): boolean {
+  const d = domain.toLowerCase().replace(/^www\./, "");
+  return d !== "" &amp;&amp; (host === d || host.endsWith(`.${d}`));
+}</pre>
+<p>Puis, ligne 61, remplace <code>hostOf(o.url).endsWith(company.domain)</code> par <code>isCompanyHost(hostOf(o.url), company.domain)</code>.</p>
+<p>Dans <code>src/server/adapters/collector.ts</code>, ajoute l'import en tête (à côté des autres imports de <code>../domain/</code>) :</p>
+<pre>import { isCompanyHost } from "../domain/evidence";</pre>
+<p>et remplace tes trois lignes</p>
+<pre>const host = hostOf(url);
+const domain = company.domain.replace(/^www\./, "");
+const own = host === domain || host.endsWith(`.${domain}`);</pre>
+<p>par une seule :</p>
+<pre>const own = isCompanyHost(hostOf(url), company.domain);</pre>
+
+<pre><span class="c"># Formatage (retire aussi la double ligne vide de ton test de collecte)</span>
+bunx eslint --fix src/server/domain/evidence.ts src/server/adapters/collector.ts \
+  src/test/server/domain/evidence.test.ts src/test/server/collecte-reelle.test.ts
+bunx vitest run src/test/server/domain/evidence.test.ts src/test/server/collecte-reelle.test.ts
+git status                              <span class="c"># attendu : les 4 fichiers ci-dessous, et rien d'autre</span>
+git add src/server/domain/evidence.ts src/server/adapters/collector.ts \
+  src/test/server/domain/evidence.test.ts src/test/server/collecte-reelle.test.ts
+git commit -m "Source directe : même règle de domaine pour le collecteur et l'indicateur documentaire (P2-09)"</pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Ces modifications, appliquées à ta branche : TypeScript OK, lint 0 erreur, tous les tests verts (dont les 2 nouveaux et ton test <code>notkalray.eu</code>).</div>
+
+<p><b>Étape 3 — <code>docs/11-anomalies-connues.md</code>.</b> L'anomalie n'est corrigée qu'en partie : le filtre par nom des flux généralistes reste approximatif. La règle du document : une entrée partiellement corrigée ne décrit plus que ce qui reste vrai.</p>
+<ul>
+  <li>Dans le tableau « Signaux, score et indicateur documentaire », remplace la ligne P2-09 par :</li>
+</ul>
+<pre>| P2-09 | **Filtre par nom des flux généralistes approximatif.** Quand un flux n'appartient pas à l'entreprise, `RealCollector` garde ses entrées par une simple recherche de sous-chaîne du nom ou des alias : sensible aux accents et sans frontière de mot, un nom court produit de faux rattachements ; la règle diffère de `matchCompany`. | [`collector.ts`](../src/server/adapters/collector.ts) (`RealCollector`) | Réutiliser la comparaison de `matchCompany` pour ce filtre. | 9/11 |</pre>
+<ul>
+  <li>Dans « Corrigées depuis la consolidation », ajoute :</li>
+</ul>
+<pre>| P2-09 (partiel) | Le test `hostOf(url).endsWith(company.domain)` oubliait le point : « notpasqal.com » comptait comme source officielle de « pasqal.com », dans l'indicateur documentaire et pour décider si un flux appartient à l'entreprise. | Une seule règle, `isCompanyHost` : le domaine exact ou un sous-domaine (`.domaine`). Corrigé le 9 novembre 2026. | [`evidence.ts`](../src/server/domain/evidence.ts), [`collector.ts`](../src/server/adapters/collector.ts) |</pre>
+<p>Ajoute-la <b>juste sous la ligne de séparation</b> (<code>|---|---|---|---|</code>) du tableau « Corrigées depuis la consolidation », en première ligne.</p>
+
+<p><b>Quatre autres documents décrivent l'ancien test</b> et deviendraient faux. Remplacements exacts (cherche le texte de gauche avec Cmd+F) :</p>
+<table>
+  <tr><th style="width:22%">Fichier</th><th style="width:39%">Remplacer</th><th>Par</th></tr>
+  <tr><td><code>docs/05-regles-metier.md</code>, puce « Source directe »</td><td>ou que l'hôte de l'URL se termine par ce domaine.</td><td>ou que l'hôte de l'URL est ce domaine ou l'un de ses sous-domaines (`isCompanyHost` : `pasqal.com` ou `blog.pasqal.com`, jamais `notpasqal.com`).</td></tr>
+  <tr><td><code>docs/06-securite-et-flux-tiers.md</code>, paragraphe qui commence par « Le collecteur décide aussi »</td><td>Tout le paragraphe (une seule ligne).</td><td>Le collecteur décide aussi qu'un flux est celui de l'entreprise si son hôte est le domaine de l'entreprise ou l'un de ses sous-domaines (`isCompanyHost`) : `notpasqal.com` n'est pas le site de `pasqal.com`, et ses entrées passent par le filtre par nom. L'indicateur documentaire reconnaît une source directe par la même règle (voir [Indicateur documentaire](05-regles-metier.md#indicateur-documentaire)).</td></tr>
+  <tr><td><code>docs/03-reference-api.md</code>, point 4 de la collecte</td><td>(test `hostOf(url).endsWith(company.domain)`, sans point de séparation)</td><td>(domaine exact ou sous-domaine, `isCompanyHost`)</td></tr>
+  <tr><td><code>docs/04-dictionnaire-des-donnees.md</code>, point 28</td><td>Tout le point 28 (une seule ligne, qui commence par « 28. **Test de domaine sans point** »).</td><td>28. **Test de domaine sans point** : corrigé le 9 novembre 2026. Le collecteur et l'indicateur documentaire utilisent `isCompanyHost` ([`domain/evidence.ts`](../src/server/domain/evidence.ts)), qui exige le domaine exact ou `.<domaine>`, comme `matchCompany`.</td></tr>
+</table>
+<pre><span class="c"># Contrôle : une seule ligne doit sortir, ta ligne « P2-09 (partiel) » de docs/11</span>
+grep -rn "endsWith(company.domain)\|point de séparation" docs src
+git status                              <span class="c"># 5 fichiers de docs modifiés, rien d'autre</span>
+git add docs/03-reference-api.md docs/04-dictionnaire-des-donnees.md docs/05-regles-metier.md \
+  docs/06-securite-et-flux-tiers.md docs/11-anomalies-connues.md
+git commit -m "Documentation : P2-09 partiellement corrigée, règle isCompanyHost"</pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Ces cinq modifications de documentation, rejouées sur une copie : aucun conflit avec #1, et la commande de contrôle ne renvoie que la ligne attendue.</div>
+
+<p><b>Étape 4 — lundi, après la fusion de la PR 0 (vers 12 h) : mise à jour et PR.</b></p>
+<pre>git fetch origin
+git merge origin/main --no-edit         <span class="c"># pas de conflit attendu</span>
+<span class="c"># les cinq contrôles (section 2.3) : tout doit passer, lint compris</span>
+git diff origin/main --stat             <span class="c"># attendu : 9 fichiers (collector.ts, evidence.ts, 2 tests, docs 03, 04, 05, 06, 11)</span>
+git push</pre>
+<p>Puis ouvre la PR sur GitHub (base <code>main</code>) avec le modèle de description du plan commun (section 7). Titre proposé : <i>« P2-09 : un domaine qui se termine comme celui de l'entreprise n'est plus une source directe »</i>. Demande la relecture d'Aya.</p>
+
+<p><b>Étape 5 — mardi, dès qu'Aya a fusionné #5 : remettre P2-09 à jour.</b> Ce conflit est <b>certain</b> : ta PR #5 et P2-09 ajoutent chacune une ligne juste sous l'en-tête du tableau « Corrigées » de <code>docs/11</code>.</p>
+<pre>git switch AL_P2-09_fausse_source_directe
+git fetch origin
+git merge origin/main --no-edit
+<span class="c"># attendu : « CONFLICT (content): Merge conflict in docs/11-anomalies-connues.md », et aucun autre</span></pre>
+<p>Ouvre <code>docs/11-anomalies-connues.md</code> et cherche <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>. Tu dois voir exactement ceci (lignes raccourcies) :</p>
+<pre>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+| P2-09 (partiel) | Le test `hostOf(url).endsWith(company.domain)` oubliait le point …
+&#61;======
+| P1-06 | La neutralisation des formules ne s'appliquait qu'aux valeurs de type chaîne …
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; origin/main</pre>
+<p>Supprime <b>seulement les trois lignes de marqueurs</b> (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code>, <code>=======</code>, <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt; origin/main</code>) et garde les deux lignes de tableau, l'une sous l'autre.</p>
+<pre>grep -n -E '^(<<<<<<<|=======$|>>>>>>>)' docs/11-anomalies-connues.md   <span class="c"># ne doit RIEN afficher</span>
+grep -c '^| P2-09 (partiel)\|^| P1-06 |' docs/11-anomalies-connues.md    <span class="c"># doit afficher 2</span>
+git add docs/11-anomalies-connues.md
+git commit --no-edit
+<span class="c"># les cinq contrôles, puis :</span>
+git push</pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Rejoué sur une copie : c'est le seul conflit, il a exactement cette forme, et après résolution 629 tests passent.</div>
+
+<h2>4. Tâche 2 — PR #5 : exports CSV, P1-06 (lundi après-midi)</h2>
+
+<p>À faire <b>après</b> la fusion de la PR 0. Ton correctif dans <code>csv.ts</code> est bon. Il reste trois choses : remettre la branche à jour, retirer tout ce qui est hors sujet, et corriger une petite régression.</p>
+
+<h3>4.1 Mise à jour et nettoyage</h3>
+<pre>git fetch origin
+git ls-tree origin/main .github/workflows/ci.yml   <span class="c"># doit afficher une ligne : la PR 0 est fusionnée. Vide : STOP, attendre Aya</span>
+git switch AL_P1-06_correction_neutralisation_CSV
+git pull --ff-only
+git status                              <span class="c"># « nothing to commit, working tree clean » attendu avant de commencer</span>
+
+<span class="c"># Temps 1 : la fusion</span>
+git merge origin/main --no-edit
+<span class="c"># 4 conflits attendus, et aucun autre :</span>
+<span class="c">#   .github/workflows/ci.yml                         (ajouté des deux côtés)</span>
+<span class="c">#   docs/11-anomalies-connues.md</span>
+<span class="c">#   src/integrations/supabase/previewAuthStorage.ts</span>
+<span class="c">#   src/server/adapters/openai.ts</span>
+<span class="c"># Les 4 reprennent la version de main (ta ligne P1-06 de docs/11 sera réécrite en 4.3)</span>
+git checkout origin/main -- .github/workflows/ci.yml docs/11-anomalies-connues.md \
+  src/integrations/supabase/previewAuthStorage.ts src/server/adapters/openai.ts
+git status                              <span class="c"># plus aucune ligne « both modified » ni « both added »</span>
+git commit --no-edit                    <span class="c"># termine la fusion</span>
+
+<span class="c"># Temps 2 : le reste du hors-sujet reprend la version de main (et l'erreur « let timer » disparaît)</span>
+git checkout origin/main -- src/integrations src/server/connectionKeyCrypto.ts \
+  src/test/server/budget.test.ts package.json bun.lock
+git status                              <span class="c"># seulement des fichiers de cette liste, en vert</span>
+git commit -m "Fichiers hors sujet remis à l'identique de main"
+
+bun install --frozen-lockfile
+<span class="c"># les cinq contrôles (section 2.3)</span>
+git diff origin/main --stat             <span class="c"># attendu : csv.ts et csv.test.ts, rien d'autre</span></pre>
+<p class="small">Pourquoi deux temps : <code>git commit --no-edit</code> ne sert qu'à terminer une fusion en cours. Séparer la fusion du nettoyage évite un commit raté si Git n'a pas laissé de fusion en cours. Si le temps 2 répond « nothing to commit », c'est que tout était déjà propre : passe à la suite.</p>
+
+<div class="box info"><span class="t">Pourquoi on remet <code>package.json</code> et <code>bun.lock</code> comme sur <code>main</code></span>
+Ta branche figeait les versions de <code>drizzle-kit</code> et <code>drizzle-orm</code>. C'est peut-être une bonne idée, mais elle n'a rien à voir avec les exports CSV : elle mérite sa propre PR, avec une explication. Pareil pour la CI : elle arrive avec la PR 0.</div>
+
+<h3>4.2 La régression de la tabulation</h3>
+<p>Avant ta PR, une cellule qui commençait par une tabulation était toujours préfixée (le caractère <code>\t</code> figurait dans l'expression). Dans ta version, <code>trimStart()</code> retire la tabulation <b>avant</b> le test : <code>"\tvaleur"</code> n'est plus préfixée. Les recommandations sur l'injection de formules demandent de neutraliser aussi une cellule qui commence par une tabulation ou un retour chariot.</p>
+
+<p><b>Test rouge</b> : dans <code>src/test/server/domain/csv.test.ts</code>, dans le premier <code>describe</code>, ajoute :</p>
+<pre>it("neutralise une cellule qui commence par une tabulation, même sans formule", () =&gt; {
+  const result = toCsv(["nom"], [{ nom: "\tvaleur" }]);
+
+  expect(result).toBe("nom\r\n'\tvaleur\r\n");
+});</pre>
+<pre>bunx vitest run src/test/server/domain/csv.test.ts      <span class="c"># 1 échec attendu</span>
+git add src/test/server/domain/csv.test.ts
+git commit -m "Test : une cellule qui commence par une tabulation est neutralisée (rouge)"</pre>
+
+<p><b>Correction</b> : dans <code>sanitizeString</code> de <code>src/server/domain/csv.ts</code>, remplace</p>
+<pre>const trimmed = value.trimStart();
+if (/^[=+\-@\t\r]/.test(trimmed)) {</pre>
+<p>par</p>
+<pre>if (/^[\t\r]/.test(value) || /^[=+\-@]/.test(value.trimStart())) {</pre>
+<pre>bunx vitest run src/test/server/domain/csv.test.ts      <span class="c"># 20 tests verts</span>
+git add src/server/domain/csv.ts
+git commit -m "CSV : une tabulation ou un retour chariot en tête de cellule reste neutralisé"</pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Sur ta branche, ce test échoue sans la correction (19 verts, 1 rouge) et passe avec (20 verts).</div>
+
+<h3>4.3 Documentation</h3>
+<p>Dans <code>docs/11-anomalies-connues.md</code> (version de <code>main</code>, que tu viens de reprendre) :</p>
+<ul>
+  <li>supprime la ligne P1-06 du tableau P1 ;</li>
+  <li>ajoute dans « Corrigées depuis la consolidation » :</li>
+</ul>
+<pre>| P1-06 | La neutralisation des formules ne s'appliquait qu'aux valeurs de type chaîne : un tableau (alias, thématiques) dont le premier élément était `=HYPERLINK(…)` passait tel quel. | Neutralisation des chaînes et des tableaux, y compris derrière des espaces ; une cellule qui commence par une tabulation ou un retour chariot est toujours préfixée ; les nombres ne sont pas modifiés. Corrigé le 10 novembre 2026. | [`csv.ts`](../src/server/domain/csv.ts), [`csv.test.ts`](../src/test/server/domain/csv.test.ts) |</pre>
+<p>Comme pour P2-09, la ligne P1-06 se place juste sous la ligne de séparation <code>|---|---|---|---|</code> du tableau « Corrigées ».</p>
+<pre>git add docs/11-anomalies-connues.md
+git commit -m "Documentation : P1-06 corrigée"
+<span class="c"># les cinq contrôles</span>
+git diff origin/main --stat             <span class="c"># csv.ts, csv.test.ts, docs/11 : 3 fichiers</span>
+git push</pre>
+<p>Mets à jour la description de la PR : ajoute la correction de la tabulation, et retire la mention « ajout de la CI ». Demande la relecture d'Aya.</p>
+
+<h2>5. Tâche 3 — PR #1 : sorties HTTP du collecteur, P1-08 (mardi après-midi)</h2>
+
+<p>À faire <b>après</b> la fusion de #5 et de P2-09 (mardi midi). C'est ta plus grosse PR et elle est solide : 635 tests verts, aucune logique à reprendre. Ce qu'il reste, c'est du rangement et un peu de documentation.</p>
+
+<h3>5.1 Mise à jour</h3>
+<pre>git fetch origin
+git switch fix_C01_Securiser_les_sorties_HTTP_du_collecteur
+git pull --ff-only
+git status                              <span class="c"># « working tree clean » attendu</span>
+git merge origin/main --no-edit
+<span class="c"># attendu : « CONFLICT (content): Merge conflict in src/test/server/collecte-reelle.test.ts », et aucun autre</span></pre>
+
+<div class="box warn"><span class="t">Ce conflit est piégeux : ne le résous pas à la main</span>
+Git le découpe en deux morceaux imbriqués (vers les lignes 561 et 622), dont l'un englobe plus de 300 lignes de tes tests C01. Garder « un côté » ou « les deux » à la main fait facilement perdre ou dupliquer des tests sans que tout casse. La méthode ci-dessous a été rejouée et vérifiée : on part de ta version complète du fichier, et on y recolle le seul test apporté par P2-09.</div>
+
+<pre><span class="c"># 1. Reprendre ta version complète du fichier (tous tes tests C01)</span>
+git checkout --ours src/test/server/collecte-reelle.test.ts
+
+<span class="c"># 2. Extraire le test de P2-09 depuis main, dans un fichier temporaire hors du dépôt</span>
+<span class="c">#    (commande sur 5 lignes : copie-la en entier, d'un seul bloc)</span>
+git show origin/main:src/test/server/collecte-reelle.test.ts | awk '
+  /un domaine qui se termine par le domaine officiel/ { p = 1; match($0, /^ */); n = RLENGTH }
+  p { print }
+  p &amp;&amp; /^ *}\);$/ { match($0, /^ */); if (RLENGTH == n) exit }
+' &gt; /tmp/test-p209.txt
+wc -l &lt; /tmp/test-p209.txt              <span class="c"># doit afficher 30</span>
+head -1 /tmp/test-p209.txt              <span class="c"># it("ne considère pas un domaine qui se termine par le domaine officiel…</span></pre>
+<p><b>3. Recoller ce test au bon endroit.</b> Ouvre <code>src/test/server/collecte-reelle.test.ts</code> et cherche <code>describe("C01 · intégration collecte (exercice 4b)"</code>. Deux lignes plus haut se trouve une ligne <code>});</code> seule, au début de la ligne : c'est la fin du bloc <code>describe("collecte réelle : flux des entreprises"</code>. Place-toi sur une ligne vide <b>juste au-dessus de ce <code>});</code></b> et colle tout le contenu de <code>/tmp/test-p209.txt</code> (il commence par <code>it("ne considère pas un domaine…</code> et finit par <code>});</code> indenté de deux espaces). <b>Pas à la fin du fichier</b> : le test utilise <code>ownFeed</code> et <code>stubPage</code>, qui n'existent que dans ce bloc.</p>
+<pre><span class="c"># 4. Vérifications, toutes obligatoires</span>
+grep -c notkalray src/test/server/collecte-reelle.test.ts                       <span class="c"># doit afficher 2</span>
+grep -n -E '^(<<<<<<<|=======$|>>>>>>>)' src/test/server/collecte-reelle.test.ts  <span class="c"># ne doit RIEN afficher</span>
+bunx vitest run src/test/server/collecte-reelle.test.ts                          <span class="c"># 24 tests verts</span>
+
+<span class="c"># 5. Terminer la fusion</span>
+git add src/test/server/collecte-reelle.test.ts
+git commit --no-edit</pre>
+<p>Si un des trois résultats diffère (pas 2, des marqueurs, pas 24 tests) : <code>git merge --abort</code> et appelle Aya.</p>
+
+<pre><span class="c"># Ensuite, nettoyage : fichiers hors sujet, version de main (ta branche les avait reformatés)</span>
+git checkout origin/main -- src/integrations src/server/connectionKeyCrypto.ts \
+  src/test/server/budget.test.ts .github/workflows/ci.yml
+git status                              <span class="c"># seulement des fichiers de cette liste</span>
+git commit -m "Fichiers hors sujet remis à l'identique de main"
+
+<span class="c"># Les 50 erreurs de formatage : correction automatique, limitée à tes fichiers</span>
+bunx eslint --fix src/server/domain/safeHttp.ts src/server/domain/security.ts \
+  src/server/adapters/collector.ts src/test/server/safeHttp.test.ts \
+  src/test/server/security.test.ts src/test/server/collecte-reelle.test.ts
+git status                              <span class="c"># seulement des fichiers parmi ces six</span>
+git add src/server/domain/safeHttp.ts src/server/domain/security.ts \
+  src/server/adapters/collector.ts src/test/server/safeHttp.test.ts \
+  src/test/server/security.test.ts src/test/server/collecte-reelle.test.ts
+git commit -m "Formatage des fichiers du correctif C01"
+<span class="c"># les cinq contrôles</span></pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Toute cette section rejouée sur une copie, après P2-09 et #5 : un seul conflit, résolu par cette méthode ; puis lint 0 erreur et 658 tests verts sur l'ensemble du dépôt.</div>
+
+<h3>5.2 Ce qu'on ne fait pas cette semaine</h3>
+<p>Le renommage du paramètre <code>timeout_ms</code> en <code>timeoutMs</code> dans <code>RealCollector</code> est reporté en V1.1 : il est juste, mais sans effet visible, et on ne touche pas au code qui marche la semaine de la livraison. Note-le dans la description de la PR, rubrique « Limites ».</p>
+
+<h3>5.3 Documentation à compléter</h3>
+<p><b>1. Nouveaux codes d'échec dans <code>docs/09-exploitation.md</code></b>, procédure « Une source est en échec ». Juste après la ligne qui commence par « Symptôme : l'alerte rouge » et se termine par « <code>NETWORK</code> (erreur réseau ou DNS, certificat invalide). », laisse une ligne vide et ajoute ce paragraphe :</p>
+<pre>Depuis le correctif des sorties HTTP (P1-08), le collecteur produit aussi des refus définitifs, jamais
+réessayés : `URL_REFUSED` (adresse interne, réservée ou port autre que 80/443, y compris après une
+redirection), `HOST_MISMATCH` (le site redirige vers un autre domaine, par exemple `societe.com` vers
+`societe.fr` ; seul le passage avec ou sans `www.` est accepté), `TOO_MANY_REDIRECTS` (plus de 5),
+`REDIRECT_NO_LOCATION` et `BODY_TOO_LARGE` (réponse de plus de 2 Mio). Pour `HOST_MISMATCH`, ouvrir
+l'adresse dans un navigateur et remplacer l'URL de la source par l'adresse finale affichée.</pre>
+<p><b>2. Ce que P2-09 a réglé.</b> Une fois P2-09 fusionnée, cinq passages de ta documentation ne sont plus vrais : le test de domaine « avec point de séparation » est fait. Remplacements exacts (cherche le texte de gauche avec Cmd+F) :</p>
+<table>
+  <tr><th style="width:18%">Fichier</th><th style="width:44%">Remplacer</th><th>Par</th></tr>
+  <tr><td><code>docs/06</code>, fin de la section SSRF</td><td>(contrôle de l'adresse obtenue si l'hébergeur le permet) et le test de domaine d'entreprise avec point de séparation (voir</td><td>(contrôle de l'adresse obtenue si l'hébergeur le permet) (voir</td></tr>
+  <tr><td><code>docs/06</code>, point 12 de la liste de suivi (vers la ligne 472)</td><td>Restent la résolution DNS et le test de domaine entreprise avec point de séparation.</td><td>Reste la résolution DNS.</td></tr>
+  <tr><td><code>docs/11</code>, ligne P1-08, « Restent ouverts »</td><td> ; `hostOf(url).endsWith(company.domain)` sans point (P2-09)</td><td>(rien : supprimer ce morceau, point-virgule de tête compris)</td></tr>
+  <tr><td><code>docs/11</code>, ligne P1-08, dernière colonne utile</td><td>DNS + adresse résolue si l'hébergeur le permet ; séparation de domaine entreprise.</td><td>DNS + adresse résolue si l'hébergeur le permet.</td></tr>
+  <tr><td><code>docs/11</code>, ligne « P1-08 (partiel) » des corrigées</td><td>Rebinding DNS et séparation de domaine restent dans P1-08.</td><td>Le rebinding DNS reste dans P1-08.</td></tr>
+</table>
+<pre><span class="c"># Contrôle : une seule ligne doit sortir, la ligne « P2-09 (partiel) » de docs/11</span>
+grep -rn "endsWith(company.domain)\|point de séparation\|séparation de domaine" docs src
+git status                              <span class="c"># docs/06, docs/09, docs/11 modifiés, rien d'autre</span>
+git add docs/06-securite-et-flux-tiers.md docs/09-exploitation.md docs/11-anomalies-connues.md
+git commit -m "Documentation : codes d'échec du collecteur, P2-09 retirée des restes de P1-08"
+<span class="c"># les cinq contrôles</span>
+git diff origin/main --stat     <span class="c"># safeHttp, security, collector, leurs tests, docs : rien de src/integrations</span>
+git push</pre>
+<div class="box ok"><span class="t">Vérifié le 8 novembre</span>Ces cinq remplacements, rejoués sur la copie après la fusion de P2-09 : la commande de contrôle ne renvoie que la ligne attendue.</div>
+
+<h3>5.4 Description de la PR à mettre à jour</h3>
+<p>Ajoute à la description existante (elle est déjà très bien) :</p>
+<ul>
+  <li>Le <b>changement de comportement des réessais</b> : avant, tout échec sauf 403 et 404 était réessayé ; désormais seuls <code>TIMEOUT</code>, <code>NETWORK</code>, 408, 425, 429 et 5xx le sont. Un 400, 401 ou 410 ne l'est plus, ni aucun refus de sécurité.</li>
+  <li>La <b>politique <code>HOST_MISMATCH</code></b>, et le fait qu'aucune des 30 sources « Site officiel » du pilote ne redirige vers un autre domaine (vérifié le 8 novembre) : on garde ce comportement strict.</li>
+  <li>Le tableau du test de collecte comparatif de mercredi matin.</li>
+</ul>
+
+<h3>5.5 Mercredi 9 h : le test de collecte, c'est toi qui conduis</h3>
+<p>Suis le protocole du plan commun, section 9 : le script <code>test-collecte.sh</code>, d'abord sur <code>main</code>, puis sur ta branche, en local, sans clé payante. Avant chaque passage, vérifie le mode (<code>{"mode":"demo"}</code>). Ce qu'on attend :</p>
+<ul class="check">
+  <li>Mêmes statuts et mêmes nombres sur les deux passages pour Kalray, Keolabs, Digigram, Teem Photonics, HydroQuest et Naver Labs Europe.</li>
+  <li>Keolabs (qui redirige <code>/feed/</code> vers <code>/feed</code>) : toujours un succès.</li>
+  <li>Arturia : <code>NO_FEED</code> sur les deux.</li>
+  <li>Alpao : échec <code>NETWORK</code> ou <code>TIMEOUT</code>, et la durée totale du script reste sous la minute.</li>
+  <li>Aucun <code>URL_REFUSED</code> ni <code>HOST_MISMATCH</code> nouveau.</li>
+  <li>En bas du tableau : <code>http://127.0.0.1/feed</code> REFUSÉE sur les deux ; <code>https://example.com:8443/feed</code> ACCEPTÉE sur <code>main</code> et REFUSÉE sur ta branche. C'est la preuve visible de ton correctif.</li>
+</ul>
+<p>Colle les deux tableaux (fichiers de <code>~/kora-tests/</code>) dans la PR.</p>
+
+<h2>6. Préparer tes relectures avec Aya</h2>
+<p>En relecture, tu présentes chaque PR en 5 minutes : le problème, ta correction, le test qui échouait avant. Puis Aya te pose des questions. Ce n'est pas un examen : c'est le moment où l'on vérifie ensemble que la PR est comprise de bout en bout, pour que tu puisses la défendre devant n'importe qui et la maintenir. Voici les points à savoir expliquer avec tes mots.</p>
+
+<h4>PR P2-09</h4>
+<ul>
+  <li>Pourquoi <code>host.endsWith(domain)</code> est faux (prends l'exemple de <code>notpasqal.com</code>).</li>
+  <li>Quel effet ce bug avait pour un journaliste (un site tiers présenté comme « source directe »).</li>
+  <li>Pourquoi une seule fonction pour deux endroits.</li>
+  <li>Ce qui reste de P2-09 après ta PR (le filtre par nom).</li>
+</ul>
+<h4>PR #5</h4>
+<ul>
+  <li>Pourquoi une apostrophe neutralise une formule, et pourquoi ce n'est pas une garantie absolue.</li>
+  <li>Pourquoi le bug passait avec un tableau.</li>
+  <li>Pourquoi <code>-42</code> (nombre) n'est pas préfixé alors que <code>"-42"</code> (chaîne) l'est.</li>
+  <li>Ce que tu avais cassé avec <code>trimStart()</code> et comment le test le montre.</li>
+  <li>Pourquoi <code>toBe(…)</code> est un meilleur attendu que <code>toContain("'")</code>.</li>
+</ul>
+<h4>PR #1</h4>
+<ul>
+  <li>Ce qu'est une attaque SSRF, et pourquoi <code>redirect: "manual"</code> est indispensable (exemple : une adresse publique qui redirige vers <code>169.254.169.254</code>).</li>
+  <li>Pourquoi un seul délai pour toute la chaîne de redirections (ton exercice 4a).</li>
+  <li>Pourquoi lire le corps en flux plutôt qu'avec <code>res.text()</code>.</li>
+  <li>Pourquoi un refus de sécurité n'est jamais réessayé, et un délai dépassé oui (exercice 4b).</li>
+  <li>Ce qu'est le DNS rebinding, pourquoi ta PR ne le règle pas, et ce qui limite le risque aujourd'hui (Cloudflare).</li>
+  <li>Pourquoi tu as supprimé puis rétabli un test les 5 et 6 novembre.</li>
+  <li>Quel cas légitime <code>HOST_MISMATCH</code> bloque, et ce que doit faire l'administratrice.</li>
+</ul>
+
+<h2>7. Relire les PR d'Aya (formation à la relecture)</h2>
+<p>Lundi 10 h, la PR 0 ; mercredi après-midi, <a href="https://github.com/Makk7709/koraino/pull/3">#3</a> (logos). Utilise la grille du plan commun (section 14). Pour chacune, laisse au moins un commentaire : une question, une remarque ou une approbation argumentée. Pistes :</p>
+<ul>
+  <li><b>PR 0</b> : le réglage ESLint désactive-t-il seulement le formatage, ou d'autres règles aussi ? Quels fichiers exactement ? La CI se lance-t-elle sur toutes les branches ?</li>
+  <li><b>#3</b> : que se passe-t-il sans identifiant Brandfetch, avec un domaine invalide, si le service répond 404 ou ne répond pas ? Quelle information part chez Brandfetch quand un utilisateur ouvre l'écran Entreprises ? La documentation <code>docs/06</code> le dit-elle ?</li>
+</ul>
+
+<h2>8. Jeudi : la recette</h2>
+<ul>
+  <li><b>9 h–11 h, partie locale</b> (plan commun, section 10, lignes L0 à L6), sur <code>main</code> à jour, lancée avec <code>SUPABASE_URL= bun run dev --port 5199</code>. Commence toujours par L0. Note chaque résultat : OK, ou KO avec une capture.</li>
+  <li><b>14 h–17 h, partie production</b> : lignes P2, P4, P7, P8, P9, avec ton propre compte (invitation envoyée par Amine). Ne lance pas de collecte, ne crée, ne modifie et ne supprime aucune donnée, et ne publie rien sur LinkedIn : en production, on regarde seulement.</li>
+  <li>17 h : bilan avec Aya et Amine.</li>
+</ul>
+
+<h2>9. Aide-mémoire Git</h2>
+<table>
+  <tr><th style="width:40%">Situation</th><th>Commande</th></tr>
+  <tr><td>Voir où j'en suis</td><td><code>git status</code> puis <code>git log --oneline -10</code></td></tr>
+  <tr><td>Mettre ma branche à jour avec <code>main</code></td><td><code>git fetch origin</code> puis <code>git merge origin/main --no-edit</code></td></tr>
+  <tr><td>Valider des modifications</td><td><code>git status</code>, puis <code>git add &lt;fichier&gt; &lt;fichier&gt;</code>, puis <code>git commit -m "…"</code>. Jamais <code>add -A</code>, <code>add .</code> ni <code>commit -a</code>.</td></tr>
+  <tr><td><code>.env</code> apparaît dans <code>git status</code></td><td><code>git restore .env</code> (ou <code>git restore --staged .env</code> puis <code>git restore .env</code> s'il est déjà ajouté), et prévenir Aya.</td></tr>
+  <tr><td>Récupérer ce qui a été poussé sur ma branche</td><td><code>git pull --ff-only</code> (refuse de fusionner en silence si l'historique a divergé : dans ce cas, appelle Aya)</td></tr>
+  <tr><td>Voir ce que ma PR change par rapport à <code>main</code></td><td><code>git diff origin/main --stat</code>, puis <code>git diff origin/main -- &lt;fichier&gt;</code></td></tr>
+  <tr><td>Remettre un fichier comme sur <code>main</code></td><td><code>git checkout origin/main -- &lt;fichier ou dossier&gt;</code></td></tr>
+  <tr><td>Pendant une fusion, prendre la version de <code>main</code> pour un fichier en conflit</td><td><code>git checkout origin/main -- &lt;fichier&gt;</code> (le fichier est alors aussi marqué résolu)</td></tr>
+  <tr><td>Pendant une fusion, prendre ma version pour un fichier en conflit</td><td><code>git checkout --ours &lt;fichier&gt;</code> puis <code>git add &lt;fichier&gt;</code></td></tr>
+  <tr><td>Pendant une fusion, garder les deux versions</td><td>Éditer le fichier, garder les deux blocs, retirer les marqueurs, puis <code>git add &lt;fichier&gt;</code></td></tr>
+  <tr><td>Terminer une fusion</td><td><code>git commit --no-edit</code></td></tr>
+  <tr><td>Abandonner une fusion qui tourne mal</td><td><code>git merge --abort</code> (rien n'est perdu)</td></tr>
+  <tr><td>Annuler une modification locale pas encore validée</td><td><code>git restore &lt;fichier&gt;</code></td></tr>
+  <tr><td>J'ai validé un commit, pas encore poussé, avec une erreur</td><td>Corriger, puis un nouveau commit. (<code>--amend</code> n'est permis que sur un commit jamais poussé ; dans le doute, nouveau commit.)</td></tr>
+  <tr><td>Annuler un commit déjà poussé</td><td><code>git revert &lt;sha&gt;</code> puis <code>git push</code>. Jamais <code>reset</code> + <code>push --force</code>.</td></tr>
+  <tr><td>Lancer un seul fichier de tests</td><td><code>bunx vitest run &lt;chemin du fichier&gt;</code></td></tr>
+  <tr><td>Corriger le formatage d'un fichier</td><td><code>bunx eslint --fix &lt;fichier&gt;</code></td></tr>
+</table>
+
+<h2>10. Ta définition de « terminé » pour chaque PR</h2>
+<ul class="check">
+  <li>Branche à jour avec <code>main</code> par fusion.</li>
+  <li><code>git diff origin/main --stat</code> ne montre que le sujet de la PR.</li>
+  <li>Les cinq contrôles passent en local, y compris le contrôle 5 (hygiène du diff) qui n'affiche rien ; la CI GitHub est verte.</li>
+  <li>Un test échouait avant ta correction et passe après, avec un commit pour chaque étape.</li>
+  <li><code>docs/11</code> est à jour (et <code>docs/06</code>, <code>docs/09</code> ou <code>docs/10</code> si le comportement visible change).</li>
+  <li>La description de la PR suit le modèle : problème, changement, tests, limites, comment vérifier.</li>
+  <li>Tu sais expliquer chaque ligne du diff à Aya.</li>
+</ul>
+
+<div class="signature">KORA Newsroom — Feuille de route d'Anne-Laure — version du 8 novembre 2026.</div>
+</body>
+</html>
