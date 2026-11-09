@@ -9,7 +9,13 @@ import type { GridRecord, SignalRecord } from "../store/records";
 import { collectAll, collectOne } from "../services/collection";
 import { audit } from "../services/journal";
 import { addItem, ensureCurrentEdition, removeItems, renumber } from "../services/newsletters";
-import { activeGrid, rebuildSignal, saveRebuilt, STATUS_LABEL } from "../services/signals";
+import {
+  activeGrid,
+  applyGridToSignals,
+  rebuildSignal,
+  saveRebuilt,
+  STATUS_LABEL,
+} from "../services/signals";
 import { currentEdition, loadSignalView, signalDetail, toSignal } from "../services/view";
 import { CATEGORIES, parse, schemas, SIGNAL_STATUSES, THEMES } from "../validation";
 
@@ -64,17 +70,20 @@ export const collectSourceHandler: Handler = async (ctx) => {
 
 export const collectAllHandler: Handler = async (ctx) => {
   assertCan(ctx.user, "collect");
-  const runs = await collectAll(ctx);
-  const created = runs.reduce((s, r) => s + r.newObservations, 0);
-  const failed = runs.filter((r) => r.status === "echec").length;
+  const batch = await collectAll(ctx, parse(schemas.collectAll, ctx.body));
+  const created = batch.runs.reduce((s, r) => s + r.newObservations, 0);
+  const failed = batch.runs.filter((r) => r.status === "echec").length;
+  const blocked = batch.runs.filter((r) => r.status === "bloque_quota").length;
   await audit(
     ctx,
     "collect.all",
     "source",
     "*",
-    `${runs.length} sources, ${created} nouvelles observations, ${failed} échec(s)`,
+    `Lot de ${batch.runs.length} source(s) sur ${batch.total} : ${created} nouvelles observations, ${failed} échec(s)` +
+      (blocked ? `, ${blocked} bloquée(s) par le budget` : "") +
+      (batch.remaining ? ` ; ${batch.remaining} source(s) restante(s)` : " ; collecte terminée"),
   );
-  return json(runs);
+  return json(batch);
 };
 
 export const listRuns: Handler = async (ctx) => {
@@ -393,14 +402,7 @@ export const splitSignal: Handler = async (ctx) => {
 export const rescoreSignals: Handler = async (ctx) => {
   assertCan(ctx.user, "grid.write");
   const grid = await activeGrid(ctx.repo);
-  let rescored = 0;
-  for (const s of await ctx.repo.signals.list()) {
-    if (isDecided(s.status)) continue;
-    const score = applyGrid(s.score, grid);
-    if (score.total === s.score.total && score.gridVersion === s.score.gridVersion) continue;
-    await ctx.repo.signals.update({ ...s, score });
-    rescored += 1;
-  }
+  const rescored = await applyGridToSignals(ctx.repo, grid);
   await audit(
     ctx,
     "grid.rescore",
@@ -441,13 +443,16 @@ export const createGrid: Handler = async (ctx) => {
     note: input.note ?? null,
   };
   await ctx.repo.grids.insert(rec);
+  // La grille active s'applique aussitôt aux signaux non décidés ; les décisions historiques
+  // gardent leur score et leur version (voir `applyGridToSignals`).
+  const rescored = await applyGridToSignals(ctx.repo, rec);
   const w = rec.weights;
   await audit(
     ctx,
     "grid.create",
     "grid",
     rec.id,
-    `Grille v${version} : importance ${w.importance}, nouveauté ${w.nouveaute}, territoire ${w.territoire}, lecteurs ${w.lecteurs}, diffusion ${w.diffusion}`,
+    `Grille v${version} : importance ${w.importance}, nouveauté ${w.nouveaute}, territoire ${w.territoire}, lecteurs ${w.lecteurs}, diffusion ${w.diffusion} ; ${rescored} signal(aux) recalculé(s)`,
   );
-  return json(toGrid(rec), { status: 201 });
+  return json({ ...toGrid(rec), rescored }, { status: 201 });
 };

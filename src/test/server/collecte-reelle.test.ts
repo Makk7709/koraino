@@ -10,6 +10,10 @@ import type {
 import { setAdapters } from "@/server/adapters";
 import {
   FRESHNESS_DAYS,
+  googleNewsUrl,
+  mapPerplexityResults,
+  PERPLEXITY_MAX_RESULTS,
+  perplexityRequest,
   RealCollector,
   type CollectResult,
   type RawItem,
@@ -174,15 +178,28 @@ describe("collecte réelle : enrichissement Perplexity", () => {
             snippet: "Panorama du secteur.",
             date: daysAgo(1),
           },
+          {
+            title: "Innovation - Le Dauphiné Libéré",
+            url: "https://www.ledauphine.com/innovation",
+            snippet: "Kalray, Soitec et les autres : toute l'innovation en Isère.",
+            date: daysAgo(1),
+          },
+          {
+            title: "Network Technology recent news | page 970 of 1107 | Light Reading",
+            url: "https://www.lightreading.com/network-technology?page=970",
+            snippet: "Kalray launches its new DPU…",
+            date: daysAgo(2),
+          },
         ],
       }),
     );
     const result = await collect(KEYS);
 
+    // Les pages de rubrique et de pagination qui citent Kalray ne sont pas retenues.
     expect(result.enrichment).toEqual({
       provider: "perplexity",
       status: "ok",
-      received: 5,
+      received: 7,
       matched: 2,
       message: null,
     });
@@ -199,9 +216,93 @@ describe("collecte réelle : enrichissement Perplexity", () => {
     const headers = init!.headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer cle-passerelle");
     expect(headers["X-Connection-Api-Key"]).toBe("cle-connexion");
-    expect(JSON.parse(String(init!.body))).toMatchObject({
+    expect(JSON.parse(String(init!.body))).toEqual({
+      query: '"Kalray" actualité',
+      max_results: PERPLEXITY_MAX_RESULTS,
+      country: "FR",
+      search_language_filter: ["fr", "en"],
       search_recency_filter: "month",
+      search_domain_filter: ["-kalray.eu"],
     });
+  });
+
+  it("interroge Google News et Perplexity sur le nom courant et les alias", async () => {
+    const alpao = {
+      ...company,
+      id: "co_alpao",
+      name: "Bertin Alpao",
+      aliases: ["Alpao", " alpao ", "ALPAO"],
+      domain: "alpao.com",
+    } as CompanyRecord;
+    const fetchMock = stubFetch(() => Response.json({ results: [] }));
+    const stale = { ...source, url: googleNewsUrl("Alpao SAS") } as SourceRecord;
+    await new RealCollector(KEYS).collect({
+      source: stale,
+      company: alpao,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+    const google = fetchMock.mock.calls
+      .map(([u]) => String(u))
+      .find((u) => u.includes("news.google"));
+    expect(google).toBe(googleNewsUrl(["Bertin Alpao", "Alpao"]));
+    expect(decodeURIComponent(google!)).toContain('q="Bertin Alpao" OR "Alpao"&');
+    expect(perplexityRequest(alpao)).toMatchObject({
+      query: '"Bertin Alpao" OR "Alpao" actualité',
+    });
+  });
+
+  it("retient un résultat daté par sa dernière mise à jour et reconnaît le nom sans accents", () => {
+    const société = { ...company, name: "Société Kalray", aliases: ["Kalray"] } as CompanyRecord;
+    const items = mapPerplexityResults(
+      [
+        {
+          title: "SOCIETE KALRAY accélère",
+          url: "https://www.lesechos.fr/kalray-accelere",
+          snippet: "Le groupe grenoblois…",
+          date: null,
+          last_updated: daysAgo(4),
+        },
+        {
+          title: "Panorama des processeurs",
+          url: "https://www.lesechos.fr/panorama",
+          snippet: "Sans mention de l'entreprise.",
+          date: daysAgo(1),
+        },
+        {
+          title: "Kalray sans date",
+          url: "https://www.usinenouvelle.com/kalray",
+          snippet: "Kalray.",
+        },
+      ],
+      société,
+    );
+    expect(items.map((i) => i.url)).toEqual(["https://www.lesechos.fr/kalray-accelere"]);
+    expect(items[0]!.publishedAt).toBe(new Date(daysAgo(4)).toISOString());
+  });
+
+  it("ne relance pas Perplexity quand Google News est réessayé", async () => {
+    let googleCalls = 0;
+    const fetchMock = stubFetch(
+      () => new Response("indisponible", { status: 503 }),
+      () => {
+        googleCalls += 1;
+        return googleCalls === 1
+          ? new Response("délai", { status: 503 })
+          : new Response(rss(GOOGLE));
+      },
+    );
+    const collector = new RealCollector(KEYS);
+    const input = { source, company, now: NOW, knownEvents: [] };
+    const first = await collector.collect({ ...input, attempt: 1 });
+    expect(first).toMatchObject({ ok: false, code: "HTTP_503", transient: true });
+    const second = await collector.collect({ ...input, attempt: 2 });
+    expect(second.ok && second.items).toHaveLength(2);
+    expect(second.ok && second.enrichment).toMatchObject({ status: "erreur" });
+    const perplexityCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes("perplexity"));
+    expect(perplexityCalls).toHaveLength(1);
+    expect(googleCalls).toBe(2);
   });
 
   it("mène la collecte avec Perplexity quand Google News est indisponible", async () => {
@@ -314,13 +415,15 @@ describe("collecte : traçabilité et tri", () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times);
   });
 
-  it("retient jusqu'à 3 publications nouvelles par exécution, les connues ne comptant pas", async () => {
+  it("retient jusqu'à 5 publications nouvelles par exécution, les connues ne comptant pas", async () => {
     const topics = [
       "recrute 40 ingénieurs",
       "ouvre un site à Lyon",
       "signe avec Airbus",
       "dépose un brevet",
       "rejoint un consortium",
+      "lance une nouvelle gamme",
+      "s'implante au Canada",
     ];
     const items: RawItem[] = topics.map((t, n) => ({
       url: `https://www.placegrenet.fr/pasqal-${n}`,
@@ -343,11 +446,11 @@ describe("collecte : traçabilité et tri", () => {
       runs.push((await call<CollectionRun>("POST", `/sources/${src.id}/collect`)).body);
     }
     expect(runs.map((r) => [r.status, r.newObservations])).toEqual([
-      ["succes", 3],
+      ["succes", 5],
       ["succes", 2],
       ["succes_sans_actualite", 0],
     ]);
-    expect((await observationUnits()) - before).toBe(5);
+    expect((await observationUnits()) - before).toBe(7);
   });
 
   it("refuse une collecte pendant qu'une autre est en cours", async () => {
@@ -398,8 +501,23 @@ describe("collecte réelle : flux des entreprises", () => {
     expect(result.ok && result.items.map((i) => i.url)).toEqual(["https://www.kalray.eu/a"]);
   });
 
-  it("signale une page qui n'annonce aucun flux", async () => {
-    stubPage("<html><head><title>Kalray</title></head><body>Bienvenue</body></html>");
+  it("essaie les adresses habituelles du flux quand la page n'en annonce aucun", async () => {
+    const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        asked.push(url);
+        if (url === "https://www.kalray.eu/feed/")
+          return new Response(
+            `<rss><channel><item><title>Kalray publie ses résultats</title><link>https://www.kalray.eu/a</link><pubDate>${date}</pubDate></item></channel></rss>`,
+          );
+        if (url === "https://www.kalray.eu/")
+          return new Response("<html><body>Bienvenue</body></html>");
+        return new Response("introuvable", { status: 404 });
+      }),
+    );
     const result = await new RealCollector({}).collect({
       source: ownSite,
       company,
@@ -407,7 +525,36 @@ describe("collecte réelle : flux des entreprises", () => {
       now: NOW,
       knownEvents: [],
     });
-    expect(result).toMatchObject({ ok: true, items: [], warning: { code: "NO_FEED" } });
-    expect(result.ok && result.enrichment).toBeUndefined();
+    expect(result.ok && result.items.map((i) => i.url)).toEqual(["https://www.kalray.eu/a"]);
+    expect(asked).toEqual(["https://www.kalray.eu/", "https://www.kalray.eu/feed/"]);
+  });
+
+  it("met en échec définitif une page sans flux, même aux adresses habituelles", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        asked.push(String(input));
+        return new Response(
+          "<html><head><title>Kalray</title></head><body>Bienvenue</body></html>",
+        );
+      }),
+    );
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+    expect(result).toMatchObject({ ok: false, code: "NO_FEED", transient: false });
+    expect(result.ok === false && result.reason).toContain("/feed/");
+    expect(asked).toEqual([
+      "https://www.kalray.eu/",
+      "https://www.kalray.eu/feed/",
+      "https://www.kalray.eu/rss",
+      "https://www.kalray.eu/feed.xml",
+      "https://www.kalray.eu/rss.xml",
+    ]);
   });
 });

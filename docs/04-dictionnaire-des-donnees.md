@@ -419,7 +419,7 @@ Plafonds et compteurs (`METERS` et `DEFAULT_LIMITS` de [`domain/budget.ts`](../s
 |---|---|---|---|---|
 | `id` | `string` | oui | Identifiant | `use_…` |
 | `at` | `string` | oui | Horodatage | ISO 8601 ; détermine le mois de rattachement |
-| `kind` | `UsageKind` | oui | Nature de l'appel | `generation_article`, `generation_linkedin`, `generation_summary`, `search_query`, `observation` |
+| `kind` | `UsageKind` | oui | Nature de l'appel | `generation_article`, `generation_linkedin`, `generation_summary`, `classification`, `search_query`, `observation` |
 | `units` | `number` | oui | Unités consommées | Entier ≥ 0 |
 | `costEur` | `number` | oui | Coût estimé | € HT, quatre décimales ; plafonné au montant réservé pour l'appel |
 | `label` | `string` | oui | Libellé lisible | Par exemple « Collecte <libellé de la source> » |
@@ -1358,6 +1358,7 @@ Dans les tests, une entreprise réelle (`fictional: false`) ne reçoit jamais d'
 | `generation_article` | `articles` | 0,45 € |
 | `generation_linkedin` | `linkedin_posts` | 0,08 € |
 | `generation_summary` | — (budget seulement) | 0,02 € |
+| `classification` | — (budget seulement) | 0,005 € |
 | `search_query` | `search_queries` | 0,012 € |
 | `observation` | `observations` | 0,021 € |
 

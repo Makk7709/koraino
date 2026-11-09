@@ -103,6 +103,18 @@ export interface CollectionRun {
   enrichment?: CollectionEnrichment | null;
 }
 
+/** Lot d'une collecte globale (`POST /collect`) : le client enchaîne les lots jusqu'à `remaining: 0`. */
+export interface CollectionBatch {
+  /** Début de la collecte globale : à renvoyer tel quel pour obtenir le lot suivant. */
+  since: string;
+  /** Sources actives au moment de l'appel. */
+  total: number;
+  /** Exécutions de ce lot (plus les exécutions `bloque_quota` des sources restantes, le cas échéant). */
+  runs: CollectionRun[];
+  /** Sources actives non encore collectées depuis `since` ; 0 : collecte terminée. */
+  remaining: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* Signal Engine : observations, signaux, déduplication (§3.2)         */
 /* ------------------------------------------------------------------ */
@@ -166,6 +178,19 @@ export interface ScoringGrid {
   note: string | null;
 }
 
+/**
+ * Lecture du contenu par le modèle à la création du signal : catégorie et importance éditoriale
+ * (0–100), avec le motif. Absente sans clé IA ou si le modèle n'a pas répondu : la catégorie vient
+ * alors des indices lexicaux et l'importance de la catégorie.
+ */
+export interface ContentAssessment {
+  category: Category;
+  importance: number;
+  reason: string;
+  /** Modèle qui a produit l'évaluation (traçabilité). */
+  model: string;
+}
+
 export interface ScoreResult {
   /** Score éditorial 0–100. L'UI l'affiche sur 10 (ex. 92 → 9.2/10). */
   total: number;
@@ -204,6 +229,8 @@ export interface Signal {
   eventDate: string | null;
   matchConfidence: number;
   score: ScoreResult;
+  /** Évaluation du contenu par le modèle, quand elle existe ; sert à recalculer le score. */
+  assessment?: ContentAssessment | null;
   evidence: EvidenceState;
   whyInteresting: string[];
   suggestedAngle: { text: string; tags: string[] };
@@ -774,6 +801,11 @@ export interface LinkedInPublishInput {
 export interface ScoringGridInput {
   weights: Record<Criterion, number>;
   note?: string | null;
+}
+
+/** Réponse de `POST /scoring-grids` : la grille créée et le nombre de signaux recalculés avec elle. */
+export interface CreatedScoringGrid extends ScoringGrid {
+  rescored: number;
 }
 
 export interface UserInput {

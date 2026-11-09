@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>KORA — Livraison V1 — Plan commun</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="cover">
+  <div class="kicker">KORA Newsroom · Livraison V1 · Document commun</div>
+  <h1>Plan de la semaine du 9 au 13 novembre 2026</h1>
+  <div class="meta">
+    Pour <b>Aya</b> (ingénieure lead) et <b>Anne-Laure</b> (ingénieure), copie <b>Amine</b> (porteur du projet).<br>
+    État vérifié le dimanche 8 novembre 2026 sur le dépôt <b>github.com/Makk7709/koraino</b> (branche <code style="background:#1d4558;color:#fff">main</code> au commit <code style="background:#1d4558;color:#fff">770f224</code>).<br>
+    Deux fiches individuelles complètent ce document : « Feuille de route — Aya » et « Feuille de route — Anne-Laure ».
+  </div>
+</div>
+
+<h2 style="margin-top:4px">1. L'essentiel en une page</h2>
+
+<p><b>Objectif.</b> Livrer la V1 de KORA le <b>vendredi 13 novembre</b>, sans régression, avec les deux correctifs de sécurité classés P1 qui sont prêts (exports CSV, sorties HTTP du collecteur), le correctif de fausse « source directe », et, si les conditions sont réunies, les logos d'entreprises et la vérification des dates de publication.</p>
+
+<table>
+  <tr><th style="width:14%">Quand</th><th>Jalon</th><th style="width:20%">Responsable</th></tr>
+  <tr><td>Lundi 9, 12 h</td><td>Socle d'intégration continue fusionné : <code>main</code> passe enfin au vert (TypeScript, ESLint, tests, build).</td><td>Aya</td></tr>
+  <tr><td>Mardi 10, 12 h</td><td>PR <b>#5</b> (exports CSV, P1-06) et PR <b>P2-09</b> (fausse source directe) fusionnées.</td><td>Anne-Laure, relecture Aya</td></tr>
+  <tr><td>Mercredi 11, 13 h</td><td>PR <b>#1</b> (sorties HTTP du collecteur, P1-08) fusionnée après test de collecte réel.</td><td>Anne-Laure, relecture Aya</td></tr>
+  <tr><td>Mercredi 11, 16 h</td><td>Décision « on prend / on reporte » pour <b>#3</b> (logos) et <b>#2</b> (dates de publication).</td><td>Aya, validation Amine</td></tr>
+  <tr><td>Mercredi 11, 18 h</td><td><b>Gel du code.</b> Plus aucune fusion dans <code>main</code>, sauf correctif bloquant validé par Amine.</td><td>Tous</td></tr>
+  <tr><td>Jeudi 12</td><td>Contrôles, publication en production à 11 h, recette l'après-midi.</td><td>Aya (publication), les deux (recette)</td></tr>
+  <tr><td>Vendredi 13</td><td>Marge, étiquette <code>v1.0.0</code>, livraison.</td><td>Aya</td></tr>
+</table>
+
+<div class="box stop"><span class="t">Ce qui ne part pas en V1</span>
+La pile « A3 / A4 / P0-01 » d'Aya (PR <b>#4</b>, <b>#6</b>, <b>#7</b> et deux branches sans PR) : environ 11 400 lignes, 118 fichiers et <b>13 migrations SQL</b> (<code>0002</code> à <code>0014</code>). La plateforme applique automatiquement les migrations du dossier <code>drizzle/migrations/</code> quand <code>main</code> est synchronisée (voir <code>docs/09-exploitation.md</code>, section Déploiement) : fusionner cette pile, c'est modifier la base de production dans la foulée. C'est un travail de qualité, mais il demande une semaine de relecture et une fenêtre de migration préparée. Il est planifié pour la V1.1 (section 13).</div>
+
+<h3>Sommaire</h3>
+<ol class="toc">
+  <li>L'essentiel en une page</li>
+  <li>État des lieux vérifié au 8 novembre</li>
+  <li>Pourquoi ce périmètre</li>
+  <li>Les règles de la semaine</li>
+  <li>Ordre de fusion et conflits attendus</li>
+  <li>Planning jour par jour</li>
+  <li>Cycle de vie d'une PR (définition de « terminé »)</li>
+  <li>Le socle d'intégration continue (PR 0)</li>
+  <li>Tester une collecte réelle en local, sans toucher la production</li>
+  <li>Recette du jeudi</li>
+  <li>Mise en production et retour arrière</li>
+  <li>Critères de décision</li>
+  <li>Après la V1 : la V1.1</li>
+  <li>Binôme et formation</li>
+  <li>Ce qu'Amine doit fournir ou décider</li>
+  <li>Annexe : vérifications faites le 8 novembre</li>
+</ol>
+
+<h2>2. État des lieux vérifié au 8 novembre</h2>
+
+<p>Chaque ligne a été contrôlée sur une copie locale du dépôt : installation verrouillée, TypeScript, ESLint, tests Vitest, et calcul des conflits avec <code>main</code> et entre branches (<code>git merge-tree</code>).</p>
+
+<table>
+  <tr><th style="width:9%">PR</th><th style="width:25%">Sujet</th><th style="width:11%">Auteur</th><th>État technique</th><th style="width:12%">Décision</th></tr>
+  <tr><td><b>PR 0</b><br><span class="small">à créer</span></td><td>Socle d'intégration continue : lint vert sur <code>main</code></td><td>Aya</td><td>4 fichiers repris tels quels de branches existantes. Vérifié : 0 erreur ESLint, 606 tests sur 45 fichiers, build OK.</td><td><span class="tag v1">V1 · lundi</span></td></tr>
+  <tr><td><a href="https://github.com/Makk7709/koraino/pull/5">#5</a></td><td>P1-06 : injection de formules dans les exports CSV</td><td>Anne-Laure</td><td>586 tests verts. CI <span class="tag red">rouge</span> : 1 erreur ESLint (<code>let timer</code>) dans un fichier généré. 11 commits de retard sur <code>main</code>, 4 fichiers en conflit après la PR 0, tous dus à du reformatage hors sujet ou à la CI ajoutée en double. Changement utile : ~30 lignes.</td><td><span class="tag v1">V1 · mardi</span></td></tr>
+  <tr><td><b>P2-09</b><br><span class="small">PR à ouvrir</span></td><td>P2-09 : « notpasqal.com » compté comme source officielle de « pasqal.com »</td><td>Anne-Laure</td><td>Branche <code>AL_P2-09_fausse_source_directe</code> : 3 lignes + 1 test. Corrige le collecteur mais pas encore l'indicateur documentaire (<code>evidence.ts</code>), qui a le même défaut.</td><td><span class="tag v1">V1 · mardi</span></td></tr>
+  <tr><td><a href="https://github.com/Makk7709/koraino/pull/1">#1</a></td><td>P1-08 : sécuriser les sorties HTTP du collecteur</td><td>Anne-Laure</td><td>635 tests verts, à jour avec <code>main</code>, aucun conflit aujourd'hui (un conflit de test apparaîtra après P2-09). CI <span class="tag red">rouge</span> : 50 erreurs de formatage Prettier, toutes corrigées par <code>eslint --fix</code>.</td><td><span class="tag v1">V1 · mercredi</span></td></tr>
+  <tr><td><a href="https://github.com/Makk7709/koraino/pull/3">#3</a></td><td>Logos automatiques des entreprises (Brandfetch)</td><td>Aya</td><td>CI <span class="tag green">verte</span>, aucun conflit, affichage seul, aucune migration. Nécessite un identifiant client Brandfetch. Une espace en fin de ligne à retirer (<code>docs/12</code>, ligne 124).</td><td><span class="tag cond">V1 si identifiant</span></td></tr>
+  <tr><td><a href="https://github.com/Makk7709/koraino/pull/2">#2</a></td><td>Vérification des dates de publication Google News</td><td>Aya</td><td>CI <span class="tag green">verte</span>, aucun conflit. Change le comportement de la collecte. La PR signale elle-même un correctif complémentaire non poussé (réponse 429 de Google sur le cas Kalray). Deux phrases d'un document de référence nomment des outils de génération de code : à retirer avant fusion.</td><td><span class="tag cond">Décision mercredi 16 h</span></td></tr>
+  <tr><td><a href="https://github.com/Makk7709/koraino/pull/4">#4</a>, <a href="https://github.com/Makk7709/koraino/pull/6">#6</a>, <a href="https://github.com/Makk7709/koraino/pull/7">#7</a></td><td>Traçabilité des appels payants, concurrence, récupération, newsletter</td><td>Aya</td><td>CI verte. #7 en brouillon. <code>a4-concurrence-reprise</code> et <code>a4-2-fusion-defusion</code> sans PR. 13 migrations SQL.</td><td><span class="tag v11">V1.1</span></td></tr>
+</table>
+
+<div class="box info"><span class="t">Pourquoi la CI d'Anne-Laure est rouge : ce n'est pas son code</span>
+Sur <code>main</code>, <code>bun run lint</code> échoue avec 209 erreurs, presque toutes dans des fichiers régénérés par la plateforme (<code>src/integrations/supabase/*</code>, <code>src/integrations/lovable/appUserConnector.ts</code>) qui ne suivent pas le format Prettier du projet. Pour obtenir une CI verte, Anne-Laure a reformaté ces fichiers dans chacune de ses branches : c'est l'origine du bruit dans ses PR et de leurs conflits. Aya avait déjà écrit la bonne correction (désactiver la règle de formatage sur ces fichiers générés) dans la PR #2. La PR 0 de lundi la porte seule sur <code>main</code>.</div>
+
+<h2>3. Pourquoi ce périmètre</h2>
+
+<ul>
+  <li><b>Les P1 d'abord.</b> <code>docs/11-anomalies-connues.md</code> classe P1 ce qui doit être corrigé « avant toute ouverture à des utilisateurs réels ». La V1 ouvre l'outil : P1-06 (#5) et P1-08 (#1) en font partie et sont prêts.</li>
+  <li><b>Petit et réversible.</b> Tout ce qui part en V1 est sans migration et sans script de données : chaque fusion peut être annulée par un simple <code>git revert</code>, sans toucher la base.</li>
+  <li><b>La pile A3/A4 est structurante.</b> Fonctions SQL <code>SECURITY DEFINER</code>, droits PostgreSQL, verrous transactionnels, registre d'idempotence : la relire sérieusement demande 3 à 5 jours, et une migration ratée en production la veille d'une livraison serait le pire scénario. Elle mérite une fenêtre dédiée, avec sauvegarde et script de vérification préalable (déjà écrit par Aya : <code>scripts/a43-preflight-readonly.sql</code>).</li>
+  <li><b>#2 est conditionnel</b> parce qu'il modifie ce que la collecte accepte. Il corrige un vrai problème métier (vieilles vidéos réindexées présentées comme nouvelles), mais un réglage trop strict viderait la veille. Il ne part que si le test de collecte comparatif est bon (section 12).</li>
+</ul>
+
+<h2>4. Les règles de la semaine</h2>
+
+<ol>
+  <li><b>Périmètre figé.</b> Seules les PR de la section 2 marquées V1 ou conditionnelles peuvent entrer dans <code>main</code>. Toute autre idée va dans une note « V1.1 ».</li>
+  <li><b>Aucune migration SQL et aucun script <code>db/data/</code></b> ne doivent entrer dans <code>main</code> cette semaine.</li>
+  <li><b>Pas de fusion sans CI verte et sans relecture.</b> Les PR d'Anne-Laure sont relues par Aya. Les PR d'Aya sont relues par Anne-Laure (exercice de formation) et la décision finale revient à Amine pour #2 et #3.</li>
+  <li><b>On ne réécrit pas l'historique publié.</b> Pas de <code>git push --force</code>, pas de <code>rebase</code>, <code>commit --amend</code> ou <code>squash</code> sur des commits déjà poussés. Pour se mettre à jour : <code>git merge origin/main --no-edit</code> (sans <code>--no-edit</code>, Git ouvre un éditeur de texte dans le terminal). Si GitHub propose « Update branch », choisir « Update with merge commit », jamais « Update with rebase ».</li>
+  <li><b>Fusion sur GitHub avec « Create a merge commit »</b>, jamais « Squash » ni « Rebase ». GitHub mémorise le dernier choix : le vérifier à chaque fusion.</li>
+  <li><b>Une PR = un sujet.</b> Aucun reformatage de fichiers hors sujet. Les fichiers de <code>src/integrations/</code> sont générés par la plateforme : on ne les modifie jamais à la main.</li>
+  <li><b>Après chaque fusion dans <code>main</code></b>, les branches encore ouvertes font <code>git merge origin/main --no-edit</code> et repassent la CI avant leur relecture.</li>
+  <li><b>Gel du code mercredi 18 h.</b> Ensuite, seul un correctif bloquant validé par Amine peut entrer, par une PR courte relue par l'autre ingénieure.</li>
+  <li><b>Aucun secret dans le dépôt.</b> <code>AI_API_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>LOVABLE_API_KEY</code>, <code>PERPLEXITY_API_KEY</code>, <code>LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY</code>, <code>APP_USER_CONNECTION_KEY_SECRET</code> et <code>WORDPRESS_APP_PASSWORD</code> restent dans les paramètres du projet sur la plateforme. Le fichier <code>.env</code> versionné ne contient que des valeurs publiques.</li>
+  <li><b>Messages de commit et descriptions de PR en français</b>, qui disent ce qui change et pourquoi. Aucune mention d'outil de génération de code dans les commits, les PR, le code ou la documentation (le contrôle n° 5 le vérifie).</li>
+  <li><b>Les PR #4, #6 et #7 ne sont ni fusionnées ni rebasées</b>, et leur branche de base ne change pas cette semaine.</li>
+  <li><b>Aucune modification dans l'éditeur de la plateforme cette semaine.</b> Une modification faite dans l'éditeur arrive directement sur <code>main</code>, sans PR, sans relecture et sans CI. Tout passe par GitHub.</li>
+  <li><b>On nomme les fichiers qu'on valide</b> : <code>git add &lt;fichier&gt;</code>, jamais <code>git add -A</code>, <code>git add .</code> ni <code>git commit -a</code>. Avant chaque commit, <code>git status</code> : si <code>.env</code> apparaît comme modifié, <code>git restore .env</code> et prévenir Aya. Ce fichier est versionné ; une clé ajoutée dedans pour un essai serait publiée.</li>
+  <li><b>En local, toujours <code>SUPABASE_URL= bun run dev</code></b>, avec le <code>SUPABASE_URL=</code> vide devant. Le <code>.env</code> versionné contient l'adresse de la base de production : un simple <code>bun run dev</code> s'y connecterait. Après chaque démarrage, vérifier le mode (section 9) ; tout autre résultat que <code>{"mode":"demo"}</code> : arrêter le serveur immédiatement.</li>
+</ol>
+
+<h2>5. Ordre de fusion et conflits attendus</h2>
+
+<table>
+  <tr><th style="width:5%">#</th><th style="width:22%">PR</th><th style="width:18%">Au plus tard</th><th>Avant de fusionner</th></tr>
+  <tr><td>1</td><td>PR 0 — socle CI</td><td>Lundi 12 h</td><td>CI verte sur la PR.</td></tr>
+  <tr><td>2</td><td>#5 — exports CSV</td><td>Mardi 12 h</td><td>Branche mise à jour avec <code>main</code> (PR 0 incluse). <b>4 conflits certains</b> (<code>docs/11</code>, <code>previewAuthStorage.ts</code>, <code>openai.ts</code>, <code>ci.yml</code>), tous résolus en reprenant la version de <code>main</code>. Diff final : 3 fichiers.</td></tr>
+  <tr><td>3</td><td>P2-09 — source directe</td><td>Mardi 12 h</td><td><code>git merge origin/main --no-edit</code> après #5. <b>Conflit certain</b> sur <code>docs/11-anomalies-connues.md</code> : les deux PR ajoutent une ligne juste sous le titre « Corrigées depuis la consolidation ». Garder les deux lignes, retirer les trois marqueurs.</td></tr>
+  <tr><td>4</td><td>#1 — sorties HTTP</td><td>Mercredi 13 h</td><td><code>git merge origin/main --no-edit</code> après P2-09. <b>Conflit certain</b> dans <code>src/test/server/collecte-reelle.test.ts</code>, en deux morceaux imbriqués : ne pas le résoudre à la main, suivre la procédure exacte de la feuille d'Anne-Laure (section 5.1). Aucun autre conflit (vérifié).</td></tr>
+  <tr><td>5</td><td>#3 — logos</td><td>Mercredi 16 h</td><td>Identifiant Brandfetch configuré, <code>git merge origin/main --no-edit</code> (aucun conflit, vérifié), espace en fin de ligne retirée, lint complet vert.</td></tr>
+  <tr><td>6</td><td>#2 — dates</td><td>Mercredi 18 h</td><td>Décision positive de 16 h, mentions d'outils retirées, <code>git merge origin/main --no-edit</code> (aucun conflit, vérifié), CI verte.</td></tr>
+</table>
+
+<p class="small">Toute la semaine a été rejouée le 8 novembre sur une copie du dépôt, dans cet ordre exact, avec les procédures de ces documents : PR 0, #5, P2-09, #1, #3, #2. Seuls les conflits annoncés ci-dessus sont apparus. Résultat final : TypeScript OK, lint 0 erreur, <b>707 tests sur 50 fichiers</b>, build OK, aucun fichier de <code>drizzle/</code>, <code>db/</code>, <code>supabase/</code> ni <code>.env</code> modifié. <b>Si Git annonce un conflit qui n'est pas dans ce tableau : <code>git merge --abort</code> et appeler Aya.</b></p>
+
+<h2>6. Planning jour par jour</h2>
+
+<table>
+  <tr><th style="width:12%">Jour</th><th style="width:44%">Aya</th><th style="width:44%">Anne-Laure</th></tr>
+  <tr><td><b>Lundi 9</b></td>
+    <td>
+      9 h 30 : lancement commun (30 min, lecture de ce plan).<br>
+      10 h : PR 0, socle CI (1 h), relue par Anne-Laure, fusionnée avant 12 h.<br>
+      11 h : #4 passée en brouillon, étiquette « V1.1 » sur #4, #6, #7.<br>
+      Après-midi : pousser le complément de #2 ; préparer la configuration Brandfetch pour #3 ; relire P2-09 et #5 dès qu'elles sont prêtes.
+    </td>
+    <td>
+      9 h 30 : lancement commun.<br>
+      10 h : relire la PR 0 (grille section 14).<br>
+      10 h 30 : P2-09, compléter le correctif (<code>evidence.ts</code>), ouvrir la PR.<br>
+      14 h (PR 0 fusionnée) : nettoyer #5 et corriger la tabulation, mettre à jour <code>docs/11</code>.<br>
+      17 h : les deux PR en relecture, CI verte.
+    </td></tr>
+  <tr><td><b>Mardi 10</b></td>
+    <td>
+      9 h : relecture en binôme de #5 et P2-09 (30 min chacune), fusion avant 12 h.<br>
+      Après-midi : test de collecte comparatif de #2 (section 9), rapport dans la PR ; mise à jour de #3 avec <code>main</code>.<br>
+      17 h : première lecture de #1.
+    </td>
+    <td>
+      Matin : corrections demandées en relecture ; après la fusion de #5, mise à jour de P2-09 (conflit <code>docs/11</code>), puis fusion par Aya.<br>
+      Après-midi : #1, mise à jour avec <code>main</code>, conflit du test, fichiers générés remis à l'identique, formatage, documentation des nouveaux codes d'échec.<br>
+      17 h : #1 en relecture, CI verte.
+    </td></tr>
+  <tr><td><b>Mercredi 11</b></td>
+    <td>
+      9 h–10 h 30 : test de collecte comparatif de #1 en binôme.<br>
+      11 h : relecture en binôme de #1, fusion avant 13 h.<br>
+      14 h : fusion de #3 si l'identifiant est configuré.<br>
+      16 h : décision sur #2 avec Amine, fusion avant 18 h ou report.<br>
+      18 h : gel du code.
+    </td>
+    <td>
+      9 h–10 h 30 : test de collecte comparatif de #1 en binôme.<br>
+      11 h : présentation de #1 en relecture.<br>
+      Après-midi : relire #3 (grille section 14) ; préparer la feuille de recette (section 10) ; vérifier que <code>docs/11</code> est à jour pour P1-06, P1-08 et P2-09.
+    </td></tr>
+  <tr><td><b>Jeudi 12</b></td>
+    <td>
+      9 h : contrôles complets sur <code>main</code> (section 11).<br>
+      11 h : publication en production.<br>
+      14 h–17 h : recette, partie « production ».<br>
+      17 h : bilan avec Amine, décision de livraison.
+    </td>
+    <td>
+      9 h–11 h : recette locale (section 10, partie « local »).<br>
+      14 h–17 h : recette, partie « production », en parallèle d'Aya.<br>
+      17 h : bilan.
+    </td></tr>
+  <tr><td><b>Vendredi 13</b></td>
+    <td>Matin : seulement un correctif bloquant s'il y en a un ; étiquette <code>v1.0.0</code> ; notes de version ; livraison. Après-midi : préparation de la V1.1.</td>
+    <td>Matin : disponibilité pour un correctif. Après-midi : rétrospective de la semaine avec Aya (30 min).</td></tr>
+</table>
+
+<div class="box warn"><span class="t">Si un jalon glisse</span>
+On ne compresse pas la recette. Ordre de renoncement, du premier au dernier : #2, puis #3, puis #1. #5 et P2-09 sont petites et doivent passer. Si #1 n'est pas fusionnée mercredi 13 h, elle part en V1.1 et l'anomalie P1-08 reste documentée comme ouverte (l'hébergement Cloudflare bloque déjà en pratique les adresses privées, ce qui limite le risque).</div>
+
+<h2>7. Cycle de vie d'une PR (définition de « terminé »)</h2>
+
+<p>Une PR est prête à être relue quand <b>toutes</b> les cases sont cochées :</p>
+<ul class="check">
+  <li>La branche contient <code>origin/main</code> à jour (<code>git merge origin/main --no-edit</code>, jamais de rebase).</li>
+  <li><code>git diff origin/main --stat</code> ne montre que des fichiers liés au sujet de la PR.</li>
+  <li>Aucun fichier de <code>src/integrations/</code> n'apparaît dans le diff.</li>
+  <li>Les cinq contrôles passent en local (bloc ci-dessous).</li>
+  <li>Un test qui échouait avant le correctif et passe après est présent.</li>
+  <li><code>docs/11-anomalies-connues.md</code> est à jour : une anomalie corrigée sort des tableaux et entre dans « Corrigées depuis la consolidation » ; une anomalie partiellement corrigée ne décrit plus que ce qui reste vrai.</li>
+  <li>La description de la PR suit le modèle : problème, changement, tests, limites, comment vérifier.</li>
+  <li>La CI GitHub est verte.</li>
+</ul>
+
+<p class="small"><b>Une fois par poste, avant toute commande de ces documents :</b> <code>echo 'setopt interactivecomments' &gt;&gt; ~/.zshrc &amp;&amp; source ~/.zshrc</code>. Sans ce réglage, le zsh de macOS passe les commentaires de fin de ligne (<code># …</code>) à la commande, qui échoue.</p>
+<pre><span class="c"># Les cinq contrôles, depuis la racine du dépôt (Node 24, bun 1.2.19), branche à jour avec main</span>
+git fetch origin
+bun install --frozen-lockfile
+bunx tsc --noEmit -p .              <span class="c"># 1. TypeScript : aucune erreur</span>
+bun run lint                        <span class="c"># 2. 0 erreur ; les 6 avertissements react-refresh sont connus</span>
+bun --no-env-file run test          <span class="c"># 3. tous les tests verts</span>
+bun --no-env-file run build         <span class="c"># 4. build OK</span>
+<span class="c"># 5. Hygiène du diff : chacune des quatre commandes suivantes ne doit RIEN afficher</span>
+git diff --check origin/main
+git diff origin/main --name-only | grep -E '^(\.env|drizzle/|db/|supabase/|src/integrations/)'
+git diff origin/main | grep '^+' | grep -i -E 'cursor|grok|chatgpt|claude|codex|copilot|gemini'
+git log origin/main..HEAD --format=%B | grep -i -E 'cursor|grok|chatgpt|claude|codex|copilot|gemini|co-authored'</pre>
+<p class="small">Le contrôle 5 attrape ce que les tests ne voient pas : une espace en fin de ligne ou un marqueur de conflit oublié (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>) dans un document, un fichier interdit (<code>.env</code>, migration, script de données, fichier généré), une mention d'outil de génération de code. S'il affiche quoi que ce soit, on corrige avant de pousser. Vérifié le 8 novembre : sur les branches actuelles, il signale exactement les défauts connus (fichiers générés de #5 et #1, mentions d'outils de #2), et plus rien une fois les procédures appliquées.</p>
+
+<h4>Modèle de description de PR</h4>
+<pre>## Problème
+(une phrase, avec le numéro d'anomalie : P1-06, P1-08, P2-09…)
+
+## Changement
+- …
+
+## Tests
+- Test ajouté qui échouait avant : …
+- Résultat : N tests sur M fichiers, lint 0 erreur, build OK.
+
+## Limites
+- Ce que la PR ne corrige pas.
+
+## Comment vérifier
+- Étapes concrètes pour la relectrice.</pre>
+
+<h2>8. Le socle d'intégration continue (PR 0)</h2>
+
+<p>Lundi matin, Aya ouvre une PR de quatre fichiers, sans aucune ligne nouvelle : tout est repris de branches existantes et déjà relues.</p>
+<table>
+  <tr><th style="width:38%">Fichier</th><th style="width:30%">Repris de</th><th>Effet</th></tr>
+  <tr><td><code>eslint.config.js</code></td><td><code>fix/kora-publication-dates</code> (#2)</td><td>Désactive seulement la règle de formatage Prettier sur <code>src/integrations/supabase/**</code> et <code>appUserConnector.ts</code>. Les règles de fond restent actives.</td></tr>
+  <tr><td><code>src/server/connectionKeyCrypto.ts</code></td><td>#2</td><td>Guillemets doubles (formatage).</td></tr>
+  <tr><td><code>src/test/server/budget.test.ts</code></td><td>#2</td><td>Formatage.</td></tr>
+  <tr><td><code>.github/workflows/ci.yml</code></td><td><code>fix_C01_…</code> (#1, commit d'Aya <code>f94b730</code>)</td><td>Une CI commune à toutes les branches : TypeScript, ESLint, tests, build, espaces.</td></tr>
+</table>
+<p>Résultat vérifié le 8 novembre sur <code>main</code> + ces quatre fichiers : ESLint 0 erreur (6 avertissements connus), TypeScript OK, <b>606 tests sur 45 fichiers</b>, build OK, <code>git diff --check</code> OK. Les commandes exactes sont dans la feuille de route d'Aya.</p>
+
+<h2>9. Tester une collecte réelle en local, sans toucher la production</h2>
+
+<p>En local, sans <code>SUPABASE_URL</code>, l'application tourne sur un dépôt en mémoire (mode démonstration) mais utilise <b>le vrai collecteur</b> (<code>RealCollector</code>) : elle lit les vrais flux RSS et Google News. Sans <code>AI_API_KEY</code> ni clés Perplexity dans le terminal, aucun appel payant n'est fait (textes par gabarits, Perplexity « non configuré »). C'est le bon terrain pour comparer <code>main</code> et une branche.</p>
+
+<p>Le test est automatisé par le script <b><code>test-collecte.sh</code></b>, joint à ces documents. Il a été vérifié le 8 novembre sur <code>main</code> et sur la version finale de la semaine. Il refuse de s'exécuter si l'application n'est pas en mode démonstration : il ne peut pas écrire dans la base de production. Il fait, sans clic manuel : ajout des 8 entreprises du jeu de contrôle et de leur source « Site officiel » (la source Google News est créée automatiquement), collecte de chacune des 16 sources, essai de deux adresses dangereuses, tableau des résultats. Durée : environ 15 secondes par passage.</p>
+
+<pre><span class="c"># Une seule fois : ranger le script hors du dépôt</span>
+mkdir -p ~/kora-tests &amp;&amp; cp test-collecte.sh ~/kora-tests/
+
+<span class="c"># Terminal 1 : lancer l'application sur la branche à tester</span>
+git fetch origin &amp;&amp; git switch &lt;branche&gt; &amp;&amp; git pull --ff-only
+bun install --frozen-lockfile
+unset AI_API_KEY PERPLEXITY_API_KEY LOVABLE_API_KEY
+SUPABASE_URL= bun run dev --port 5199     <span class="c"># le SUPABASE_URL= vide est indispensable</span>
+
+<span class="c"># Terminal 2 : contrôle de sécurité, puis le test</span>
+curl -s http://localhost:5199/api/auth/config   <span class="c"># doit afficher exactement {"mode":"demo"}, sinon Ctrl+C dans le terminal 1</span>
+bash ~/kora-tests/test-collecte.sh 5199</pre>
+
+<h4>Protocole comparatif (30 minutes, en binôme)</h4>
+<ol>
+  <li>Sur <code>main</code> : lancer l'application, puis le script. Il affiche un tableau et l'enregistre dans <code>~/kora-tests/</code> (jamais dans le dépôt).</li>
+  <li>Arrêter le serveur (Ctrl+C dans le terminal 1). Le dépôt en mémoire repart à zéro : <b>un seul passage du script par démarrage</b>.</li>
+  <li>Passer sur la branche testée (<code>git switch &lt;branche&gt;</code>, <code>bun install --frozen-lockfile</code>), relancer l'application, vérifier le mode, relancer le script.</li>
+  <li>Faire les deux passages <b>à quelques minutes d'intervalle</b> : les flux évoluent dans la journée, une nouvelle publication entre deux passages fausserait la comparaison.</li>
+  <li>Coller les deux tableaux dans la PR, avec une phrase de conclusion par critère ci-dessous.</li>
+</ol>
+<p class="small">Le mode démonstration contient déjà 150 entreprises fictives, soit le quota maximal : le script en retire 8 sans signal avant d'ajouter le jeu de contrôle. Cela ne se passe qu'en mémoire, sur le poste.</p>
+
+<table>
+  <tr><th>Entreprise</th><th>Domaine</th><th>Source « Site officiel »</th><th>Intérêt</th></tr>
+  <tr><td>Kalray</td><td>kalrayinc.com</td><td>https://www.kalrayinc.com/feed/</td><td>Cas des vieilles vidéos réindexées (#2)</td></tr>
+  <tr><td>Keolabs</td><td>keolabs.com</td><td>https://www.keolabs.com/feed/</td><td>Seule source du pilote avec une redirection (même domaine) : teste #1</td></tr>
+  <tr><td>Digigram</td><td>digigram.com</td><td>https://www.digigram.com/feed/</td><td>Flux direct</td></tr>
+  <tr><td>Teem Photonics</td><td>teemphotonics.com</td><td>https://www.teemphotonics.com/feed/</td><td>Flux direct</td></tr>
+  <tr><td>HydroQuest</td><td>hydroquest.fr</td><td>https://www.hydroquest.fr/feed/</td><td>Flux direct, domaine en .fr</td></tr>
+  <tr><td>Naver Labs Europe</td><td>naverlabs.com</td><td>https://europe.naverlabs.com/feed/</td><td>Sous-domaine (teste P2-09 et #1)</td></tr>
+  <tr><td>Arturia</td><td>arturia.com</td><td>https://www.arturia.com/</td><td>Page sans flux : doit finir en <code>NO_FEED</code></td></tr>
+  <tr><td>Alpao</td><td>alpao.com</td><td>https://www.alpao.com/feed/</td><td>Site injoignable le 8 novembre : teste le traitement d'un échec réseau</td></tr>
+</table>
+
+<h4>Résultat de référence, relevé le 8 novembre</h4>
+<table>
+  <tr><th>Ligne du tableau</th><th style="width:26%"><code>main</code> actuel (770f224)</th><th style="width:26%">Fin de semaine simulée</th></tr>
+  <tr><td>Kalray, Google News (<code>recherche_web</code>)</td><td>succès, 3 nouvelles</td><td>succès, 2 nouvelles (un article ancien écarté par #2)</td></tr>
+  <tr><td>Naver Labs Europe, site officiel (sous-domaine)</td><td>succès, 5 nouvelles</td><td>succès, 5 nouvelles</td></tr>
+  <tr><td>Keolabs, site officiel (redirection)</td><td>succès sans actualité</td><td>succès sans actualité</td></tr>
+  <tr><td>Arturia, site officiel</td><td>échec <code>NO_FEED</code></td><td>échec <code>NO_FEED</code></td></tr>
+  <tr><td>Alpao, site officiel</td><td>échec <code>NETWORK</code>, immédiat</td><td>échec <code>NETWORK</code>, immédiat</td></tr>
+  <tr><td>Durée totale de collecte</td><td>8 s</td><td>11 s</td></tr>
+  <tr><td>Source <code>http://127.0.0.1/feed</code></td><td>REFUSÉE</td><td>REFUSÉE</td></tr>
+  <tr><td>Source <code>https://example.com:8443/feed</code></td><td><b>ACCEPTÉE</b></td><td>REFUSÉE (#1 : port 443 uniquement)</td></tr>
+</table>
+<p class="small">Les nombres de publications changeront d'ici mercredi (les flux vivent) : on compare toujours deux passages faits le même jour, pas avec ce tableau. Les statuts et les codes, eux, doivent rester stables.</p>
+
+<div class="box info"><span class="t">Résultat attendu</span>
+Pour #1 : mêmes statuts et mêmes nombres sur les deux passages, aucune nouvelle erreur <code>URL_REFUSED</code> ou <code>HOST_MISMATCH</code>, Alpao en échec <code>NETWORK</code> ou <code>TIMEOUT</code> en 15 secondes au plus, le port 8443 refusé. Pour #2 : moins de publications anciennes (Kalray), mais pas de source qui passe de « succès avec publications » à zéro sans motif lisible.</div>
+
+<h2>10. Recette du jeudi</h2>
+
+<p>Deux parties. Les cas qui créent des données de test se font <b>en local</b> sur <code>main</code> gelée. En production, on se limite à des vérifications qui ne polluent pas les données réelles.</p>
+
+<h3>Partie locale (Anne-Laure, 9 h–11 h, sur <code>main</code> à jour, <code>SUPABASE_URL= bun run dev --port 5199</code>)</h3>
+<p class="small">Ordre : L0, puis le script (L1, L2, L5), puis L3, L4 et L6 dans le navigateur, sur la même instance.</p>
+<table>
+  <tr><th style="width:7%">N°</th><th>Action</th><th style="width:36%">Résultat attendu</th></tr>
+  <tr><td>L0</td><td><code>curl -s http://localhost:5199/api/auth/config</code> juste après le démarrage.</td><td>Exactement <code>{"mode":"demo"}</code>. Sinon : arrêt immédiat du serveur, et on ne fait rien d'autre.</td></tr>
+  <tr><td>L1</td><td>Script <code>test-collecte.sh</code>, ligne <code>http://127.0.0.1/feed</code>.</td><td>« REFUSÉE : URL de source refusée : adresse de bouclage ».</td></tr>
+  <tr><td>L2</td><td>Même script, ligne <code>https://example.com:8443/feed</code>.</td><td>« REFUSÉE : … port 8443 non autorisé pour https (443 uniquement) ».</td></tr>
+  <tr><td>L3</td><td>Renommer une entreprise de démonstration en <code>=1+1</code>, puis Paramètres, Exports, « Entreprises » en CSV. Ouvrir dans un tableur.</td><td>La cellule affiche le texte <code>'=1+1</code> (ou <code>=1+1</code> en texte), jamais <code>2</code>.</td></tr>
+  <tr><td>L4</td><td>Sur une entreprise de démonstration, ajouter comme <b>premier alias</b> <code>=HYPERLINK("https://exemple.com")</code>, puis exporter « Entreprises » en CSV. (Les alias sont exportés comme un tableau : c'est exactement le cas P1-06.)</td><td>La colonne <code>aliases</code> commence par une apostrophe ; aucun lien cliquable dans le tableur.</td></tr>
+  <tr><td>L5</td><td>Tableau de collecte du même script (section 9).</td><td>Mêmes statuts et codes que le test comparatif de mercredi.</td></tr>
+  <tr><td>L6</td><td>Parcours éditorial : signal, rédaction d'un article, approbation, post LinkedIn (export), newsletter (approbation puis export).</td><td>Aucune erreur, statuts cohérents, entrées au journal d'audit.</td></tr>
+</table>
+
+<h3>Partie production (les deux, 14 h–17 h, chacune avec son propre compte administrateur)</h3>
+<p class="small">Chacune se connecte avec son compte personnel, créé par Amine avant jeudi (section 15). On ne partage pas le compte d'Amine : le journal d'audit doit montrer qui a fait quoi.</p>
+<table>
+  <tr><th style="width:7%">N°</th><th>Action</th><th style="width:36%">Résultat attendu</th><th style="width:11%">Qui</th></tr>
+  <tr><td>P1</td><td>Connexion, déconnexion, mot de passe oublié (sur son propre compte).</td><td>Fonctionne, e-mail reçu.</td><td>Aya</td></tr>
+  <tr><td>P2</td><td>Tableau de bord, Veille, Signaux, Articles, LinkedIn, Newsletter, Paramètres : ouvrir chaque écran.</td><td>Aucun écran d'erreur, données présentes.</td><td>Anne-Laure</td></tr>
+  <tr><td>P3</td><td>Collecter <b>une seule</b> source (bouton de la source, pas la collecte complète).</td><td>Statut « OK » ou motif lisible, historique mis à jour, budget incrémenté d'environ 0,012 €.</td><td>Aya</td></tr>
+  <tr><td>P4</td><td>Ouvrir 3 signaux récents : indicateur documentaire, « source directe ».</td><td>Une source directe n'est indiquée que pour le domaine exact de l'entreprise ou un sous-domaine.</td><td>Anne-Laure</td></tr>
+  <tr><td>P5</td><td>Paramètres, onglet WordPress : « Tester le compte ».</td><td>Compte Contributeur reconnu.</td><td>Aya</td></tr>
+  <tr><td>P6</td><td>LinkedIn : état de la connexion du compte administrateur.</td><td>« Connecté » ou message clair de reconnexion.</td><td>Aya</td></tr>
+  <tr><td>P7</td><td>Paramètres, Exports : télécharger Entreprises et Signaux en CSV et JSON, et le manifeste.</td><td>Fichiers valides ; ouverture du CSV sans formule exécutée.</td><td>Anne-Laure</td></tr>
+  <tr><td>P8</td><td>Si #3 fusionnée : écran Entreprises.</td><td>Logos affichés ; initiales quand aucun logo n'existe.</td><td>Anne-Laure</td></tr>
+  <tr><td>P9</td><td>Paramètres, Journal d'audit et Quotas &amp; budget.</td><td>Les actions de la recette apparaissent ; budget cohérent.</td><td>Anne-Laure</td></tr>
+  <tr><td>P10</td><td>Console des journaux de la plateforme pendant la recette.</td><td>Aucune ligne <code>[api] erreur interne</code>.</td><td>Aya</td></tr>
+</table>
+<p class="small">Ne pas lancer la collecte complète en production pendant la recette : elle coûte environ 0,012 € par source plus 0,021 € par nouvelle publication, et occupe le verrou de collecte 15 minutes au plus. Ne pas publier de post LinkedIn réel : utiliser l'export.</p>
+
+<h2>11. Mise en production et retour arrière</h2>
+
+<h3>Jeudi 9 h : contrôles avant publication (Aya)</h3>
+<pre>git fetch origin &amp;&amp; git switch main &amp;&amp; git pull --ff-only
+git log --oneline --first-parent 770f224..main   <span class="c"># uniquement les fusions de la semaine (6 au plus), rien d'autre</span>
+git diff 770f224 --stat -- drizzle/ db/ supabase/ .env src/integrations/   <span class="c"># doit être VIDE</span>
+git diff --check 770f224                 <span class="c"># doit être VIDE</span>
+bun install --frozen-lockfile &amp;&amp; bunx tsc --noEmit -p . &amp;&amp; bun run lint \
+  &amp;&amp; bun --no-env-file run test &amp;&amp; bun --no-env-file run build
+git rev-parse --short HEAD               <span class="c"># noter ce SHA : c'est celui qu'on publie et qu'on étiquettera</span></pre>
+<ul class="check">
+  <li>Le premier contrôle ne montre que des commits « Merge pull request #… » des PR prévues, plus la fusion « Documents de livraison V1 » du 9 novembre (ces documents, dans <code>docs/livraison-v1/</code>). Un autre commit direct sur <code>main</code> (par exemple fait dans l'éditeur de la plateforme) : on s'arrête et on l'examine avant de publier.</li>
+  <li>La plateforme a synchronisé exactement ce SHA : le dernier commit affiché dans son historique doit être le même que celui noté ci-dessus. Sinon, attendre la synchronisation ; ne jamais publier une version différente de celle contrôlée.</li>
+  <li>Variables du projet présentes : <code>KORA_ADMIN_EMAILS</code>, <code>KORA_PUBLIC_URL</code>, <code>WORDPRESS_URL</code>, <code>WORDPRESS_USERNAME</code>, et <code>VITE_BRANDFETCH_CLIENT_ID</code> si #3 est fusionnée.</li>
+  <li>Secrets présents (sans jamais afficher leur valeur) : <code>AI_API_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>LOVABLE_API_KEY</code>, <code>PERPLEXITY_API_KEY</code>, <code>LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY</code>, <code>APP_USER_CONNECTION_KEY_SECRET</code>, <code>WORDPRESS_APP_PASSWORD</code>.</li>
+  <li>Aucune collecte en cours (sinon attendre ou voir la procédure de verrou dans <code>docs/09</code>).</li>
+</ul>
+<p><b>11 h : publication</b> depuis la plateforme, puis contrôle immédiat : page de connexion, connexion administrateur, écran Veille.</p>
+
+<h3>Retour arrière</h3>
+<p>Rien de ce qui part en V1 ne touche la base : revenir en arrière ne demande qu'un commit d'annulation.</p>
+<pre><span class="c"># Annuler une PR fusionnée, sans réécrire l'historique</span>
+git fetch origin &amp;&amp; git switch -c revert/&lt;sujet&gt; origin/main
+git log --oneline --first-parent -10     <span class="c"># repérer « Merge pull request #N » de la PR à annuler</span>
+git revert -m 1 --no-edit &lt;sha-du-commit-de-fusion&gt;
+<span class="c"># les cinq contrôles, push, PR « Annulation de #N : raison », fusion, puis republier</span></pre>
+<p class="small"><code>-m 1</code> est obligatoire pour annuler un commit de fusion : il indique de revenir à l'état de <code>main</code> avant la fusion. Pour annuler plusieurs PR, les annuler de la plus récente à la plus ancienne, une par une. Vérifié sur la simulation : l'annulation seule de #2, de #3 ou de #1 passe sans conflit (avec #1 annulée : TypeScript OK, 678 tests verts). L'annulation de #5 crée un conflit dans <code>docs/11</code>, car les PR suivantes ont écrit à côté : dans ce cas, appeler Aya plutôt que forcer.</p>
+<p>En cas d'urgence absolue (production inutilisable), republier la version précédente depuis l'historique de publication de la plateforme si elle le permet, puis faire le revert ci-dessus pour remettre <code>main</code> en cohérence.</p>
+
+<h2>12. Critères de décision</h2>
+
+<h3>#3, logos (mercredi 14 h)</h3>
+<ul>
+  <li><b>On prend</b> si : identifiant client Brandfetch fourni et configuré, branche à jour avec <code>main</code>, lint complet vert (la PR ne vérifiait que les fichiers modifiés), contrôle n° 5 vide (espace en fin de ligne de <code>docs/12</code> retirée), affichage vérifié en local avec et sans identifiant.</li>
+  <li><b>On reporte</b> sinon. Aucun impact sur le reste.</li>
+</ul>
+
+<h3>#2, dates de publication (mercredi 16 h, Aya et Amine)</h3>
+<ul>
+  <li>Le correctif complémentaire décrit dans la PR (adresse <code>news.google.com/rss/articles/…</code> au lieu de <code>/articles/…</code>) est poussé et testé.</li>
+  <li>Les deux mentions d'outils de génération de code du document de référence sont retirées (contrôle n° 5 vide).</li>
+  <li>Test comparatif de la section 9 joint à la PR : les publications anciennes de Kalray sont rejetées ; aucune source ne perd toutes ses publications récentes sans motif ; au moins 80 % des publications de moins de 30 jours retenues sur <code>main</code> le sont encore.</li>
+  <li>Durée d'une collecte complète du jeu de contrôle au plus deux fois celle de <code>main</code>.</li>
+  <li>CI verte après mise à jour avec <code>main</code> (qui contient alors #1).</li>
+  <li>Si un seul critère manque : report en V1.1, sans discussion.</li>
+</ul>
+
+<h3>Livraison (jeudi 17 h, Amine)</h3>
+<ul>
+  <li>Toutes les lignes de recette passées, ou en échec non bloquant consigné.</li>
+  <li>Aucune erreur interne dans les journaux pendant la recette.</li>
+  <li><code>docs/11-anomalies-connues.md</code> reflète l'état réel.</li>
+</ul>
+
+<h2>13. Après la V1 : la V1.1</h2>
+<p>Semaine du 16 novembre, menée par Aya. Le détail est dans sa feuille de route. Dans les grandes lignes :</p>
+<ol>
+  <li>Ouvrir les PR manquantes de la pile : <code>fix/kora-a4-concurrence-reprise</code> (base : <code>fix/kora-a3-tracabilite-appels-payants</code>) et <code>fix/kora-a4-2-fusion-defusion</code> (base : <code>fix/kora-a4-concurrence-reprise</code>). Sortir #7 du brouillon quand elle est prête.</li>
+  <li>Mettre la pile à jour avec <code>main</code> (fusion, pas de rebase). Conflits attendus avec #1 sur <code>docs/02-architecture.md</code>, <code>docs/06-securite-et-flux-tiers.md</code> et <code>eslint.config.js</code>.</li>
+  <li>Préparer la fenêtre de migration : sauvegarde de la base vérifiée, exécution du script de vérification en lecture seule, plan de retour arrière (documents d'Aya du 3 novembre), créneau sans utilisateurs.</li>
+  <li>Rangement reporté de #1 : renommer le paramètre <code>timeout_ms</code> du constructeur de <code>RealCollector</code> en <code>timeoutMs</code> et reprendre la valeur de <code>SAFE_FETCH_DEFAULTS.timeoutMs</code>. Sans effet visible, donc sans urgence : on ne prend pas ce risque la semaine de la livraison.</li>
+  <li>Reste à faire hors pile : faire passer la lecture des pages éditeur de #2 (<code>publisher-page.ts</code>) par <code>safeFetchText</code> de #1 ; P1-03 (appels OpenAI hors budget) ; P1-09 (en-têtes de sécurité HTTP) ; fin de P2-09 (filtre par nom de l'entreprise) ; résolution DNS contre le rebinding si l'hébergeur le permet.</li>
+</ol>
+
+<h2>14. Binôme et formation</h2>
+<p>Aya est la lead de la semaine et accompagne Anne-Laure. L'objectif est double : livrer, et qu'Anne-Laure puisse mener seule une PR de bout en bout à la fin de la semaine.</p>
+<ul>
+  <li><b>Point quotidien, 9 h 30, 15 minutes.</b> Hier, aujourd'hui, blocages, état du tableau de la section 6.</li>
+  <li><b>Relecture en binôme, 30 minutes par PR d'Anne-Laure</b>, en partage d'écran. Anne-Laure présente sa PR en 5 minutes (problème, choix, tests), puis parcours du diff. Aya pose les questions de compréhension listées dans sa feuille de route. Les décisions sont écrites en commentaire de la PR.</li>
+  <li><b>Anne-Laure relit la PR 0 et #3</b> avec la grille ci-dessous : c'est l'exercice inverse, aussi formateur.</li>
+  <li><b>Test de collecte de mercredi en binôme</b> : Anne-Laure conduit, Aya observe et commente.</li>
+  <li><b>Rétrospective vendredi, 30 minutes</b> : ce qui a marché, ce qu'on change pour la V1.1.</li>
+</ul>
+
+<h4>Grille de relecture commune</h4>
+<ul class="check">
+  <li>Le diff ne contient que le sujet de la PR (pas de reformatage, pas de fichier généré, pas de dépendance ajoutée sans explication).</li>
+  <li>Un test reproduit le problème ; il échouait avant le correctif.</li>
+  <li>Les cas limites sont couverts : valeur vide, majuscules, <code>www.</code>, sous-domaine, très grande taille, délai dépassé, selon le sujet.</li>
+  <li>Les messages d'erreur sont en français, compréhensibles, sans fuite d'information interne.</li>
+  <li>Le comportement en cas d'échec est explicite (réessai ou non, code d'erreur).</li>
+  <li>La documentation est à jour (<code>docs/11</code>, et <code>docs/06</code> ou <code>docs/09</code> si le comportement visible change).</li>
+  <li>Aucun secret, aucune adresse de production en dur.</li>
+  <li>La relectrice sait expliquer la PR à quelqu'un d'autre.</li>
+</ul>
+
+<h2>15. Ce qu'Amine doit fournir ou décider</h2>
+<table>
+  <tr><th style="width:28%">Quoi</th><th>Détail</th><th style="width:18%">Pour quand</th></tr>
+  <tr><td>Identifiant client Brandfetch</td><td>Compte développeur Brandfetch, « Client ID » de la Logo API. C'est une valeur publique (intégrée au code envoyé au navigateur), pas un secret.</td><td>Mardi soir</td></tr>
+  <tr><td>Droits d'Aya</td><td>Fusion sur GitHub ; accès au projet sur la plateforme : publication, variables et secrets (pour vérifier leur présence), journaux.</td><td>Lundi matin</td></tr>
+  <tr><td>Fusion par commit de fusion autorisée</td><td>GitHub, Settings, General, « Pull Requests » : cocher « Allow merge commits ». Sans ce réglage, seuls « Squash » ou « Rebase » sont proposés, ce que la règle 5 interdit.</td><td>Lundi matin</td></tr>
+  <tr><td>Comptes de production d'Aya et d'Anne-Laure</td><td>Paramètres, Utilisateurs &amp; rôles : inviter les deux avec le rôle administrateur, pour la recette de jeudi (chacune son compte, journal d'audit lisible).</td><td>Mercredi soir</td></tr>
+  <tr><td>Pas de modification dans l'éditeur de la plateforme</td><td>Cette semaine, ni Amine ni personne ne modifie l'application depuis l'éditeur de la plateforme (règle 12). Une demande urgente passe par Aya.</td><td>Toute la semaine</td></tr>
+  <tr><td>Protection de <code>main</code> (recommandé)</td><td>Après la fusion de la PR 0 : GitHub, Settings, Branches, règle sur <code>main</code> : PR obligatoire, contrôle « quality » obligatoire, 1 approbation.</td><td>Lundi après-midi</td></tr>
+  <tr><td>Décision sur #2</td><td>Avec Aya, sur les critères de la section 12.</td><td>Mercredi 16 h</td></tr>
+  <tr><td>Décision de livraison</td><td>Sur la base de la recette.</td><td>Jeudi 17 h</td></tr>
+</table>
+
+<h2>16. Annexe : vérifications faites le 8 novembre</h2>
+<ul>
+  <li><b>Lint de <code>main</code></b> : 209 erreurs et 6 avertissements, presque tout dans les fichiers générés. Avec les quatre fichiers de la PR 0 : 0 erreur, 6 avertissements.</li>
+  <li><b>Tests</b> : <code>main</code> + PR 0, 606 tests sur 45 fichiers. #1, 635 sur 46. #5, 586 sur 39. Tous verts.</li>
+  <li><b>#1 rejouée avec les fichiers générés de <code>main</code> et <code>eslint --fix</code></b> sur ses propres fichiers : lint 0 erreur, 635 tests verts.</li>
+  <li><b>#5 rejouée avec la procédure de nettoyage</b> : diff final limité à <code>csv.ts</code>, <code>csv.test.ts</code> et <code>docs/11</code> (et <code>ci.yml</code> tant que la PR 0 n'est pas fusionnée).</li>
+  <li><b>P2-09 complétée</b> avec la fonction <code>isCompanyHost</code> de la feuille de route d'Anne-Laure : TypeScript OK, lint 0 erreur, tous les tests verts, dont les nouveaux.</li>
+  <li><b>Redirections des 30 sources « Site officiel » du pilote</b> (<code>db/data/2026-10-12_inovallee_30_entreprises.sql</code>), interrogées le 8 novembre : aucune ne redirige vers un autre domaine. Une seule redirige (Keolabs, <code>/feed/</code> vers <code>/feed</code>, même domaine). Alpao n'a pas répondu. Le refus des redirections vers un autre domaine dans #1 (<code>HOST_MISMATCH</code>) n'affecte donc aucune source actuelle : on le garde tel quel pour la V1.</li>
+  <li><b>Migrations</b> : aucune PR V1 ne touche <code>drizzle/</code> ni <code>db/</code>.</li>
+  <li><b>Semaine complète rejouée</b> sur une copie du dépôt (sans aucun envoi vers GitHub), dans l'ordre de la section 5 et avec les commandes exactes des feuilles de route : PR 0 (606 tests), #5 (626), P2-09 (629), #1 (658), #3 (674), #2 (707 tests sur 50 fichiers). Lint 0 erreur et build OK à chaque étape. Conflits rencontrés : uniquement ceux annoncés dans la section 5.</li>
+  <li><b>Test de collecte en local</b> : script <code>test-collecte.sh</code> exécuté sur <code>main</code> actuel et sur la fin de semaine simulée (résultats en section 9). Mode démonstration confirmé (<code>{"mode":"demo"}</code>), aucun appel payant.</li>
+  <li><b>Retour arrière</b> : annulations de #2, #3 et #1 rejouées sans conflit sur la fin de semaine simulée.</li>
+  <li><b>Contrôle n° 5</b> sur les branches actuelles : il signale les fichiers générés et le script <code>db/data/</code> absents de #5, les fichiers générés de #1, deux mentions d'outils dans #2, l'espace en fin de ligne de #3. Plus rien après application des procédures.</li>
+</ul>
+
+<div class="signature">KORA Newsroom — Plan de livraison V1 — version du 8 novembre 2026.</div>
+</body>
+</html>

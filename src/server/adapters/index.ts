@@ -1,6 +1,7 @@
 import { createWordPressClient } from "../wordpress/client";
 import { ExportOnlyLinkedIn, type LinkedInClient, type WordPressClient } from "./channels";
 import { RealCollector, SimulatedCollector, type Collector } from "./collector";
+import { GoogleNewsLinkResolver, NoopLinkResolver, type LinkResolver } from "./google-news";
 import { OpenAiEnhancer, type AiTextEnhancer } from "./openai";
 import { TemplateTextModel, type TextModel } from "./text-model";
 
@@ -10,6 +11,8 @@ export interface Adapters {
   /** Amélioration IA des textes (OpenAI) — absente sans clé AI_API_KEY. */
   ai: AiTextEnhancer | null;
   collector: Collector;
+  /** Résolution des redirections Google News vers l'adresse de l'article (jamais sous Vitest). */
+  links: LinkResolver;
   /** Selon `WORDPRESS_*` : site réel, simulation (tests, démonstration) ou non configuré. */
   wordpress: WordPressClient;
   linkedin: LinkedInClient;
@@ -23,6 +26,7 @@ function defaults(): Adapters {
     // Désactivé sous Vitest : les tests restent déterministes et hors réseau.
     ai: process.env["AI_API_KEY"] && !process.env["VITEST"] ? new OpenAiEnhancer() : null,
     collector: process.env["VITEST"] ? new SimulatedCollector() : new RealCollector(),
+    links: process.env["VITEST"] ? new NoopLinkResolver() : new GoogleNewsLinkResolver(),
     wordpress: createWordPressClient(),
     linkedin: new ExportOnlyLinkedIn(),
   };

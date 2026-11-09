@@ -1,4 +1,10 @@
-import type { Category, CollectionEnrichment, ObservationVia, Outlet } from "@/lib/api/types";
+import type {
+  Category,
+  CollectionEnrichment,
+  ContentAssessment,
+  ObservationVia,
+  Outlet,
+} from "@/lib/api/types";
 import { slugify } from "../domain/text";
 import {
   CITIES,
@@ -22,6 +28,8 @@ export interface RawItem {
   publishedAt: string | null;
   eventDate: string | null;
   via?: ObservationVia;
+  /** Lecture du contenu par le modèle, ajoutée par le service de collecte avant l'ingestion. */
+  assessment?: ContentAssessment;
 }
 
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */
@@ -41,7 +49,10 @@ export type CollectResult =
 export const FRESHNESS_DAYS = 30;
 
 const NO_FEED_REASON =
-  "Aucun flux RSS annoncé sur cette page : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités.";
+  "Aucun flux RSS annoncé sur cette page, ni aux adresses habituelles (/feed/, /rss, /feed.xml, /rss.xml) : rien à collecter. Indiquez l'adresse du flux ou d'une page d'actualités.";
+
+/** Adresses de flux essayées quand une page n'en annonce aucun (WordPress, Hugo, Jekyll, Ghost…). */
+export const FEED_PROBES = ["/feed/", "/rss", "/feed.xml", "/rss.xml"] as const;
 
 export interface CollectInput {
   source: SourceRecord;
@@ -170,9 +181,22 @@ export class SimulatedCollector implements Collector {
   }
 }
 
-/** Lien Google News (flux RSS) pour une recherche par nom d'entreprise. */
-export function googleNewsUrl(query: string): string {
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(`"${query}"`)}&hl=fr&gl=FR&ceid=FR:fr`;
+/** Nom et alias d'une entreprise, dédoublonnés, pour les requêtes par nom. */
+export function companyNames(company: Pick<CompanyRecord, "name" | "aliases">): string[] {
+  const seen = new Set<string>();
+  return [company.name, ...company.aliases]
+    .map((n) => n.trim())
+    .filter((n) => n && !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase()));
+}
+
+/** Expression exacte par nom, les alias en alternative (`"Bertin Alpao" OR "Alpao"`). */
+export function quotedNames(names: string | string[]): string {
+  return (Array.isArray(names) ? names : [names]).map((n) => `"${n}"`).join(" OR ");
+}
+
+/** Lien Google News (flux RSS) pour une recherche par nom d'entreprise, alias compris. */
+export function googleNewsUrl(query: string | string[]): string {
+  return `https://news.google.com/rss/search?q=${encodeURIComponent(quotedNames(query))}&hl=fr&gl=FR&ceid=FR:fr`;
 }
 
 function decode(s: string): string {
@@ -213,6 +237,11 @@ function hostOf(url: string): string {
   }
 }
 
+/** Un document est un flux s'il s'ouvre sur `<rss`, `<feed` ou `<rdf:RDF`. */
+export function isFeed(text: string): boolean {
+  return /<(rss|feed|rdf:RDF)[\s>]/i.test(text);
+}
+
 /** Analyse un flux RSS 2.0 ou Atom. */
 export function parseFeed(xml: string, fallbackOutlet: Outlet): RawItem[] {
   const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>|<entry[\s>][\s\S]*?<\/entry>/gi) ?? [];
@@ -250,26 +279,72 @@ interface PerplexityResult {
   url?: string;
   snippet?: string;
   date?: string | null;
+  /** Dernière mise à jour de la page, en repli de `date` (les deux sont facultatifs dans l'API). */
+  last_updated?: string | null;
+}
+
+/** Texte comparable : minuscules, sans accents, espaces et apostrophes normalisés. */
+function comparable(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const INDEX_TITLE_PATTERNS = [
+  /\bpage\s+\d+(?:\s*(?:of|sur|\/)\s*\d+)?\b/i,
+  /^(?:actualit[ée]s?|news|blog|innovation|[ée]conomie|entreprises?|rubriques?|tags?|cat[ée]gories?|archives?|th[ée]matiques?|dossiers?|r[ée]sultats? de recherche|search results?)\s*(?:[-|–—:]|$)/i,
+  /\b(?:tous les articles|all articles|toutes les actualit[ée]s|derni[èe]res actualit[ée]s|latest news|recent news)\b/i,
+  /\bsitemap\b/i,
+  /^(?:th[ée]matiques?|dossiers?|rubriques?|tags?|cat[ée]gories?|archives?)\b/i,
+];
+const INDEX_PATH_PATTERN =
+  /\/(?:tags?|categor(?:y|ies|ie|ies)|rubriques?|archives?|search|recherche|page\/\d+|sitemap|feed|rss|author|auteur)(?:\/|$)|[?&](?:page|paged|p|s|q|search)=/i;
+
+/**
+ * Page de rubrique, de liste ou de pagination plutôt qu'article : titre réduit à un nom de
+ * rubrique (« Innovation - Le Dauphiné Libéré »), pagination (« page 970 of 1107 »), ou adresse
+ * de catégorie, d'étiquette ou de recherche. Ces pages citent l'entreprise sans parler d'elle.
+ */
+export function looksLikeIndexPage(title: string, url: string): boolean {
+  const t = title.trim();
+  if (INDEX_TITLE_PATTERNS.some((re) => re.test(t))) return true;
+  const [head = "", ...rest] = t.split(/\s+[-|–—:]\s+/);
+  const headWords = head.split(/\s+/).filter(Boolean).length;
+  if (rest.length > 0 && headWords <= 2 && t.split(/\s+/).length <= 6) return true;
+  try {
+    const u = new URL(url);
+    return INDEX_PATH_PATTERN.test(`${u.pathname}${u.search}`);
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Résultats Perplexity retenus, au format des éléments collectés : publications datées, hors
  * site de l'entreprise (couvert par ses propres sources), qui la citent. Les pages sans date
- * de publication (annuaires, pages produit) ne sont pas des actualités.
+ * de publication ni de mise à jour (annuaires, pages produit) et les pages de rubrique, de liste
+ * ou de pagination ne sont pas des actualités.
  */
 export function mapPerplexityResults(
   results: PerplexityResult[],
   company: CompanyRecord,
 ): RawItem[] {
-  const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
+  const names = companyNames(company).map(comparable);
   const ownSite = (host: string) =>
     !!company.domain && (host === company.domain || host.endsWith(`.${company.domain}`));
   return results.flatMap((r) => {
     if (!r.url || !r.title) return [];
     const host = hostOf(r.url);
-    const d = r.date ? new Date(r.date) : null;
+    const dated = r.date ?? r.last_updated;
+    const d = dated ? new Date(dated) : null;
     if (!host || ownSite(host) || !d || Number.isNaN(d.getTime())) return [];
-    if (!names.some((n) => `${r.title} ${r.snippet ?? ""}`.toLowerCase().includes(n))) return [];
+    if (looksLikeIndexPage(r.title, r.url)) return [];
+    const text = comparable(`${r.title} ${r.snippet ?? ""}`);
+    if (!names.some((n) => text.includes(n))) return [];
     return [
       {
         url: r.url,
@@ -307,6 +382,25 @@ export function mergeEnrichment(items: RawItem[], extra: RawItem[]): RawItem[] {
   return [...extra.filter((i) => !urls.has(i.url) && !sameStory(titleKey(i.title))), ...items];
 }
 
+/** Nombre de résultats demandés à Perplexity (10 par défaut dans l'API, 20 au plus). */
+export const PERPLEXITY_MAX_RESULTS = 10;
+
+/**
+ * Requête Perplexity Search : le nom et les alias en expressions exactes, la presse française
+ * d'abord (`country`, langues), le site de l'entreprise exclu (il est couvert par ses propres
+ * sources), le dernier mois seulement.
+ */
+export function perplexityRequest(company: CompanyRecord): Record<string, unknown> {
+  return {
+    query: `${quotedNames(companyNames(company))} actualité`,
+    max_results: PERPLEXITY_MAX_RESULTS,
+    country: "FR",
+    search_language_filter: ["fr", "en"],
+    search_recency_filter: "month",
+    ...(company.domain ? { search_domain_filter: [`-${company.domain}`] } : {}),
+  };
+}
+
 /**
  * Recherche Perplexity (via la passerelle) : résultats web du dernier mois sur l'entreprise.
  * Ne lève jamais : un échec n'interrompt pas la collecte Google News, il est consigné.
@@ -340,11 +434,7 @@ export async function perplexitySearch(
         "X-Connection-Api-Key": pplxKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        query: `"${company.name}" Grenoble actualité entreprise`,
-        max_results: 5,
-        search_recency_filter: "month",
-      }),
+      body: JSON.stringify(perplexityRequest(company)),
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) {
@@ -372,29 +462,54 @@ export async function perplexitySearch(
 export class RealCollector implements Collector {
   readonly name = "collecteur-rss-google-v1";
 
+  /** Recherches Perplexity de l'exécution en cours, par source : une seule par exécution, essais compris. */
+  private readonly searches = new WeakMap<Date, Map<string, ReturnType<typeof perplexitySearch>>>();
+
   constructor(private readonly env: Record<string, string | undefined> = process.env) {}
+
+  /** Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas. */
+  private search(company: CompanyRecord, source: SourceRecord, now: Date) {
+    let bySource = this.searches.get(now);
+    if (!bySource) {
+      bySource = new Map();
+      this.searches.set(now, bySource);
+    }
+    let pending = bySource.get(source.id);
+    if (!pending) {
+      pending = perplexitySearch(company, this.env);
+      bySource.set(source.id, pending);
+    }
+    return pending;
+  }
 
   async collect(input: CollectInput): Promise<CollectResult> {
     const { source, company } = input;
     const useGoogle =
       source.type === "recherche_web" ||
       (source.type === "actualites" && !/rss|feed|atom|xml/i.test(source.url));
-    const url =
-      useGoogle && !source.url.includes("news.google.com")
-        ? googleNewsUrl(company?.name ?? source.label)
-        : source.url;
+    // Source presse d'une entreprise : la requête suit le nom courant et les alias, pas l'URL
+    // enregistrée à la création (renommage, alias ajoutés depuis).
+    const url = useGoogle
+      ? company
+        ? googleNewsUrl(companyNames(company))
+        : source.url.includes("news.google.com")
+          ? source.url
+          : googleNewsUrl(source.label)
+      : source.url;
     const fallback: Outlet = company
       ? { name: company.name, domain: company.domain, brand: company.brand }
       : { name: hostOf(url), domain: hostOf(url), brand: brandFor(hostOf(url)) };
-    const search = useGoogle && company ? perplexitySearch(company, this.env) : null;
+    const search = useGoogle && company ? this.search(company, source, input.now) : null;
 
     let items: RawItem[];
     let warning: CollectWarning | undefined;
     try {
       const feed = await this.readFeed(url, fallback);
+      // Page sans flux, même aux adresses habituelles : échec définitif, visible sur la source
+      // (et non un succès silencieux), jusqu'à ce que son adresse soit corrigée.
+      if (!feed) return { ok: false, code: "NO_FEED", reason: NO_FEED_REASON, transient: false };
       const via: ObservationVia = useGoogle ? "google_news" : "flux";
-      items = (feed ?? []).map((i) => ({ ...i, via }));
-      if (!feed) warning = { code: "NO_FEED", reason: NO_FEED_REASON };
+      items = feed.map((i) => ({ ...i, via }));
     } catch (e) {
       const err = e as Error & { code?: string };
       const failure = {
@@ -446,13 +561,32 @@ export class RealCollector implements Collector {
   /** Éléments du flux ; null si la page n'est pas un flux et n'en annonce aucun. */
   private async readFeed(url: string, fallback: Outlet): Promise<RawItem[] | null> {
     let text = await this.fetchText(url);
-    if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) {
+    if (!isFeed(text)) {
       const alt = text.match(/<link[^>]+type="application\/(?:rss|atom)\+xml"[^>]*>/i)?.[0];
       const href = alt?.match(/href="([^"]+)"/i)?.[1];
-      if (!href) return null;
-      text = await this.fetchText(new URL(href, url).toString());
+      if (href) {
+        text = await this.fetchText(new URL(href, url).toString());
+      } else {
+        const probed = await this.probeFeed(url);
+        if (!probed) return null;
+        text = probed;
+      }
     }
     return parseFeed(text, fallback);
+  }
+
+  /** Flux aux adresses habituelles du site, quand la page n'en annonce aucun ; null sinon. */
+  private async probeFeed(pageUrl: string): Promise<string | null> {
+    const origin = new URL(pageUrl).origin;
+    for (const path of FEED_PROBES) {
+      try {
+        const text = await this.fetchText(`${origin}${path}`);
+        if (isFeed(text)) return text;
+      } catch {
+        // Adresse absente ou injoignable : on essaie la suivante.
+      }
+    }
+    return null;
   }
 
   private async fetchText(url: string): Promise<string> {

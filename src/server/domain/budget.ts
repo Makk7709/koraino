@@ -21,6 +21,8 @@ export const COSTS = {
   article: 0.45,
   linkedin: 0.08,
   summary: 0.02,
+  /** Lecture d'une publication par le modèle (catégorie, importance) à la collecte. */
+  classification: 0.005,
   search: 0.012,
   observation: 0.021,
 } as const;
