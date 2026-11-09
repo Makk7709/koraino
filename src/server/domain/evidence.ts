@@ -48,6 +48,10 @@ export function detectContradictions(observations: Observation[]): string[] {
   return [`Montants divergents selon les sources : ${parts.join(" / ")}`];
 }
 
+function isSameOrSubdomain(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
 /**
  * Indicateur documentaire (§3.3) : état explicable du dossier, distinct du score éditorial.
  * Ce n'est pas une probabilité.
@@ -58,8 +62,11 @@ export function computeEvidence(
   now: Date,
 ): EvidenceState {
   const isDirect = (o: Observation) =>
-    !!company && (o.outlet.domain === company.domain || hostOf(o.url).endsWith(company.domain));
-  const direct = observations.filter(isDirect);
+    !!company &&
+  (
+    isSameOrSubdomain(o.outlet.domain, company.domain) ||
+    isSameOrSubdomain(hostOf(o.url), company.domain)
+  );  const direct = observations.filter(isDirect);
   const directSource = direct.length > 0;
 
   const external = new Map<string, string>();
