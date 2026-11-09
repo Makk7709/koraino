@@ -180,7 +180,7 @@ Les tests ci-dessous vérifient les **décisions de KORA sur les observations** 
 
 **Autres tests métier / non-régression :** les cas de flux RSS officiel vérifient qu’un article correctement daté peut être conservé sans lire sa page et qu’un article ancien est écarté ; le cas Perplexity vérifie que ses règles de datation, filtrage et déduplication existantes restent inchangées. `liens-google-news.test.ts` couvre en complément les liens décodés, le cache, les annulations et la collecte à travers les routes simulées.
 
-**Dernier changement après l’archive examinée :** les trois tests additionnels portant sur l’annulation pendant la lecture du *corps* HTTP (page Google News, `batchexecute`, délai individuel de huit secondes) ont été rapportés par Cursor/Grok. **L’exécution de la suite complète contenant ces tests a ensuite été reproduite indépendamment sur le Mac : 638/638, code de sortie 0.** Leur code final n’a pas été relu indépendamment après ce dernier ajustement.
+**Dernier changement après l’archive examinée :** les trois tests additionnels portant sur l’annulation pendant la lecture du *corps* HTTP (page Google News, `batchexecute`, délai individuel de huit secondes) ont été ajoutés en dernier. **L’exécution de la suite complète contenant ces tests a ensuite été reproduite indépendamment sur le Mac : 638/638, code de sortie 0.** Leur code final n’a pas été relu indépendamment après ce dernier ajustement.
 
 ### 7.2 Types de tests effectués et non effectués
 
@@ -191,7 +191,7 @@ Les tests ci-dessous vérifient les **décisions de KORA sur les observations** 
 | **Intégration applicative simulée** | Couvert | Parcours de la route de collecte et de ses services avec sources, horloge, HTTP et stockage de test simulés |
 | **Erreurs et résilience** | Couvert sur scénarios ciblés | HTTP 403/500, timeouts, redirections, dépassement de taille, annulation, essais suivants |
 | **Régression globale** | **Réussite reproduite indépendamment** | 638/638 tests dans 46 fichiers, exécutés sur Mac le 29/10/2026 ; code de sortie 0 ; tests HTTP simulés |
-| **Qualité statique et compilation** | **Réussite reproduite indépendamment** | `tsc --noEmit` sans erreur, ESLint 0 erreur/6 avertissements préexistants, build Vite + SSR + Nitro réussi ; `git diff --check` annoncé auparavant par Cursor |
+| **Qualité statique et compilation** | **Réussite reproduite indépendamment** | `tsc --noEmit` sans erreur, ESLint 0 erreur/6 avertissements préexistants, build Vite + SSR + Nitro réussi ; `git diff --check` sans erreur |
 | **CI GitHub sur PR Draft** | 39 tests, TypeScript, ESLint et build réussis sur `d618a10` |
 | **E2E réel / recette métier** | **À faire avant mise en production** | Nouvelle version de la branche à tester en environnement isolé avec vraies pages Google News/éditeurs ; ne pas modifier la base locale de 30 entreprises |
 | **Performance et stabilité réelles** | **À mesurer** | Temps/volume de requêtes d’une collecte réelle et taux de rejets par cause ; budgets simulés ≠ mesure réseau réelle |
