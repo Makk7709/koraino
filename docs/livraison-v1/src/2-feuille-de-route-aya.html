@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>KORA — Livraison V1 — Feuille de route Aya</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="cover">
+  <div class="kicker">KORA Newsroom · Livraison V1 · Feuille de route</div>
+  <h1>Aya — ingénieure lead<br>Semaine du 9 au 13 novembre 2026</h1>
+  <div class="meta">
+    À lire avec le <b>plan commun</b>, qui fixe le périmètre, les règles, l'ordre de fusion, la recette et le retour arrière.<br>
+    Ce document détaille tes tâches, avec les commandes exactes et ce qu'il faut vérifier en relecture.
+  </div>
+</div>
+
+<h2 style="margin-top:4px">1. Ton rôle cette semaine</h2>
+<ul>
+  <li><b>Intégratrice</b> : tu es la seule à fusionner dans <code>main</code>, dans l'ordre du plan commun (section 5).</li>
+  <li><b>Relectrice et formatrice</b> : tu relis les trois PR d'Anne-Laure en binôme et tu l'aides à les mener jusqu'au bout. Les questions de compréhension de la section 4 servent à la faire progresser : l'objectif est qu'elle sache défendre chaque choix de sa PR.</li>
+  <li><b>Autrice</b> : PR 0 (lundi), et tes PR <a href="https://github.com/Makk7709/koraino/pull/3">#3</a> et <a href="https://github.com/Makk7709/koraino/pull/2">#2</a> si elles passent les critères.</li>
+  <li><b>Responsable de la mise en production</b> jeudi, et de la préparation de la V1.1 (ta pile A3/A4/P0-01).</li>
+</ul>
+
+<table>
+  <tr><th style="width:16%">Quand</th><th>Tâche</th><th style="width:12%">Section</th></tr>
+  <tr><td>Lundi 10 h</td><td>PR 0, socle CI, fusionnée avant 12 h</td><td>2</td></tr>
+  <tr><td>Lundi 11 h</td><td>Rangement des PR de la V1.1 (#4, #6, #7)</td><td>3</td></tr>
+  <tr><td>Lundi après-midi</td><td>Pousser le complément de #2 ; préparer #3</td><td>5, 6</td></tr>
+  <tr><td>Mardi 9 h</td><td>Relecture de #5 et P2-09, fusion avant 12 h</td><td>4</td></tr>
+  <tr><td>Mardi après-midi</td><td>Test comparatif de #2 ; #3 à jour</td><td>5, 6</td></tr>
+  <tr><td>Mercredi 9 h–13 h</td><td>Test comparatif et relecture de #1, fusion</td><td>4</td></tr>
+  <tr><td>Mercredi 14 h–18 h</td><td>Fusion de #3, décision et fusion de #2, gel</td><td>5, 6</td></tr>
+  <tr><td>Jeudi</td><td>Contrôles, publication 11 h, recette</td><td>Plan commun 10–11</td></tr>
+  <tr><td>Vendredi</td><td>Étiquette <code>v1.0.0</code>, notes de version, V1.1</td><td>7, 8</td></tr>
+</table>
+
+<h2>2. Lundi 10 h : PR 0, le socle d'intégration continue</h2>
+
+<p>But : que <code>main</code> passe au vert pour tout le monde. Tu reprends tes propres corrections, déjà présentes dans #2 et dans la branche C01, sans rien réécrire.</p>
+<div class="box warn"><span class="t">Avant la première commande (et à vérifier avec Anne-Laure lundi)</span>
+Les commandes de ces documents portent des commentaires en fin de ligne. Le zsh de macOS ne les reconnaît pas par défaut et les passe en arguments (<code>bun run lint  # 0 erreur</code> échouerait). Une fois par poste : <code>echo 'setopt interactivecomments' &gt;&gt; ~/.zshrc &amp;&amp; source ~/.zshrc</code></div>
+
+<pre>git fetch origin
+git switch -c chore/socle-ci origin/main
+
+<span class="c"># Réglage ESLint et deux fichiers reformatés : version de ta PR #2</span>
+git checkout origin/fix/kora-publication-dates -- \
+  eslint.config.js src/server/connectionKeyCrypto.ts src/test/server/budget.test.ts
+
+<span class="c"># Workflow commun (ton commit f94b730 sur la branche C01)</span>
+git checkout origin/fix_C01_Securiser_les_sorties_HTTP_du_collecteur -- .github/workflows/ci.yml
+
+bun install --frozen-lockfile
+bunx tsc --noEmit -p . &amp;&amp; bun run lint &amp;&amp; bun --no-env-file run test \
+  &amp;&amp; bun --no-env-file run build &amp;&amp; git diff --check origin/main
+
+git status        <span class="c"># exactement les 4 fichiers ci-dessous, déjà ajoutés par checkout</span>
+git add eslint.config.js src/server/connectionKeyCrypto.ts \
+  src/test/server/budget.test.ts .github/workflows/ci.yml
+git commit -m "Intégration continue : main au vert, fichiers générés exclus du formatage Prettier"
+git push -u origin chore/socle-ci</pre>
+
+<p><b>Résultat attendu</b> (vérifié le 8 novembre) : ESLint 0 erreur et 6 avertissements <code>react-refresh</code> connus, TypeScript OK, 606 tests sur 45 fichiers, build OK.</p>
+
+<h4>Description de la PR 0</h4>
+<pre>## Problème
+`bun run lint` échoue sur main (209 erreurs), presque toutes dans des fichiers régénérés
+par la plateforme (src/integrations/supabase/*, appUserConnector.ts). Chaque PR doit donc
+reformater ces fichiers pour avoir une CI verte, ce qui crée du bruit et des conflits.
+
+## Changement
+- eslint.config.js : règle prettier/prettier désactivée sur les fichiers générés
+  (les autres règles restent actives). Repris à l'identique de #2.
+- connectionKeyCrypto.ts, budget.test.ts : formatage. Repris de #2.
+- .github/workflows/ci.yml : CI commune (TypeScript, ESLint, Vitest, build, espaces).
+
+## Tests
+- Lint 0 erreur, 606 tests sur 45 fichiers, build OK.
+
+## Effet sur les autres PR
+- #2 et #1 contiennent les mêmes fichiers à l'identique : aucun conflit à prévoir.
+- #5 et #1 pourront retirer leur reformatage des fichiers générés.</pre>
+
+<p>Demande la relecture à Anne-Laure (elle a la grille du plan commun), puis fusionne avec « Create a merge commit ». Préviens-la dès que c'est fait : elle enchaîne sur #5.</p>
+
+<div class="box warn"><span class="t">Avant chaque fusion sur GitHub, toute la semaine</span>
+<ul class="check" style="margin:4px 0 0">
+  <li>CI <b>quality</b> verte sur le dernier commit de la PR, et la PR est à jour avec <code>main</code> (sinon « Update branch » → « Update with merge commit », jamais « rebase »).</li>
+  <li>L'onglet « Files changed » ne montre que les fichiers attendus (listés ci-dessous pour chaque PR), et aucun de <code>.env</code>, <code>drizzle/</code>, <code>db/</code>, <code>supabase/</code>, <code>src/integrations/</code>.</li>
+  <li>Le bouton vert affiche « Create a merge commit » (GitHub retient le dernier choix : vérifier à chaque fois).</li>
+  <li>Après la fusion : prévenir l'autre ingénieure, qui met à jour ses branches ouvertes (<code>git merge origin/main --no-edit</code>).</li>
+</ul></div>
+
+<div class="box info"><span class="t">Après la fusion</span>
+Le contrôle s'appelle <b>quality</b> dans GitHub. Si Amine active la protection de <code>main</code> (plan commun, section 15), c'est ce contrôle qu'il faut rendre obligatoire.</div>
+
+<h2>3. Lundi 11 h : ranger les PR de la V1.1</h2>
+<ul class="check">
+  <li>Créer l'étiquette <b>V1.1</b> (Issues, Labels, New label) et la poser sur <a href="https://github.com/Makk7709/koraino/pull/4">#4</a>, <a href="https://github.com/Makk7709/koraino/pull/6">#6</a> et <a href="https://github.com/Makk7709/koraino/pull/7">#7</a>.</li>
+  <li>Passer <a href="https://github.com/Makk7709/koraino/pull/4">#4</a> en brouillon (« Convert to draft », dans la colonne de droite). C'est la seule des trois qui vise directement <code>main</code> : elle pourrait être fusionnée par erreur.</li>
+  <li>Laisser ce commentaire sur #4 :</li>
+</ul>
+<pre>Reportée en V1.1 (semaine du 16 novembre). Cette pile apporte 13 migrations SQL
+(0002 à 0014), appliquées à la synchronisation de main : elle demande une fenêtre de
+migration avec sauvegarde et vérification préalable. Ne pas fusionner, ne pas changer
+la base de #6 et #7 d'ici là.</pre>
+
+<h2>4. Relire les PR d'Anne-Laure</h2>
+
+<p>Déroulé de chaque relecture en binôme (30 minutes, partage d'écran) :</p>
+<ol>
+  <li>Anne-Laure présente en 5 minutes : le problème, sa correction, son test qui échouait avant.</li>
+  <li>Vous parcourez ensemble <code>git diff origin/main</code> fichier par fichier.</li>
+  <li>Tu poses les questions de compréhension ci-dessous. Si une réponse est floue, vous la travaillez ensemble jusqu'à ce qu'elle soit claire : c'est le cœur de la formation.</li>
+  <li>Tu écris les décisions en commentaire de la PR (une ligne par décision).</li>
+  <li>Si tout est coché : approbation, puis fusion par toi.</li>
+</ol>
+
+<h3>4.1 PR <a href="https://github.com/Makk7709/koraino/pull/5">#5</a> — exports CSV (P1-06), mardi 9 h</h3>
+<h4>À vérifier</h4>
+<ul class="check">
+  <li><code>git diff origin/main --stat</code> : seulement <code>src/server/domain/csv.ts</code>, <code>src/test/server/domain/csv.test.ts</code> et <code>docs/11-anomalies-connues.md</code>.</li>
+  <li>La modification de <code>package.json</code> et <code>bun.lock</code> (versions de <code>drizzle-kit</code> et <code>drizzle-orm</code> figées) a disparu : elle était hors sujet.</li>
+  <li><b>Régression corrigée</b> : avant la PR, une cellule qui commence par une tabulation (<code>"\tvaleur"</code>) était préfixée ; la première version de la PR ne le faisait plus, car <code>trimStart()</code> retire la tabulation avant le test. La correction attendue et son test sont dans la feuille de route d'Anne-Laure (vérifiés : le test échoue sans la correction et passe avec).</li>
+  <li>Les nombres restent des nombres (<code>-42</code> non préfixé), les chaînes <code>"-42"</code> le sont.</li>
+  <li>P1-06 a quitté le tableau P1 de <code>docs/11</code> et figure dans « Corrigées depuis la consolidation ».</li>
+</ul>
+<h4>Questions de compréhension</h4>
+<table>
+  <tr><th style="width:42%">Question</th><th>Ce qu'on attend</th></tr>
+  <tr><td>Pourquoi une apostrophe devant la cellule ?</td><td>Les tableurs interprètent une cellule qui commence par <code>=</code>, <code>+</code>, <code>-</code>, <code>@</code>, tabulation ou retour chariot comme une formule. L'apostrophe force l'affichage en texte. C'est une atténuation, pas une garantie absolue (selon le tableur et le mode d'import).</td></tr>
+  <tr><td>Pourquoi le bug passait-il avec un tableau ?</td><td>Le test était conditionné à <code>typeof value === "string"</code> : un tableau d'alias dont le premier élément est <code>=HYPERLINK(…)</code> donnait une chaîne finale dangereuse sans être testé.</td></tr>
+  <tr><td>Pourquoi <code>-42</code> n'est-il pas préfixé alors que <code>"-42"</code> l'est ?</td><td>Un nombre ne peut pas porter de formule ; le préfixer abîmerait les données numériques. Une chaîne peut, elle, venir d'une saisie utilisateur.</td></tr>
+  <tr><td>Certains tests utilisent <code>toContain("'")</code>. Est-ce suffisant ?</td><td>Non : ce test passerait même si l'apostrophe était ailleurs dans la ligne. Mieux vaut <code>toBe(…)</code> sur la ligne complète. À améliorer si le temps le permet, non bloquant.</td></tr>
+</table>
+
+<h3>4.2 PR P2-09 — fausse source directe, mardi 9 h 30</h3>
+<h4>À vérifier</h4>
+<ul class="check">
+  <li>La PR existe (branche <code>AL_P2-09_fausse_source_directe</code>, base <code>main</code>).</li>
+  <li>Le correctif couvre <b>les deux</b> endroits fautifs : <code>src/server/adapters/collector.ts</code> (flux « propre » de l'entreprise) et <code>src/server/domain/evidence.ts</code> (indicateur « source directe »), via une seule fonction <code>isCompanyHost</code>.</li>
+  <li>Tests : le test de collecte existant (<code>notkalray.eu</code>) et un test unitaire de <code>evidence.ts</code> (<code>notpasqal.com</code>).</li>
+  <li><code>docs/11</code> : P2-09 reste dans le tableau P2 mais ne décrit plus que ce qui reste vrai (filtre par nom par sous-chaîne, sensible aux accents, sans frontière de mot) ; une ligne « P2-09 (partiel) » est ajoutée aux corrigées.</li>
+  <li>Les quatre autres documents qui décrivaient l'ancien test sont à jour (<code>docs/03</code>, <code>04</code>, <code>05</code>, <code>06</code>) : <code>grep -rn "endsWith(company.domain)\|point de séparation" docs src</code> ne renvoie que la ligne « P2-09 (partiel) » de <code>docs/11</code>.</li>
+  <li><code>git diff origin/main --stat</code> : 9 fichiers (<code>collector.ts</code>, <code>evidence.ts</code>, 2 fichiers de test, <code>docs/03</code>, <code>04</code>, <code>05</code>, <code>06</code>, <code>11</code>).</li>
+  <li><b>Ordre</b> : fusionne d'abord #5. Anne-Laure met ensuite P2-09 à jour : un conflit <b>certain</b> dans <code>docs/11</code> (deux lignes ajoutées au même endroit du tableau « Corrigées »). Vérifie après sa résolution : les deux lignes P1-06 et « P2-09 (partiel) » sont présentes, aucun marqueur, CI verte.</li>
+</ul>
+<h4>Questions de compréhension</h4>
+<table>
+  <tr><th style="width:42%">Question</th><th>Ce qu'on attend</th></tr>
+  <tr><td>Pourquoi <code>host.endsWith(domain)</code> est-il faux ?</td><td><code>"notpasqal.com".endsWith("pasqal.com")</code> est vrai. Il faut l'égalité, ou la fin par <code>"." + domain</code> pour un sous-domaine.</td></tr>
+  <tr><td>Quel effet visible pour un journaliste ?</td><td>Un site tiers au nom proche était présenté comme « source directe » de l'entreprise : l'indicateur documentaire montait à tort, et un flux tiers échappait au filtre par nom.</td></tr>
+  <tr><td>Que reste-t-il de P2-09 après la PR ?</td><td>Le filtre par nom des flux généralistes (recherche de sous-chaîne). Prévu en V1.1.</td></tr>
+</table>
+
+<h3>4.3 PR <a href="https://github.com/Makk7709/koraino/pull/1">#1</a> — sorties HTTP du collecteur (P1-08), mercredi</h3>
+<h4>Avant la relecture : test de collecte comparatif (9 h–10 h 30, en binôme)</h4>
+<p>Protocole et jeu de contrôle dans le plan commun, section 9 (script <code>test-collecte.sh</code>). Anne-Laure conduit, tu observes. Attendus : mêmes statuts et mêmes nombres que sur <code>main</code>, aucune nouvelle erreur <code>URL_REFUSED</code> ni <code>HOST_MISMATCH</code>, Alpao en échec <code>NETWORK</code> ou <code>TIMEOUT</code> rapide, et le port 8443 accepté sur <code>main</code> mais refusé sur la branche. Les deux tableaux sont collés dans la PR.</p>
+<h4>Le conflit de test : à contrôler de près</h4>
+<p>La mise à jour de #1 avec <code>main</code> (après P2-09) produit un conflit imbriqué dans <code>collecte-reelle.test.ts</code> : deux morceaux, dont l'un englobe plus de 300 lignes de tests C01. La feuille d'Anne-Laure donne une méthode sûre, rejouée le 8 novembre (sa version du fichier, puis le test P2-09 recollé à la fin du bloc « flux des entreprises »). Vérifie sur sa branche :</p>
+<pre>grep -c notkalray src/test/server/collecte-reelle.test.ts      <span class="c"># 2</span>
+bunx vitest run src/test/server/collecte-reelle.test.ts         <span class="c"># 24 tests verts</span></pre>
+<h4>À vérifier dans le code</h4>
+<ul class="check">
+  <li>Diff limité au sujet : <code>safeHttp.ts</code>, <code>security.ts</code>, <code>collector.ts</code>, leurs tests, la documentation. Plus aucun fichier de <code>src/integrations/</code> ; <code>connectionKeyCrypto.ts</code>, <code>budget.test.ts</code> et <code>ci.yml</code> identiques à <code>main</code>.</li>
+  <li><code>safeFetchText</code> : <code>redirect: "manual"</code>, revalidation de chaque <code>Location</code> par <code>validateSourceUrl</code>, 5 redirections au plus, un seul délai de 15 s pour toute la chaîne, corps lu en flux et plafonné à 2 Mio (contrôle de <code>content-length</code> puis compteur d'octets).</li>
+  <li><code>validateSourceUrl</code> : ports 80 et 443 seulement ; nouvelles plages bloquées (192.0.0.0/24, 192.0.2.0/24, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 64:ff9b::/96, 2001:db8::/32, fec0::/10). Effet de bord voulu : la création d'une source sur un autre port est refusée en 422 <code>url_refused</code>.</li>
+  <li><code>isTransientCollectError</code> : <b>changement de comportement à noter</b>. Avant, tout échec sauf 403 et 404 était réessayé. Maintenant, seuls <code>TIMEOUT</code>, <code>NETWORK</code>, 408, 425, 429 et 5xx le sont ; un 400, 401 ou 410 ne l'est plus. C'est plus juste ; il faut que ce soit écrit dans la description de la PR.</li>
+  <li><code>HOST_MISMATCH</code> : refus d'une redirection vers un autre domaine (<code>www.</code> mis à part). <b>Décision : on garde ce comportement strict pour la V1.</b> Vérifié le 8 novembre : aucune des 30 sources « Site officiel » du pilote ne redirige vers un autre domaine. Il doit être documenté dans <code>docs/09-exploitation.md</code>, procédure « Une source est en échec » : corriger l'adresse de la source avec l'adresse finale.</li>
+  <li>Reporté en V1.1, à ne <b>pas</b> faire cette semaine : renommer <code>timeout_ms</code> en <code>timeoutMs</code> et reprendre <code>SAFE_FETCH_DEFAULTS.timeoutMs</code>. Il doit figurer dans « Limites » de la description.</li>
+  <li><code>docs/11</code> : P1-08 marqué « partiellement corrigé », ce qui reste étant la résolution DNS (rebinding) et le domaine d'entreprise « 127.1 ». <code>grep -rn "endsWith(company.domain)\|point de séparation\|séparation de domaine" docs src</code> ne renvoie que la ligne « P2-09 (partiel) ».</li>
+  <li><code>docs/09-exploitation.md</code> : paragraphe des nouveaux codes d'échec ajouté après la ligne « Symptôme : ».</li>
+</ul>
+<h4>Questions de compréhension</h4>
+<table>
+  <tr><th style="width:42%">Question</th><th>Ce qu'on attend</th></tr>
+  <tr><td>Pourquoi <code>redirect: "manual"</code> ?</td><td>Sinon <code>fetch</code> suit les redirections tout seul, sans revalidation : une adresse publique pourrait rediriger vers <code>127.0.0.1</code> ou <code>169.254.169.254</code> (métadonnées d'un serveur cloud). C'est l'attaque SSRF.</td></tr>
+  <tr><td>Pourquoi un seul délai pour toute la chaîne ?</td><td>Avec un délai par requête, 5 redirections de 15 s chacune bloqueraient la collecte 90 s. C'était l'exercice 4a.</td></tr>
+  <tr><td>Pourquoi lire le corps en flux ?</td><td><code>res.text()</code> charge tout en mémoire : un serveur malveillant ou défaillant peut envoyer des gigaoctets. Le flux permet de couper à 2 Mio.</td></tr>
+  <tr><td>Pourquoi <code>URL_REFUSED</code> n'est-il jamais réessayé, et <code>TIMEOUT</code> oui ?</td><td>Un refus de sécurité donnera le même résultat à chaque essai et coûte un essai facturé ; un délai dépassé peut être passager.</td></tr>
+  <tr><td>Qu'est-ce que le DNS rebinding, et pourquoi la PR ne le règle pas ?</td><td>Un nom public dont la résolution renvoie une adresse privée. La PR vérifie le nom écrit dans l'adresse, pas l'adresse IP obtenue. Cloudflare Workers bloque en pratique les adresses privées, ce qui limite le risque ; une vraie parade demande une résolution DNS maîtrisée, prévue en V1.1.</td></tr>
+  <tr><td>Le 5 novembre, un test a été supprimé, puis rétabli le 6 : qu'avait-il de faux ?</td><td>Il attendait une erreur sans code ; la règle retenue est « toute erreur porte un code ». Le test a été gardé et son attendu corrigé. Bonne occasion de rappeler : on ne supprime pas un test qui gêne, on comprend pourquoi il échoue.</td></tr>
+  <tr><td>Quel cas légitime bloque <code>HOST_MISMATCH</code>, et que fait l'administratrice ?</td><td>Un site qui redirige <code>societe.com</code> vers <code>societe.fr</code> ou vers <code>blog.societe.com</code>. Elle remplace l'adresse de la source par l'adresse finale.</td></tr>
+</table>
+
+<h2>5. PR <a href="https://github.com/Makk7709/koraino/pull/2">#2</a> — dates de publication (décision mercredi 16 h)</h2>
+<h3>Lundi après-midi</h3>
+<ul class="check">
+  <li>Pousser le correctif complémentaire décrit dans la PR : le décodeur utilise <code>https://news.google.com/rss/articles/{id}</code> au lieu de <code>https://news.google.com/articles/{id}</code>, qui répondait 429 sur le cas Kalray/Openchip. Ajouter le test correspondant si ce n'est pas fait. Mettre à jour la section « non encore poussé » de la description.</li>
+  <li><code>git merge origin/main --no-edit</code> (après la PR 0) : aucun conflit attendu, les fichiers de la PR 0 sont identiques aux tiens.</li>
+  <li><b>Retirer deux mentions d'outils de génération de code</b> dans <code>docs/reference/2026-10-kora-google-news-publication-dates.md</code> (consigne d'Amine : aucune mention de ce type dans le dépôt) :
+    <ul>
+      <li>vers la ligne 183 : « ont été rapportés par Cursor/Grok. » → « ont été ajoutés en dernier. » ;</li>
+      <li>vers la ligne 194 : « `git diff --check` annoncé auparavant par Cursor » → « `git diff --check` sans erreur ».</li>
+    </ul>
+    Contrôle : <code>grep -n -i -E 'cursor|grok' docs/reference/2026-10-kora-google-news-publication-dates.md</code> ne doit rien afficher. Les messages de commit déjà poussés ne changent pas (pas de réécriture d'historique) ; ils n'en contiennent pas, vérifié le 8 novembre.</li>
+</ul>
+<h3>Mardi après-midi : test comparatif</h3>
+<p>Protocole du plan commun, section 9 (script <code>test-collecte.sh</code>), sur <code>main</code> puis sur ta branche, à quelques minutes d'intervalle. Le script donne les statuts, le nombre de publications retenues et la durée totale. Pour les publications rejetées et leur motif (ancienne, date non confirmable, dates contradictoires, page éditeur inaccessible), complète avec les journaux du terminal du serveur et l'écran Veille de l'instance locale, sans relancer le script. Repère : le 8 novembre, entre le <code>main</code> actuel et la fin de semaine simulée (toutes les PR V1, dont #2), Kalray (Google News) passait de 3 à 2 publications et la durée totale de 8 à 11 secondes.</p>
+<h3>Mercredi 16 h : décision avec Amine</h3>
+<p>Critères du plan commun, section 12. Rappel des seuils : rejets des vieilles publications Kalray, aucune source vidée sans motif lisible, au moins 80 % des publications récentes retenues sur <code>main</code> encore retenues, durée au plus doublée, CI verte après mise à jour avec <code>main</code> (qui contient alors #1).</p>
+<ul>
+  <li><b>Si oui</b> : <code>git merge origin/main --no-edit</code> (aucun conflit avec #1, vérifié), les cinq contrôles, CI verte, fusion avant 18 h.</li>
+  <li><b>Si non</b> : étiquette V1.1, commentaire avec le résultat du test et ce qui manque.</li>
+</ul>
+<div class="box warn"><span class="t">Pour la V1.1, dans tous les cas</span>
+<code>src/server/services/publisher-page.ts</code> refait son propre <code>fetch</code> avec <code>validateSourceUrl</code> et <code>redirect: "manual"</code>. Une fois #1 fusionnée, il faudra le faire passer par <code>safeFetchText</code> (option <code>maxBytes: 1 Mio</code>) pour n'avoir qu'une seule porte de sortie HTTP à sécuriser. Ton workflow <code>kora-quality.yml</code> fera aussi doublon avec <code>ci.yml</code> : à fusionner en un seul.</div>
+
+<h2>6. PR <a href="https://github.com/Makk7709/koraino/pull/3">#3</a> — logos (fusion mercredi 14 h si l'identifiant est là)</h2>
+<ul class="check">
+  <li>Obtenir d'Amine l'identifiant client Brandfetch (attendu mardi soir).</li>
+  <li>Le déclarer dans les variables du projet sur la plateforme sous le nom <code>VITE_BRANDFETCH_CLIENT_ID</code>. C'est une variable lue <b>à la compilation</b> (<code>import.meta.env</code>) : elle n'est prise en compte qu'à la publication suivante. Elle est publique par nature (visible dans le code envoyé au navigateur), ce n'est pas un secret.</li>
+  <li><code>git merge origin/main --no-edit</code> (aucun conflit, vérifié), puis <code>bun run lint</code> <b>complet</b> : la description de la PR indique un lint limité aux fichiers modifiés.</li>
+  <li><b>Espace en fin de ligne</b> dans <code>docs/12-logos-entreprises-brandfetch.md</code>, ligne 124 (deux espaces après le titre, saut de ligne Markdown) : <code>git diff --check origin/main</code> la signale. Retirer les deux espaces, ou les remplacer par une ligne vide.</li>
+  <li>La PR ajoute <code>@playwright/test</code> en dépendance de développement (tests de navigateur). Sans effet sur la production ; à mentionner dans la description. <code>bun install --frozen-lockfile</code> doit passer après la mise à jour.</li>
+  <li>Vérifier en local, avec puis sans la variable : logos affichés ; sans identifiant, domaine invalide, erreur 404 ou délai de 10 s dépassé, retour aux initiales.</li>
+  <li>Le workflow <code>company-logos-ci.yml</code> ne se déclenche que sur la branche <code>feat/company-logos</code> : après fusion il ne servira plus. Le retirer avant fusion ou le garder pour un lancement manuel, au choix ; le test E2E Playwright reste disponible avec <code>bun run test:e2e</code>.</li>
+  <li>Relecture par Anne-Laure avec la grille du plan commun, puis fusion.</li>
+</ul>
+
+<h2>7. Jeudi et vendredi : publication et clôture</h2>
+<p>Jeudi : contrôles, publication à 11 h et recette, selon le plan commun (sections 10 et 11). Tu publies, tu surveilles les journaux pendant la recette, tu animes le bilan de 17 h avec Amine.</p>
+<p>Vendredi matin, une fois la livraison validée :</p>
+<pre>git fetch origin &amp;&amp; git switch main &amp;&amp; git pull --ff-only
+git tag -a v1.0.0 -m "KORA Newsroom V1" &lt;sha-du-commit-publié&gt;
+git push origin v1.0.0</pre>
+<h4>Notes de version (à publier sur GitHub, Releases, depuis l'étiquette)</h4>
+<pre>KORA Newsroom V1 — 13 novembre 2026
+
+Sécurité
+- Exports CSV : neutralisation des formules étendue aux tableaux et aux valeurs précédées d'espaces (P1-06).
+- Collecteur : chaque redirection est revérifiée, ports 80/443 seulement, réponses plafonnées à 2 Mio,
+  délai global de 15 s, plages d'adresses réservées bloquées (P1-08, partiel).
+
+Fiabilité
+- « Source directe » : un domaine qui se termine comme celui de l'entreprise n'est plus pris pour elle (P2-09, partiel).
+- [si fusionnée] Collecte : date de publication confirmée sur la page de l'éditeur pour Google News.
+
+Interface
+- [si fusionnée] Logos des entreprises.
+
+Outillage
+- Intégration continue commune, lint vert sur main.
+
+Connu et planifié en V1.1 : traçabilité des appels payants et concurrence (A3/A4), newsletter (P0-01),
+P1-03, P1-09, fin de P2-09, protection contre le DNS rebinding.</pre>
+
+<h2>8. Préparer la V1.1 (vendredi après-midi)</h2>
+<ol>
+  <li><b>Ouvrir les PR manquantes</b>, en brouillon, pour que la pile soit relisible étage par étage :
+<pre>gh pr create --draft --base fix/kora-a3-tracabilite-appels-payants \
+  --head fix/kora-a4-concurrence-reprise --title "KORA A4 — concurrence et reprise"
+gh pr create --draft --base fix/kora-a4-concurrence-reprise \
+  --head fix/kora-a4-2-fusion-defusion --title "KORA A4.2 — fusion et défusion"</pre>
+  </li>
+  <li><b>Mettre la pile à jour avec <code>main</code></b> en remontant étage par étage (fusion, pas de rebase) : <code>a3</code>, puis <code>a4-concurrence</code>, <code>a4-2</code>, <code>a4-3</code>, <code>p0-01</code>. Conflits attendus : <code>eslint.config.js</code> (garder la version de <code>main</code>, qui couvre aussi <code>appUserConnector.ts</code>), <code>docs/02-architecture.md</code> et <code>docs/06-securite-et-flux-tiers.md</code> (garder les deux apports).</li>
+  <li><b>Préparer la fenêtre de migration</b> :
+    <ul>
+      <li>vérifier quelle sauvegarde la base de production a réellement (offre, rétention, restauration à un instant donné) et faire une copie des tables <code>kora_records</code>, <code>kora_settings</code> et <code>app_user_connections</code> juste avant ;</li>
+      <li>faire exécuter <code>scripts/a43-preflight-readonly.sql</code> en lecture seule et lire le résultat ;</li>
+      <li>relire le plan de retour arrière (<code>docs/2026-11-03-a4-3-revue-finale-pr-et-retour-arriere.md</code>) et le compléter pour <code>0014</code> ;</li>
+      <li>choisir un créneau sans utilisateurs, en accord avec Amine. La fusion dans <code>main</code> déclenche l'application des migrations : c'est elle, le geste de mise en production.</li>
+    </ul>
+  </li>
+  <li><b>Consolider les workflows</b> : <code>ci.yml</code>, <code>kora-quality.yml</code>, <code>kora-a3.yml</code> et <code>company-logos-ci.yml</code> en un ou deux fichiers clairs (qualité, plus la base PostgreSQL isolée).</li>
+  <li><b>Reste à faire hors pile</b>, à répartir avec Anne-Laure : lecture des pages éditeur via <code>safeFetchText</code> ; P1-03 (appels OpenAI hors budget) ; P1-09 (en-têtes de sécurité, en commençant par HSTS, <code>X-Content-Type-Options</code>, <code>Referrer-Policy</code> et <code>frame-ancestors</code>, la CSP complète en dernier car elle peut casser l'interface) ; fin de P2-09 ; résolution DNS contre le rebinding.</li>
+</ol>
+
+<h2>9. Accompagner Anne-Laure</h2>
+<ul>
+  <li>Elle a une méthode solide : test rouge, correction minimale, test vert, un commit par étape. Valorise-la et garde-la comme norme d'équipe.</li>
+  <li>Ses deux points de progrès visibles dans l'historique : le périmètre des PR (reformatage hors sujet, versions de dépendances changées au passage) et la mise à jour d'une branche sans réécrire l'historique. La feuille de route qu'elle a reçue lui donne les commandes exactes ; vérifie avec elle le premier <code>git merge origin/main</code> lundi.</li>
+  <li>En relecture, demande-lui d'expliquer plutôt que de corriger à sa place. Si elle bloque plus de 30 minutes sur un point, elle doit t'appeler : c'est la règle de la semaine.</li>
+  <li>Vendredi, propose-lui de prendre une tâche de la V1.1 en autonomie (par exemple la fin de P2-09, qu'elle connaît déjà).</li>
+</ul>
+
+<div class="signature">KORA Newsroom — Feuille de route d'Aya — version du 8 novembre 2026.</div>
+</body>
+</html>
