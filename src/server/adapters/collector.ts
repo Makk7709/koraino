@@ -18,6 +18,7 @@ import {
 } from "../store/catalog";
 import { hash32 } from "../store/prng";
 import type { CompanyRecord, SourceRecord } from "../store/records";
+import { isCompanyHost } from "../domain/evidence";
 
 /** Élément brut renvoyé par un collecteur (HTML non fiable, nettoyé ensuite). */
 export interface RawItem {
@@ -533,9 +534,7 @@ export class RealCollector implements Collector {
     if (company && !useGoogle) {
       // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
       // sauf si le flux est celui de l'entreprise elle-même.
-      const host = hostOf(url);
-      const domain = company.domain.replace(/^www\./, "");
-      const own = host === domain || host.endsWith(`.${domain}`);
+      const own = isCompanyHost(hostOf(url), company.domain);
       if (!own) {
         const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
         items = items.filter((i) =>

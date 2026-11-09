@@ -48,8 +48,13 @@ export function detectContradictions(observations: Observation[]): string[] {
   return [`Montants divergents selon les sources : ${parts.join(" / ")}`];
 }
 
-function isSameOrSubdomain(hostname: string, domain: string): boolean {
-  return hostname === domain || hostname.endsWith(`.${domain}`);
+/**
+ * Vrai si `host` est le domaine de l'entreprise ou l'un de ses sous-domaines.
+ * « notpasqal.com » n'est pas « pasqal.com ».
+ */
+export function isCompanyHost(host: string, domain: string): boolean {
+  const d = domain.toLowerCase().replace(/^www\./, "");
+  return d !== "" && (host === d || host.endsWith(`.${d}`));
 }
 
 /**
@@ -64,8 +69,8 @@ export function computeEvidence(
   const isDirect = (o: Observation) =>
     !!company &&
   (
-    isSameOrSubdomain(o.outlet.domain, company.domain) ||
-    isSameOrSubdomain(hostOf(o.url), company.domain)
+    isCompanyHost(o.outlet.domain, company.domain) ||
+    isCompanyHost(hostOf(o.url), company.domain)
   );  const direct = observations.filter(isDirect);
   const directSource = direct.length > 0;
 
