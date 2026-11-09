@@ -558,7 +558,6 @@ describe("collecte réelle : flux des entreprises", () => {
     ]);
   });
 
-
   it("ne considère pas un domaine qui se termine par le domaine officiel comme une source propre", async () => {
     const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
 
@@ -589,5 +588,4 @@ describe("collecte réelle : flux des entreprises", () => {
 
     expect(result.ok && result.items).toHaveLength(0);
   });
-
 });

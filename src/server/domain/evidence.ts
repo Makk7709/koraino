@@ -68,10 +68,9 @@ export function computeEvidence(
 ): EvidenceState {
   const isDirect = (o: Observation) =>
     !!company &&
-  (
-    isCompanyHost(o.outlet.domain, company.domain) ||
-    isCompanyHost(hostOf(o.url), company.domain)
-  );  const direct = observations.filter(isDirect);
+    (isCompanyHost(o.outlet.domain, company.domain) ||
+      isCompanyHost(hostOf(o.url), company.domain));
+  const direct = observations.filter(isDirect);
   const directSource = direct.length > 0;
 
   const external = new Map<string, string>();
