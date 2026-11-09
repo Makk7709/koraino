@@ -1,6 +1,6 @@
 
 import { describe, expect, it } from "vitest";
-import { computeEvidence } from "@/server/domain/evidence";
+import { computeEvidence, isCompanyHost } from "@/server/domain/evidence";
 import type { Observation } from "@/lib/api/types";
 
 const company = {
@@ -95,3 +95,25 @@ describe("computeEvidence - reconnaissance des domaines directs", () => {
     expect(result.directSource).toBe(false);
   });
 });
+
+describe("isCompanyHost", () => {
+    it("reconnaît le domaine exact", () => {
+      expect(isCompanyHost("pasqal.com", "pasqal.com")).toBe(true);
+    });
+  
+    it("reconnaît un sous-domaine", () => {
+      expect(isCompanyHost("blog.pasqal.com", "pasqal.com")).toBe(true);
+    });
+
+    it("reconnaît un domaine d'entreprise précédé de www", () => {
+      expect(isCompanyHost("pasqal.com", "www.pasqal.com")).toBe(true);
+    });
+  
+    it("refuse un domaine contenant simplement le nom de l'entreprise", () => {
+      expect(isCompanyHost("notpasqal.com", "pasqal.com")).toBe(false);
+    });
+  
+    it("refuse un domaine d'entreprise vide", () => {
+      expect(isCompanyHost("pasqal.com", "")).toBe(false);
+    });
+  });
