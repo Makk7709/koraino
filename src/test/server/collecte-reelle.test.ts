@@ -837,7 +837,7 @@ describe("C01 · intégration collecte (exercice 4b)", () => {
     });
     expect(updated.failureCode).not.toBe("23");
   });
-  it("réessaie après une TypeError réseau sans code (C01-T1)", async () => {
+  it("réessaie la collecte après une erreur réseau sans code (C01-T1)", async () => {
     const source = await pasqalCommuniques();
   
     let fetchCalls = 0;
