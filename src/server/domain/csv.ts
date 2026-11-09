@@ -30,7 +30,7 @@ export function toCsv(columns: string[], rows: Record<string, unknown>[]): strin
 
 function sanitizeString(value: string): string {
   const trimmed = value.trimStart();
-  if (/^[=+\-@]/.test(trimmed)) {
+  if (/^[\t\r]/.test(value) || /^[=+\-@]/.test(value.trimStart())) {
     return `'${value}`;
   }
 
