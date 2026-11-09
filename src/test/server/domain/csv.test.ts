@@ -126,5 +126,5 @@ describe("toCsv - conservation des données", () => {
   it("neutralise une cellule qui commence par une tabulation, même sans formule", () => {
     const result = toCsv(["nom"], [{ nom: "\tvaleur" }]);
     expect(result).toBe("nom\r\n'\tvaleur\r\n");
-    });
+  });
 });
