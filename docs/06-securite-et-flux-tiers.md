@@ -164,7 +164,7 @@ Ce filtrage porte sur l'URL déclarée, pas sur la connexion que le collecteur r
 - plusieurs plages réservées : `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24` en IPv4 ; `64:ff9b::/96`, `2001:db8::/32`, `fec0::/10` en IPv6 ;
 - les formes abrégées d'IPv4 comme `127.1` dans un domaine d'entreprise saisi sans schéma. Dans une URL, l'analyseur WHATWG les normalise en `127.0.0.1`, qui est refusé.
 
-Le collecteur décide aussi qu'un flux est celui de l'entreprise si son hôte est le domaine de l'entreprise ou l'un de ses sous-domaines (`isCompanyHost`) : `notpasqal.com` n'est pas le site de `pasqal.com`, et ses entrées passent par le filtre par nom. L'indicateur documentaire reconnaît une source directe par la même règle (voir [Indicateur documentaire](05-reglesmetier.md#indicateur-documentaire)).
+Le collecteur décide aussi qu'un flux est celui de l'entreprise si son hôte est le domaine de l'entreprise ou l'un de ses sous-domaines (`isCompanyHost`) : `notpasqal.com` n'est pas le site de `pasqal.com`, et ses entrées passent par le filtre par nom. L'indicateur documentaire reconnaît une source directe par la même règle (voir [Indicateur documentaire](05-regles-metier.md#indicateur-documentaire)).
 
 Sur Cloudflare Workers, les requêtes sortantes partent du réseau de Cloudflare et non d'un réseau privé : les adresses privées et de bouclage ne devraient normalement pas y être joignables, ce qui limite la portée de ces lacunes ; c'est à confirmer sur le déploiement. En développement local, le serveur s'exécute sur le poste du développeur : une redirection ou un flux annoncé peut y atteindre `localhost` ou le réseau local.
 
