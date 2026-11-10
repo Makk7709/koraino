@@ -557,4 +557,35 @@ describe("collecte réelle : flux des entreprises", () => {
       "https://www.kalray.eu/rss.xml",
     ]);
   });
+
+  it("ne considère pas un domaine qui se termine par le domaine officiel comme une source propre", async () => {
+    const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
+
+    const impostorFeed = {
+      ...ownFeed,
+      url: "https://notkalray.eu/feed/",
+    } as SourceRecord;
+
+    stubPage(`
+      <rss>
+        <channel>
+          <item>
+            <title>Une actualité sans rapport avec l'entreprise</title>
+            <link>https://notkalray.eu/article</link>
+            <pubDate>${date}</pubDate>
+          </item>
+        </channel>
+      </rss>
+    `);
+
+    const result = await new RealCollector({}).collect({
+      source: impostorFeed,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    expect(result.ok && result.items).toHaveLength(0);
+  });
 });
