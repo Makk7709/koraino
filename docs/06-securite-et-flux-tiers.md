@@ -174,7 +174,7 @@ Le collecteur décide aussi qu'un flux est celui de l'entreprise si son hôte es
 
 Sur Cloudflare Workers, les requêtes sortantes partent du réseau de Cloudflare et non d'un réseau privé : les adresses privées et de bouclage ne devraient normalement pas y être joignables, ce qui limite la portée de ces lacunes ; c'est à confirmer sur le déploiement. En développement local, le serveur s'exécute sur le poste du développeur : une redirection ou un flux annoncé peut y atteindre `localhost` ou le réseau local.
 
-Il reste à renforcer le filtrage **après résolution DNS** (contrôle de l'adresse obtenue si l'hébergeur le permet) et le test de domaine d'entreprise avec point de séparation (voir [P1-08](11-anomalies-connues.md#p1--avant-toute-ouverture-à-des-utilisateurs-réels)).
+Il reste à renforcer le filtrage **après résolution DNS** (contrôle de l'adresse obtenue si l'hébergeur le permet) (voir [P1-08](11-anomalies-connues.md#p1--avant-toute-ouverture-à-des-utilisateurs-réels)).
 
 ### Contenus externes non fiables
 
@@ -469,7 +469,7 @@ Cette liste compare l'état du code aux exigences du §7. Elle complète la [Cou
 
 10. Vérifier l'en-tête `Origin` en complément de `x-kora-request`.
 11. En-têtes de sécurité (`Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`) et limitation de débit.
-12. Filtrage SSRF au moment de la connexion : **partiellement fait** (`validateSourceUrl` avec ports 80/443 et plages réservées courantes ; `safeFetchText` — revalidation à chaque URL et redirection, plafond corps, délai, politique d'hôte). Restent la résolution DNS et le test de domaine entreprise avec point de séparation. L'absence d'accès aux adresses privées depuis Cloudflare Workers est à confirmer.
+12. Filtrage SSRF au moment de la connexion : **partiellement fait** (`validateSourceUrl` avec ports 80/443 et plages réservées courantes ; `safeFetchText` — revalidation à chaque URL et redirection, plafond corps, délai, politique d'hôte). Restent la résolution DNS. L'absence d'accès aux adresses privées depuis Cloudflare Workers est à confirmer.
 13. Contrôle de taille des imports sans `content-length` avant la lecture du corps.
 
 **Flux tiers et RGPD**
