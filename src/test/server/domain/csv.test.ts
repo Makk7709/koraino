@@ -56,7 +56,7 @@ describe("toCsv - sécurité des formules", () => {
 
     expect(result).toBe("valeurs\r\n'-5 | 2\r\n");
   });
-  it("neutralise une formule retournée par toJSON() d'un objet", () => {
+  it("préserve la sérialisation JSON d'un objet utilisant toJSON()", () => {
     const value = {
       toJSON() {
         return "=1+1";
