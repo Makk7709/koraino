@@ -49,6 +49,15 @@ export function detectContradictions(observations: Observation[]): string[] {
 }
 
 /**
+ * Vrai si `host` est le domaine de l'entreprise ou l'un de ses sous-domaines.
+ * « notpasqal.com » n'est pas « pasqal.com ».
+ */
+export function isCompanyHost(host: string, domain: string): boolean {
+  const d = domain.toLowerCase().replace(/^www\./, "");
+  return d !== "" && (host === d || host.endsWith(`.${d}`));
+}
+
+/**
  * Indicateur documentaire (§3.3) : état explicable du dossier, distinct du score éditorial.
  * Ce n'est pas une probabilité.
  */
@@ -58,7 +67,9 @@ export function computeEvidence(
   now: Date,
 ): EvidenceState {
   const isDirect = (o: Observation) =>
-    !!company && (o.outlet.domain === company.domain || hostOf(o.url).endsWith(company.domain));
+    !!company &&
+    (isCompanyHost(o.outlet.domain, company.domain) ||
+      isCompanyHost(hostOf(o.url), company.domain));
   const direct = observations.filter(isDirect);
   const directSource = direct.length > 0;
 

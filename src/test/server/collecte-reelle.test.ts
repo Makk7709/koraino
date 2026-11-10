@@ -691,6 +691,37 @@ describe("collecte réelle : flux des entreprises", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1"))).toBe(false);
     expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
   });
+
+  it("ne considère pas un domaine qui se termine par le domaine officiel comme une source propre", async () => {
+    const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
+
+    const impostorFeed = {
+      ...ownFeed,
+      url: "https://notkalray.eu/feed/",
+    } as SourceRecord;
+
+    stubPage(`
+      <rss>
+        <channel>
+          <item>
+            <title>Une actualité sans rapport avec l'entreprise</title>
+            <link>https://notkalray.eu/article</link>
+            <pubDate>${date}</pubDate>
+          </item>
+        </channel>
+      </rss>
+    `);
+
+    const result = await new RealCollector({}).collect({
+      source: impostorFeed,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    expect(result.ok && result.items).toHaveLength(0);
+  });
 });
 
 describe("C01 · intégration collecte (exercice 4b)", () => {

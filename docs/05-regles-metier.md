@@ -119,7 +119,8 @@ L'indicateur documentaire (`EvidenceState`) décrit la qualité des preuves réu
 
 ### Composantes
 
-- **Source directe.** Une observation est directe si l'entreprise est connue et que le domaine du média est le domaine officiel de l'entreprise, ou que l'hôte de l'URL se termine par ce domaine.
+- **Source directe.** Une observation est directe si l'entreprise est connue et que le domaine du média est le domaine officiel de l'entreprise, ou que l'hôte de l'URL est ce domaine ou l'un de ses sous-domaines (`isCompanyHost` :
+`pasqal.com` ou `blog.pasqal.com`, jamais `notpasqal.com`).
 - **Corroborations indépendantes.** Ce sont les domaines distincts des observations ni reprises ni directes. En présence d'une source directe, tous comptent ; sinon le premier tient lieu de source primaire et ne se corrobore pas lui-même : le nombre retenu est `max(0, n − 1)`.
 - **Fraîcheur.** C'est le nombre de jours écoulés depuis la date la plus récente parmi les dates de publication, à défaut d'événement. Elle vaut `null` si aucune date n'est connue ; la date de collecte n'est jamais utilisée.
 - **Contradictions.** `detectContradictions` extrait les montants en millions d'euros des titres et extraits des observations non reprises. Au moins deux montants distincts produisent un message de la forme « Montants divergents selon les sources : 100 M€ (Les Echos) / 120 M€ (La Tribune) ». Seuls les montants sont comparés, et une seule source citant deux montants suffit à déclencher l'alerte.

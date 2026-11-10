@@ -19,6 +19,7 @@ import {
 import { hash32 } from "../store/prng";
 import type { CompanyRecord, SourceRecord } from "../store/records";
 import { safeFetchText } from "../domain/safeHttp";
+import { isCompanyHost } from "../domain/evidence";
 
 /** Élément brut renvoyé par un collecteur (HTML non fiable, nettoyé ensuite). */
 export interface RawItem {
@@ -564,7 +565,7 @@ export class RealCollector implements Collector {
     if (company && !useGoogle) {
       // Flux généraliste : ne garder que ce qui mentionne l'entreprise ou un alias,
       // sauf si le flux est celui de l'entreprise elle-même.
-      const own = hostOf(url).endsWith(company.domain);
+      const own = isCompanyHost(hostOf(url), company.domain);
       if (!own) {
         const names = [company.name, ...company.aliases].map((n) => n.toLowerCase());
         items = items.filter((i) =>
