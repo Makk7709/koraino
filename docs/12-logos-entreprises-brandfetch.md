@@ -121,7 +121,8 @@ Les prix, quotas et conditions d'utilisation du fournisseur sont externes et peu
 
 ## 7. Contenu de la PR proposée
 
-**Titre** : `feat(kora): logos automatiques des entreprises via Brandfetch`  
+**Titre** : `feat(kora): logos automatiques des entreprises via Brandfetch`
+
 **Head** : `feat/company-logos` · **Base** : `main`
 
 La PR ne prétend **pas** couvrir 100 % des logos, résoudre la dette lint globale, certifier juridiquement les marques, ni être prête au déploiement Lovable. Aucun merge ni modification de base de données n'est demandé.
