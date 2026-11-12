@@ -10,7 +10,7 @@
 | bun | 1.2.x (1.2.19) | Gestionnaire de paquets du projet (`bun.lock`). npm fonctionne aussi, mais ne mettez pas à jour `bun.lock` avec un autre outil. |
 | git | toute version récente | Dépôt GitHub `Makk7709/koraino`, branche `main`. |
 
-Le fichier [`bunfig.toml`](../bunfig.toml) active une protection « supply chain » : bun refuse les versions de paquets publiées depuis moins de 24 heures. Une installation qui échoue sur un paquet tout juste publié n'est donc pas un bug.
+Le fichier [`bunfig.toml`](../bunfig.toml) active une protection « supply chain » : bun refuse les versions de paquets publiées depuis moins de 7 jours. Une installation qui échoue sur un paquet tout juste publié n'est donc pas un bug.
 
 ## Installation et lancement
 
@@ -129,7 +129,7 @@ Le dépôt est connecté à [Lovable](https://lovable.dev) : chaque commit pouss
 | Avertissement `vite-tsconfig-paths` au démarrage | Plugin fourni en double par la configuration Lovable. | Sans conséquence. |
 | Avertissement React « A tree hydrated but some attributes… » | Une extension de navigateur (ou un outil d'automatisation) a modifié le HTML avant React. | Sans conséquence si l'avertissement disparaît en navigation privée. |
 | Le texte généré ne change pas malgré `AI_API_KEY` | La variable n'est pas visible du processus serveur, ou l'appel OpenAI échoue (le gabarit est alors conservé silencieusement). | Vérifier la variable dans le shell de lancement. Les échecs OpenAI ne sont pas journalisés ([`openai.ts`](../src/server/adapters/openai.ts)) : pour diagnostiquer, tester la clé directement avec `curl https://api.openai.com/v1/models -H "Authorization: Bearer $AI_API_KEY"`. |
-| Une installation échoue sur un paquet très récent | Garde-fou de 24 heures de `bunfig.toml`. | Attendre, ou choisir la version précédente. |
+| Une installation échoue sur un paquet très récent | Garde-fou de 7 jours de `bunfig.toml`. | Attendre, ou choisir la version précédente. |
 
 ## Pour aller plus loin
 
