@@ -9,13 +9,18 @@ export type UrlCheck = { ok: true; url: URL } | { ok: false; reason: string };
 const BLOCKED_SUFFIXES = [".local", ".internal", ".localhost", ".localdomain", ".home.arpa"];
 
 function ipv4Blocked(parts: number[]): string | null {
-  const [a = 0, b = 0] = parts;
+  const [a = 0, b = 0, c = 0] = parts;
   if (a === 0) return "adresse non routable (0.0.0.0/8)";
   if (a === 10) return "réseau privé (10.0.0.0/8)";
   if (a === 127) return "adresse de bouclage (127.0.0.0/8)";
   if (a === 169 && b === 254) return "adresse lien-local (169.254.0.0/16)";
   if (a === 172 && b >= 16 && b <= 31) return "réseau privé (172.16.0.0/12)";
+  if (a === 192 && b === 0 && c === 0) return "assignations IETF (192.0.0.0/24)";
+  if (a === 192 && b === 0 && c === 2) return "assignations réseau de documentation (192.0.2.0/24)";
   if (a === 192 && b === 168) return "réseau privé (192.168.0.0/16)";
+  if (a === 198 && (b === 18 || b === 19)) return "benchmark (198.18.0.0/15)";
+  if (a === 198 && b === 51 && c === 100) return "réseau de documentation (198.51.100.0/24)";
+  if (a === 203 && b === 0 && c === 113) return "réseau de documentation (203.0.113.0/24)";
   if (a === 100 && b >= 64 && b <= 127) return "réseau partagé opérateur (100.64.0.0/10)";
   if (a >= 224) return "adresse multicast ou réservée";
   return null;
@@ -64,6 +69,12 @@ function ipv6Blocked(g: number[]): string | null {
   if ((g0 & 0xfe00) === 0xfc00) return "adresse locale unique (fc00::/7)";
   if ((g0 & 0xffc0) === 0xfe80) return "adresse lien-local (fe80::/10)";
   if ((g0 & 0xff00) === 0xff00) return "adresse multicast (ff00::/8)";
+
+  if (g[0] === 0x0064 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0))
+    return "préfixe NAT64 (64:ff9b::/96)";
+
+  if (g0 === 0x2001 && g[1] === 0x0db8) return "documentation (2001:db8::/32)";
+  if ((g0 & 0xffc0) === 0xfec0) return "local site (fec0::/10)";
   const mapped = g.slice(0, 5).every((x) => x === 0) && (g5 === 0xffff || g5 === 0);
   if (mapped) {
     const v4 = [g6 >> 8, g6 & 0xff, g7 >> 8, g7 & 0xff];
@@ -94,6 +105,19 @@ export function checkHost(rawHost: string): string | null {
   return null;
 }
 
+/** Refuse les ports autres que 80 (http) et 443 (https). */
+export function checkPort(url: URL): string | null {
+  const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  if (!Number.isFinite(port)) return "port invalide";
+  if (url.protocol === "http:" && port !== 80) {
+    return `port ${port} non autorisé pour http (80 uniquement)`;
+  }
+  if (url.protocol === "https:" && port !== 443) {
+    return `port ${port} non autorisé pour https (443 uniquement)`;
+  }
+  return null;
+}
+
 /** Validation d'une URL de source avant toute collecte. */
 export function validateSourceUrl(raw: string): UrlCheck {
   let url: URL;
@@ -111,6 +135,8 @@ export function validateSourceUrl(raw: string): UrlCheck {
   if (url.username || url.password) {
     return { ok: false, reason: "identifiants intégrés à l'URL interdits" };
   }
+  const portReason = checkPort(url);
+  if (portReason) return { ok: false, reason: portReason };
   const reason = checkHost(url.hostname);
   if (reason) return { ok: false, reason };
   return { ok: true, url };

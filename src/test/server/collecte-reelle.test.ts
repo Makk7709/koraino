@@ -20,7 +20,7 @@ import {
 } from "@/server/adapters/collector";
 import { getRepository } from "@/server/store/memory";
 import type { CompanyRecord, SourceRecord } from "@/server/store/records";
-import { call, NOW, setup, teardown } from "./helpers";
+import { call, NOW, setup, teardown, USERS } from "./helpers";
 
 const DAY = 86_400_000;
 const KEYS = { LOVABLE_API_KEY: "cle-passerelle", PERPLEXITY_API_KEY: "cle-connexion" };
@@ -574,6 +574,140 @@ describe("collecte réelle : flux des entreprises", () => {
     ]);
   });
 
+  it("refuse un flux RSS découvert dans le HTML qui pointe vers une adresse interne", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+
+      if (url === ownSite.url) {
+        return new Response(
+          `<html>
+            <head>
+              <link
+                rel="alternate"
+                type="application/rss+xml"
+                href="http://127.0.0.1/secret"
+              />
+            </head>
+            <body>Kalray</body>
+          </html>`,
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        );
+      }
+
+      throw new Error(`Requête inattendue : ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    // La page HTML est récupérée, mais aucune requête vers le flux interdit
+    // ne doit être effectuée.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(ownSite.url);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("127.0.0.1"))).toBe(false);
+    expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
+  });
+
+  it("intégration : HTML → feed.xml → item daté (2 fetch)", async () => {
+    const siteUrl = "https://www.kalray.eu/";
+    const feedUrl = "https://www.kalray.eu/feed.xml";
+    const date = (d: number) => new Date(NOW.getTime() - d * DAY).toUTCString();
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === siteUrl) {
+        return new Response(
+          `<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/feed.xml" />
+          </head><body></body></html>`,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === feedUrl) {
+        return new Response(
+          `<?xml version="1.0"?><rss><channel>
+            <item>
+              <title>Kalray publie</title>
+              <link>https://www.kalray.eu/a</link>
+              <pubDate>${date(2)}</pubDate>
+            </item>
+          </channel></rss>`,
+          { status: 200, headers: { "content-type": "application/rss+xml" } },
+        );
+      }
+      throw new Error(`URL inattendue : ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.ok && result.items[0]?.url).toBe("https://www.kalray.eu/a");
+  });
+
+  it("intégration : 2 fetch OK puis refus avant 3ème vers interne (redirect)", async () => {
+    const siteUrl = "https://www.kalray.eu/";
+    const feedUrl = "https://www.kalray.eu/feed.xml";
+    const feedFinal = "https://www.kalray.eu/feed-final";
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+
+      if (url === siteUrl) {
+        return new Response(
+          `<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/feed.xml" />
+          </head></html>`,
+          { status: 200 },
+        );
+      }
+      if (url === feedUrl) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/feed-final" },
+        });
+      }
+      if (url === feedFinal) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "http://127.0.0.1/secret" },
+        });
+      }
+      throw new Error(`Requête interdite ou inattendue : ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RealCollector({}).collect({
+      source: ownSite,
+      company,
+      attempt: 1,
+      now: NOW,
+      knownEvents: [],
+    });
+
+    // HTML + feed.xml + feed-final ; jamais 127.0.0.1
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toEqual([siteUrl, feedUrl, feedFinal]);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("127.0.0.1"))).toBe(false);
+    expect(result).toMatchObject({ ok: false, code: "URL_REFUSED" });
+  });
+
   it("ne considère pas un domaine qui se termine par le domaine officiel comme une source propre", async () => {
     const date = new Date(NOW.getTime() - 2 * DAY).toUTCString();
 
@@ -603,5 +737,212 @@ describe("collecte réelle : flux des entreprises", () => {
     });
 
     expect(result.ok && result.items).toHaveLength(0);
+  });
+});
+
+describe("C01 · intégration collecte (exercice 4b)", () => {
+  beforeEach(() => {
+    setup();
+    setAdapters({ collector: new RealCollector({}) });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    teardown();
+  });
+  async function pasqalCommuniques(): Promise<Source> {
+    const res = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    const source = res.body.find((s) => s.type === "communiques");
+    if (!source) throw new Error("source communiqués Pasqal introuvable dans le seed");
+    return source;
+  }
+  it("un refus de sécurité n'est pas réessayé (HOST_MISMATCH)", async () => {
+    const source = await pasqalCommuniques();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "https://www.autre-site.fr/actualites" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "HOST_MISMATCH",
+    });
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    expect(sources.body.find((s) => s.id === source.id)).toMatchObject({
+      access: "erreur",
+      failureCode: "HOST_MISMATCH",
+      attempts: 1,
+    });
+  });
+  it("un flux absent n'est pas réessayé (NO_FEED)", async () => {
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+
+    const source = sources.body.find((s) => s.type === "site_officiel");
+
+    if (!source) {
+      throw new Error("Source site officiel Pasqal introuvable");
+    }
+
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("<html><head><title>Pasqal</title></head><body>Bienvenue</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "NO_FEED",
+    });
+
+    const updatedSources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+
+    expect(updatedSources.body.find((s) => s.id === source.id)).toMatchObject({
+      access: "erreur",
+      failureCode: "NO_FEED",
+      attempts: 1,
+    });
+  });
+
+  it("un délai de lecture est stocké en TIMEOUT (4c)", async () => {
+    setAdapters({
+      collector: new RealCollector({}, 50),
+    });
+    const source = await pasqalCommuniques();
+
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (signal?.aborted) {
+            controller.error(signal.reason ?? new DOMException("Timeout", "TimeoutError"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              controller.error(signal.reason ?? new DOMException("Timeout", "TimeoutError"));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "TIMEOUT",
+    });
+
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+    const updated = sources.body.find((s) => s.id === source.id)!;
+    expect(updated).toMatchObject({
+      access: "erreur",
+      failureCode: "TIMEOUT",
+      failureReason: "Délai de réponse dépassé",
+      attempts: 3,
+    });
+    expect(updated.failureCode).not.toBe("23");
+  });
+  it("réessaie la collecte après une erreur réseau sans code (C01-T1)", async () => {
+    const source = await pasqalCommuniques();
+
+    let fetchCalls = 0;
+
+    const fetchMock = vi.fn(async () => {
+      fetchCalls += 1;
+
+      if (fetchCalls === 1) {
+        throw new TypeError("Failed to fetch");
+      }
+
+      return new Response(
+        `<?xml version="1.0"?>
+        <rss>
+          <channel>
+            <item>
+              <title>Pasqal publie une actualité</title>
+              <link>https://www.pasqal.com/actualite</link>
+              <pubDate>${new Date(NOW.getTime() - DAY).toUTCString()}</pubDate>
+            </item>
+          </channel>
+        </rss>`,
+        {
+          status: 200,
+          headers: { "content-type": "application/rss+xml" },
+        },
+      );
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    expect(run.body).toMatchObject({
+      status: "succes",
+      newObservations: 1,
+    });
+
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+
+    expect(sources.body.find((s) => s.id === source.id)).toMatchObject({
+      access: "ok",
+      attempts: 0,
+    });
+  });
+
+  it("arrête les retries après MAX_ATTEMPTS (C01-02)", async () => {
+    const source = await pasqalCommuniques();
+
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = await call<CollectionRun>("POST", `/sources/${source.id}/collect`, {
+      user: USERS.admin,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(run.body).toMatchObject({
+      status: "echec",
+      errorCode: "NETWORK",
+    });
+
+    const sources = await call<Source[]>("GET", "/sources?companyId=co_pasqal");
+
+    expect(sources.body.find((s) => s.id === source.id)).toMatchObject({
+      access: "erreur",
+      failureCode: "NETWORK",
+      attempts: 3,
+    });
   });
 });
