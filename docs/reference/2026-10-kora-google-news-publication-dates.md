@@ -3,10 +3,21 @@
 - **Projet :** KORA Newsroom / veille Inovallée
 - **Branche de travail :** `fix/kora-publication-dates`
 - **Date de rédaction :** 29 octobre 2026
-- **Statut :** PR Draft #2 ouverte ; correctif RSS poussé (`d618a10`) ; CI GitHub réussie avec 639/639 tests. Recette applicative isolée restante.
+- **Statut au 29 octobre 2026 (historique) :** PR Draft #2 ouverte ; correctif RSS poussé (`d618a10`) ; CI GitHub réussie avec 639/639 tests. Recette applicative isolée restante à cette date.
 **Périmètre :** collecte Google News, confirmation des dates de publication, protections réseau et tests de régression
 
 > **Note de validation du 29 octobre 2026.** L'utilisatrice a **relancé elle-même les tests dans son terminal Mac** sur `fix/kora-publication-dates` : **46 fichiers et 638 tests réussis (code de sortie 0)**. Elle a aussi exécuté `bunx tsc --noEmit -p .` (aucune erreur affichée), `bun run lint` (**0 erreur, 6 avertissements préexistants dans `src/components/ui/`**) et `bun run build` (build client, SSR et Nitro réussi). Les réponses HTTP des tests restent majoritairement **simulées** : cela n'équivaut pas à une recette Google News réelle. GitHub Actions a ensuite été exécuté avec succès sur la PR Draft, et la dernière version du code d'annulation du corps HTTP n'a pas été relue indépendamment après son dernier ajustement.
+
+## Mise à jour de validation — 12 novembre 2026 (post-C01)
+
+> **Note complémentaire datée du 12/11/2026.** Les résultats du **29 octobre** (638 tests locaux, 639 tests rapportés sur CI) sont conservés dans ce document comme **historique daté**, et ne doivent pas être interprétés comme le dernier état de la branche.
+
+- **Version examinée :** PR #2 `fix/kora-publication-dates`, commit `2b68b23`, comparée à `main` au commit `0d9141d` après intégration de C01.
+- **Validation automatisée locale rapportée pour cette version :** **700 tests Vitest réussis sur 700 (49 fichiers)** ; TypeScript sans erreur affichée, ESLint sans erreur et avec six avertissements connus ; build client/SSR/Nitro réussi. **Ce chiffre désigne l'ensemble de la suite KORA, pas 700 tests propres à la correction des dates.**
+- **GitHub Actions :** workflows `KORA CI` et `KORA - Verification PR` terminés avec succès pour le commit `2b68b23`. Cette information est distincte du décompte des 700 tests locaux.
+- **Recette comparative réelle transmise :** 16 sources exécutées sur chaque branche le 12/11 ; `main` : **11 observations nouvelles, 10 s**, port cible **5301** ; PR #2 : **10 observations nouvelles, 10 s**, port cible **5302** ; **10 URL communes sur 11 (90,9 %)**. Les deux tableaux détaillés sont dans la description de la [PR #2](https://github.com/Makk7709/koraino/pull/2).
+- **Portée et limites :** les tests automatisés simulés démontrent le comportement attendu pour une vidéo ancienne de 2019 réindexée comme récente, mais la **recette sur réseau réel ne démontre pas encore le rejet d'une archive Kalray**. L'article Boursier.com absent de la PR #2 est récent et une vérification HTTP externe a renvoyé 403 ; **le motif exact rencontré dans KORA n'est pas tracé**. Les ports proviennent des scripts exécutés, sans preuve `lsof` jointe de l'identité des processus HTTP ; les rapports locaux et exports ne sont pas annexés au dépôt.
+- **Décision :** cette mise à jour documentaire ne vaut ni homologation de sécurité, ni autorisation de fusion ou de déploiement.
 
 ## 1. Résumé exécutif
 
