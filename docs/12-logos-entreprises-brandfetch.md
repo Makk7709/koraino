@@ -2,7 +2,7 @@
 
 **Branche** : `feat/company-logos` ; **cible de PR** : `main` ; **statut** : prêt à présenter en revue, **non validé pour fusion/déploiement**.
 
-**Périmètre** : affichage automatique des logos à partir des domaines déjà présents dans KORAINNO, sans import manuel, modification du registre, migration SQL ni nouveau service backend.
+**Périmètre** : affichage automatique des logos à partir des domaines déjà présents dans KORAINO, sans import manuel, modification du registre, migration SQL ni nouveau service backend.
 
 ## 1. Architecture et modifications réellement réalisées
 
