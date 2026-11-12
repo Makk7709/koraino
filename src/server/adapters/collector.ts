@@ -18,6 +18,7 @@ import {
 } from "../store/catalog";
 import { hash32 } from "../store/prng";
 import type { CompanyRecord, SourceRecord } from "../store/records";
+import { safeFetchText } from "../domain/safeHttp";
 import { isCompanyHost } from "../domain/evidence";
 
 /** Élément brut renvoyé par un collecteur (HTML non fiable, nettoyé ensuite). */
@@ -457,16 +458,45 @@ export async function perplexitySearch(
 }
 
 /**
+ * Définit si une erreur de collecte est transitoire, c'est-à-dire si elle peut être réessayée.
+ *
+ * */
+function isTransientCollectError(code: string | undefined): boolean {
+  if (!code || code === "HTTP_403" || code === "HTTP_404") return false;
+  // Refus C01 / safeHttp : jamais réessayés
+  if (
+    code === "URL_REFUSED" ||
+    code === "HOST_MISMATCH" ||
+    code === "TOO_MANY_REDIRECTS" ||
+    code === "REDIRECT_NO_LOCATION" ||
+    code === "BODY_TOO_LARGE"
+  ) {
+    return false;
+  }
+  if (code === "TIMEOUT" || code === "NETWORK") return true;
+  if (code === "HTTP_408" || code === "HTTP_425" || code === "HTTP_429") return true;
+  if (/^HTTP_5\d\d$/.test(code)) return true;
+  return false;
+}
+
+/**
  * Collecte réelle : lit le flux RSS/Atom de la source (ou le découvre depuis la page HTML),
  * et interroge Google News pour les sources « recherche web » / « actualités ».
  */
 export class RealCollector implements Collector {
   readonly name = "collecteur-rss-google-v1";
 
+  private readonly fetchTimeoutMs;
+
   /** Recherches Perplexity de l'exécution en cours, par source : une seule par exécution, essais compris. */
   private readonly searches = new WeakMap<Date, Map<string, ReturnType<typeof perplexitySearch>>>();
 
-  constructor(private readonly env: Record<string, string | undefined> = process.env) {}
+  constructor(
+    private readonly env: Record<string, string | undefined> = process.env,
+    timeout_ms?: number,
+  ) {
+    this.fetchTimeoutMs = timeout_ms ? timeout_ms : 15000;
+  }
 
   /** Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas. */
   private search(company: CompanyRecord, source: SourceRecord, now: Date) {
@@ -513,11 +543,12 @@ export class RealCollector implements Collector {
       items = feed.map((i) => ({ ...i, via }));
     } catch (e) {
       const err = e as Error & { code?: string };
+      const errCode = err.code ?? "NETWORK";
       const failure = {
         ok: false as const,
-        code: err.code ?? "NETWORK",
+        code: errCode,
         reason: err.message || "Erreur réseau",
-        transient: err.code !== "HTTP_403" && err.code !== "HTTP_404",
+        transient: isTransientCollectError(errCode),
       };
       // Google News indisponible : la recherche Perplexity suffit à mener la collecte.
       if (!search || (await search).outcome.status !== "ok") return failure;
@@ -591,31 +622,12 @@ export class RealCollector implements Collector {
   }
 
   private async fetchText(url: string): Promise<string> {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 15_000);
-    try {
-      const res = await fetch(url, {
-        signal: ctrl.signal,
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
-          accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
-        },
-      });
-      if (!res.ok) {
-        const e = new Error(`Réponse HTTP ${res.status}`) as Error & { code: string };
-        e.code = `HTTP_${res.status}`;
-        throw e;
-      }
-      return await res.text();
-    } catch (e) {
-      if ((e as Error).name === "AbortError") {
-        const err = new Error("Délai de réponse dépassé") as Error & { code: string };
-        err.code = "TIMEOUT";
-        throw err;
-      }
-      throw e;
-    } finally {
-      clearTimeout(t);
-    }
+    return safeFetchText(url, {
+      timeoutMs: this.fetchTimeoutMs,
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; KORA-Newsroom/1.0)",
+        accept: "application/rss+xml, application/atom+xml, text/xml, text/html;q=0.8",
+      },
+    });
   }
 }

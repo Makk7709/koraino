@@ -142,6 +142,7 @@ describe("validation des URL de sources (SSRF)", () => {
     "http://169.254.169.254/latest/meta-data",
     "http://[::1]/",
     "http://[fd12:3456::1]/",
+    "http://[64:ff9b::1]/",
     "http://[::ffff:127.0.0.1]/",
     "http://intranet.local/",
     "http://metadata.internal/",
@@ -150,6 +151,7 @@ describe("validation des URL de sources (SSRF)", () => {
     "ftp://example.com/file",
     "file:///etc/passwd",
     "http://user:pass@example.com/",
+    "https://example.com:8443/feed",
   ])("refuse %s (422 url_refused)", async (url) => {
     const res = await call<ApiErrorBody>("POST", "/sources", {
       body: { companyId: "co_pasqal", type: "rss", label: "Test", url },
