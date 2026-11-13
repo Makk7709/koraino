@@ -1,6 +1,7 @@
 import type { CollectionBatch, CollectionRun } from "@/lib/api/types";
 import { adapters } from "../adapters";
 import type { CollectResult, RawItem } from "../adapters/collector";
+import { googleNewsArticleId, type LinkResolver } from "../adapters/google-news";
 import { now as clock } from "../clock";
 import type { Ctx } from "../context";
 import { budgetExhausted, COSTS } from "../domain/budget";
@@ -28,6 +29,7 @@ import type {
 } from "../store/records";
 import { notify } from "./journal";
 import { withLock } from "./locks";
+import { confirmedPublishedAt } from "./publisher-page";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
 import { paidCall, type UsageLine } from "./usage";
 
@@ -35,6 +37,20 @@ import { paidCall, type UsageLine } from "./usage";
 export const MAX_ATTEMPTS = 3;
 /** Nombre maximal de nouvelles publications retenues par source et par exécution. */
 export const MAX_ITEMS = 5;
+/**
+ * Articles Google News dont on vérifie la date originale, par source.
+ * Distinct de `MAX_ITEMS` : plusieurs archives peuvent être écartées avant
+ * qu'un article récent trouve une place. Au-delà, le reste du flux n'est pas
+ * ingéré — la date Google News ne sert pas de date de publication.
+ */
+export const MAX_GOOGLE_NEWS_CHECKS = 15;
+/**
+ * Temps mur maximal, par source, pour la résolution des redirections et la
+ * lecture des pages. Dépassé, on n'entame plus de candidat. Le délai d'une
+ * invocation Cloudflare peut être plus court que cette minute : ce budget
+ * est celui de l'application, pas une promesse de l'hébergeur.
+ */
+export const GOOGLE_NEWS_DATE_BUDGET_MS = 60_000;
 /** Sources traitées par appel de collecte globale (`POST /collect`), à défaut de `limit`. */
 export const BATCH_SIZE = 8;
 /** Borne haute de `limit` : un lot reste court pour tenir dans une requête de l'hébergeur. */
@@ -310,25 +326,121 @@ async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<Co
   return run;
 }
 
+const DATE_BUDGET_EXPIRED = Symbol("date-budget-expired");
+
 /**
- * Remplace les redirections Google News par l'adresse de l'article, pour les publications encore
- * inconnues qui seront ingérées (au plus `MAX_ITEMS` résolutions par source). Une résolution qui
- * échoue laisse la redirection ; une adresse résolue déjà connue sera écartée à l'ingestion.
+ * Vérifie la date originale de chaque article Google News encore inconnu, qu'il
+ * arrive par une redirection ou déjà par l'URL de l'éditeur. Une URL d'éditeur
+ * n'est pas soumise au décodeur de redirection.
+ *
+ * `MAX_ITEMS` borne l'ingestion. `MAX_GOOGLE_NEWS_CHECKS` et
+ * `GOOGLE_NEWS_DATE_BUDGET_MS` bornent ces lectures. Les candidats non examinés
+ * sont exclus : la date du flux n'est pas retenue. Les flux officiels et
+ * Perplexity (`via` autre que `google_news`) ne passent pas ici. Une adresse
+ * déjà connue, ou refusée, n'est pas lue.
  */
-async function resolveLinks(state: CollectState, items: RawItem[]): Promise<RawItem[]> {
+async function resolveGoogleNewsItems(
+  state: CollectState,
+  items: RawItem[],
+  now: Date,
+): Promise<RawItem[]> {
   const { links } = adapters();
-  let budget = MAX_ITEMS;
+  const started = Date.now();
+  let checks = 0;
+  let stop = false;
   const out: RawItem[] = [];
+  const expired = () => Date.now() - started >= GOOGLE_NEWS_DATE_BUDGET_MS;
   for (const item of items) {
-    if (budget > 0 && item.via === "google_news" && !isKnown(state, item)) {
-      budget -= 1;
-      const resolved = await links.resolve(item.url);
-      out.push(resolved ? { ...item, url: resolved } : item);
-    } else {
+    if (item.via !== "google_news") {
       out.push(item);
+      continue;
     }
+    if (isKnown(state, item)) {
+      out.push(item);
+      continue;
+    }
+    if (stop || checks >= MAX_GOOGLE_NEWS_CHECKS || expired()) continue;
+    checks += 1;
+    const url = await publisherUrl(
+      item.url,
+      links,
+      GOOGLE_NEWS_DATE_BUDGET_MS - (Date.now() - started),
+    );
+    if (url === DATE_BUDGET_EXPIRED) {
+      stop = true;
+      continue;
+    }
+    if (!url) continue;
+    const next: RawItem = { ...item, url };
+    if (isKnown(state, next)) {
+      out.push(next);
+      continue;
+    }
+    if (expired()) {
+      stop = true;
+      continue;
+    }
+    const publishedAt = await confirmedPublishedAt(
+      next.url,
+      now,
+      GOOGLE_NEWS_DATE_BUDGET_MS - (Date.now() - started),
+    );
+    if (!publishedAt) continue;
+    out.push({ ...next, publishedAt });
   }
   return out;
+}
+
+async function publisherUrl(
+  url: string,
+  links: LinkResolver,
+  remainingMs: number,
+): Promise<string | null | typeof DATE_BUDGET_EXPIRED> {
+  if (googleNewsArticleId(url) === null) {
+    const check = validateSourceUrl(url);
+    if (!check.ok || check.url.hostname === "news.google.com") return null;
+    return check.url.toString();
+  }
+  if (remainingMs <= 0) return DATE_BUDGET_EXPIRED;
+  const resolved = await withinBudget((signal) => links.resolve(url, signal), remainingMs);
+  if (resolved === DATE_BUDGET_EXPIRED) return DATE_BUDGET_EXPIRED;
+  if (!resolved || googleNewsArticleId(resolved) !== null) return null;
+  const check = validateSourceUrl(resolved);
+  if (!check.ok || check.url.hostname === "news.google.com") return null;
+  return check.url.toString();
+}
+
+/**
+ * Attend `start` au plus `remainingMs`. À l'échéance, `abort()` est appelé sur le
+ * signal passé à `start` : une course seule laisserait la requête vivre. La
+ * connexion n'est fermée que si `fetch` honore ce signal. Un résultat qui arrive
+ * après l'annulation n'est pas utilisé.
+ */
+async function withinBudget<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  remainingMs: number,
+): Promise<T | typeof DATE_BUDGET_EXPIRED> {
+  if (remainingMs <= 0) return DATE_BUDGET_EXPIRED;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof DATE_BUDGET_EXPIRED>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(DATE_BUDGET_EXPIRED);
+    }, remainingMs);
+  });
+  const work = start(controller.signal);
+  void work.catch(() => undefined);
+  try {
+    const winner = await Promise.race([
+      work.then((value) => ({ expired: false as const, value })),
+      timeout.then(() => ({ expired: true as const })),
+    ]);
+    if (winner.expired || controller.signal.aborted) return DATE_BUDGET_EXPIRED;
+    return winner.value;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -382,7 +494,11 @@ async function fetchOutcome(
     result = await collector.collect(input());
   }
   if (result.ok) {
-    const items = await assessItems(state, await resolveLinks(state, result.items), company);
+    const items = await assessItems(
+      state,
+      await resolveGoogleNewsItems(state, result.items, ctx.now),
+      company,
+    );
     result = { ...result, items };
   }
   return { result, attempts: attempt };
@@ -584,7 +700,11 @@ async function runBatch(
 }
 
 const COLLECT_LOCK = "collecte";
-/** Couvre un lot (`MAX_BATCH_SIZE` sources, chacune bornée à ~35 s par essai, par vagues de `CONCURRENCY`). */
+/**
+ * Couvre un lot. Les lectures de dates sont bornées par `GOOGLE_NEWS_DATE_BUDGET_MS`
+ * par source ; le verrou reste de 5 minutes. Le délai d'invocation Cloudflare peut
+ * couper plus tôt : l'application n'allonge pas l'attente au-delà de son budget.
+ */
 const COLLECT_LOCK_TTL_MS = 5 * 60_000;
 
 /**
