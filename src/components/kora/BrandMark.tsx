@@ -130,7 +130,10 @@ export function BrandMark({
   const hasGlyph = WITH_GLYPH.some((k) => n.startsWith(k));
   const transparent = TRANSPARENT.some((k) => n.startsWith(k));
   const serif = n === "les echos" || n === "le figaro";
-  const logoUrl = companyLogoUrl(domain, import.meta.env["VITE_BRANDFETCH_CLIENT_ID"] || "1idN_gdBifvgQSOoG-X");
+  const logoUrl = companyLogoUrl(
+    domain,
+    import.meta.env["VITE_BRANDFETCH_CLIENT_ID"] || "1idN_gdBifvgQSOoG-X",
+  );
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const activeUrl = logoUrl !== failedUrl ? logoUrl : null;
