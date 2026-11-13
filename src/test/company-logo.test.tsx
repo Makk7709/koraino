@@ -32,13 +32,12 @@ describe("Brandfetch company logos", () => {
     expect(companyLogoUrl("example.com", undefined)).toBeNull();
     expect(companyLogoUrl("example.com", "bad?key=x")).toBeNull();
   });
-  it("keeps the monogram when not configured", () => {
+  it("uses the built-in Brandfetch client ID when none is configured", () => {
     vi.stubEnv("VITE_BRANDFETCH_CLIENT_ID", "");
     const { container } = render(
       <BrandMark name="Atelier Test" brand={BRAND} domain="example.com" />,
     );
-    expect(screen.getByText("AT")).toBeTruthy();
-    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("img")?.getAttribute("src")).toContain("c=1idN_gdBifvgQSOoG-X");
   });
   it("renders an image and uses the local fallback on image error", () => {
     vi.stubEnv("VITE_BRANDFETCH_CLIENT_ID", "client_123");
