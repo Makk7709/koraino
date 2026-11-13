@@ -5,12 +5,16 @@
  * `dates-publication.test.ts`). Une source ne doit pas pour autant se vider sans explication :
  * la collecte porte l'avertissement `DATE_REJECTED`, avec le nombre d'articles écartés par
  * motif, visible dans l'historique des collectes ; ou `DATE_UNCHECKED` quand rien n'est
- * écarté mais que la vérification s'est arrêtée trop tôt. Aucun test n'appelle le réseau.
+ * écarté mais que la vérification s'est arrêtée trop tôt.
+ *
+ * Quand Perplexity a renvoyé le même article, sa version remplace l'article Google News dont la
+ * date n'a pas pu être vérifiée : l'article n'est alors ni perdu ni compté parmi les écartés.
+ * Aucun test n'appelle le réseau.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionRun, Source } from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
-import { RealCollector } from "@/server/adapters/collector";
+import { mergeEnrichment, RealCollector, type RawItem } from "@/server/adapters/collector";
 import {
   DATE_REJECTED,
   DATE_UNCHECKED,
@@ -19,7 +23,10 @@ import {
   MAX_ITEMS,
 } from "@/server/services/collection";
 import { checkPublishedAt } from "@/server/services/publisher-page";
+import { getRepository } from "@/server/store/memory";
 import { call, NOW, setup, teardown } from "./helpers";
+
+const KEYS = { LOVABLE_API_KEY: "cle-passerelle", PERPLEXITY_API_KEY: "cle-connexion" };
 
 const DAY = 86_400_000;
 const isoAgo = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
@@ -59,11 +66,30 @@ const old = (slug: string) => article(slug, page(isoAgo(60)));
 const blocked = (slug: string, status = 403) =>
   article(slug, () => new Response("refusé", { status }));
 
-function stubPages(articles: Article[], rss = "") {
+/** Résultat de la recherche Perplexity, tel que le renvoie la passerelle. */
+interface PerplexityResult {
+  title: string;
+  url: string;
+  snippet: string;
+  date: string;
+}
+
+/** Le même article vu par Perplexity : même titre, autre adresse, date propre à Perplexity. */
+function samePerplexity(a: Article, daysAgo = 4): PerplexityResult {
+  return {
+    title: a.title,
+    url: a.url.replace("presse-motifs.example", "reprise-perplexity.example"),
+    snippet: `${a.title}, d'après la presse.`,
+    date: isoAgo(daysAgo),
+  };
+}
+
+function stubPages(articles: Article[], rss = "", perplexity?: PerplexityResult[]) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
       const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("/perplexity/search")) return Response.json({ results: perplexity ?? [] });
       if (url.includes("news.google.com/rss/search")) return new Response(rss);
       const found = articles.find((a) => a.url === url);
       if (!found) return new Response("introuvable", { status: 404 });
@@ -73,7 +99,10 @@ function stubPages(articles: Article[], rss = "") {
 }
 
 /** Collecte de la source Google News de Pasqal, sur un flux et des pages simulés. */
-async function collect(articles: Article[], onResolve?: () => void): Promise<CollectionRun> {
+async function collect(
+  articles: Article[],
+  opts: { onResolve?: () => void; perplexity?: PerplexityResult[] } = {},
+): Promise<CollectionRun> {
   const redirect = (index: number) => `https://news.google.com/rss/articles/motif${index}`;
   const items = articles.map(
     (a, index) => `<item>
@@ -87,13 +116,14 @@ async function collect(articles: Article[], onResolve?: () => void): Promise<Col
   stubPages(
     articles,
     `<?xml version="1.0"?><rss version="2.0"><channel>${items.join("\n")}</channel></rss>`,
+    opts.perplexity,
   );
   setAdapters({
-    collector: new RealCollector({}),
+    collector: new RealCollector(opts.perplexity ? KEYS : {}),
     links: {
       name: "liens-motifs-test",
       async resolve(url: string): Promise<string | null> {
-        onResolve?.();
+        opts.onResolve?.();
         const found = articles[Number(url.split("motif")[1])];
         if (!found) return null;
         return found.link === undefined ? found.url : found.link;
@@ -190,8 +220,10 @@ describe("articles Google News écartés : motif dans l'historique", () => {
     try {
       const run = await collect(
         [fresh("lu avant le budget"), fresh("résolu après le budget"), fresh("jamais examiné")],
-        () => {
-          wall += GOOGLE_NEWS_DATE_BUDGET_MS / 2;
+        {
+          onResolve: () => {
+            wall += GOOGLE_NEWS_DATE_BUDGET_MS / 2;
+          },
         },
       );
       expect(outcome(run)).toEqual({
@@ -215,6 +247,136 @@ describe("articles Google News écartés : motif dans l'historique", () => {
       errorMessage:
         "Google News : 1 publication écartée par la vérification de la date (1 page d'éditeur inaccessible).",
     });
+  });
+});
+
+/** Observations créées par ces tests : titre, adresse, provenance et date. */
+async function created() {
+  const all = await (await getRepository()).observations.list();
+  return all
+    .filter((o) => o.title.includes("KORA-MOTIFS"))
+    .map((o) => ({ title: o.title, url: o.url, via: o.via ?? null, publishedAt: o.publishedAt }));
+}
+
+describe("article non vérifiable : reprise de la version Perplexity", () => {
+  beforeEach(() => setup());
+  afterEach(teardown);
+
+  it.each<[string, Article]>([
+    ["page d'éditeur inaccessible", blocked("refus 403 repris")],
+    ["page sans date lisible", article("sans date repris", page())],
+    ["lien non résolu", article("lien non résolu repris", page(isoAgo(2)), null)],
+  ])("%s : l'article entre par Perplexity, sans avertissement", async (_label, lost) => {
+    const twin = samePerplexity(lost);
+    const run = await collect([lost], { perplexity: [twin] });
+    expect(outcome(run)).toEqual({
+      status: "succes",
+      newObservations: 1,
+      errorCode: null,
+      errorMessage: null,
+    });
+    expect(run.enrichment).toMatchObject({ status: "ok", received: 1, matched: 1, added: 1 });
+    expect(await created()).toEqual([
+      { title: lost.title, url: twin.url, via: "perplexity", publishedAt: twin.date },
+    ]);
+  });
+
+  it("reprend aussi un article non examiné au-delà de la limite de vérifications", async () => {
+    const archives = Array.from({ length: MAX_GOOGLE_NEWS_CHECKS }, (_, n) => old(`archive ${n}`));
+    const beyond = fresh("hors limite repris");
+    const twin = samePerplexity(beyond);
+    const run = await collect([...archives, beyond], { perplexity: [twin] });
+    expect(outcome(run)).toEqual({
+      status: "succes",
+      newObservations: 1,
+      errorCode: DATE_REJECTED,
+      errorMessage: `Google News : ${MAX_GOOGLE_NEWS_CHECKS} publications écartées par la vérification de la date (${MAX_GOOGLE_NEWS_CHECKS} hors de la fenêtre de 30 jours).`,
+    });
+    expect((await created()).map((o) => [o.url, o.via])).toEqual([[twin.url, "perplexity"]]);
+  });
+
+  it("garde l'article Google News quand sa date est confirmée : pas de doublon Perplexity", async () => {
+    const confirmed = fresh("confirmé et vu par Perplexity");
+    const run = await collect([confirmed], { perplexity: [samePerplexity(confirmed)] });
+    expect(outcome(run)).toMatchObject({ status: "succes", newObservations: 1, errorCode: null });
+    expect(run.enrichment).toMatchObject({ matched: 1, added: 0 });
+    expect(await created()).toEqual([
+      { title: confirmed.title, url: confirmed.url, via: "google_news", publishedAt: isoAgo(3) },
+    ]);
+  });
+
+  it("écarte l'article quand la page le date hors fenêtre, même si Perplexity le dit récent", async () => {
+    const archive = old("archive vue récente par Perplexity");
+    const run = await collect([archive], { perplexity: [samePerplexity(archive)] });
+    expect(outcome(run)).toEqual({
+      status: "succes_sans_actualite",
+      newObservations: 0,
+      errorCode: DATE_REJECTED,
+      errorMessage:
+        "Google News : 1 publication écartée par la vérification de la date (1 hors de la fenêtre de 30 jours).",
+    });
+    expect(await created()).toEqual([]);
+  });
+
+  it("ne reprend pas une version Perplexity de plus de 30 jours", async () => {
+    const lost = blocked("refus 403 et reprise trop ancienne");
+    const run = await collect([lost], { perplexity: [samePerplexity(lost, 45)] });
+    expect(outcome(run)).toEqual({
+      status: "succes_sans_actualite",
+      newObservations: 0,
+      errorCode: DATE_REJECTED,
+      errorMessage:
+        "Google News : 1 publication écartée par la vérification de la date (1 page d'éditeur inaccessible).",
+    });
+    expect(await created()).toEqual([]);
+  });
+
+  it("ajoute sans réserve un résultat Perplexity que Google News n'a pas trouvé", async () => {
+    const lost = blocked("refus 403 sans reprise");
+    const other = samePerplexity(article("autre sujet trouvé par Perplexity seul", page()));
+    const run = await collect([lost], { perplexity: [other] });
+    expect(outcome(run)).toEqual({
+      status: "succes",
+      newObservations: 1,
+      errorCode: DATE_REJECTED,
+      errorMessage:
+        "Google News : 1 publication écartée par la vérification de la date (1 page d'éditeur inaccessible).",
+    });
+    expect((await created()).map((o) => [o.url, o.via])).toEqual([[other.url, "perplexity"]]);
+  });
+});
+
+describe("mergeEnrichment : réserve d'un doublon", () => {
+  const item = (title: string, url: string, via: RawItem["via"]): RawItem => ({
+    url,
+    title,
+    html: "",
+    outlet: { name: "x", domain: "x.example", brand: { initials: "X", bg: "#000", fg: "#fff" } },
+    publishedAt: isoAgo(1),
+    eventDate: null,
+    ...(via ? { via } : {}),
+  });
+  const TITLE = "Pasqal ouvre un laboratoire de recherche à Grenoble";
+  const google = item(TITLE, "https://news.google.com/rss/articles/a", "google_news");
+
+  it("met de côté le doublon sur l'élément qu'il double, sans l'ajouter à la liste", () => {
+    const twin = item(`${TITLE} | Presse`, "https://presse.example/a", "perplexity");
+    const alone = item(
+      "Pasqal recrute trente ingénieurs en Isère",
+      "https://presse.example/b",
+      "perplexity",
+    );
+    expect(mergeEnrichment([google], [twin, alone])).toEqual([alone, { ...google, backup: twin }]);
+  });
+
+  it("ne garde qu'une réserve par élément : la première", () => {
+    const first = item(TITLE, "https://presse.example/a", "perplexity");
+    const second = item(TITLE, "https://autre.example/a", "perplexity");
+    expect(mergeEnrichment([google], [first, second])).toEqual([{ ...google, backup: first }]);
+  });
+
+  it("laisse la liste inchangée sans résultat complémentaire", () => {
+    expect(mergeEnrichment([google], [])).toEqual([google]);
   });
 });
 

@@ -32,6 +32,12 @@ export interface RawItem {
   via?: ObservationVia;
   /** Lecture du contenu par le modèle, ajoutée par le service de collecte avant l'ingestion. */
   assessment?: ContentAssessment;
+  /**
+   * Même article renvoyé par la recherche complémentaire (Perplexity), mis de côté comme
+   * doublon. Le service de collecte le reprend si la date de l'élément ne peut pas être
+   * confirmée ; il n'est jamais ingéré en plus de l'élément.
+   */
+  backup?: RawItem;
 }
 
 /** Bilan de la recherche complémentaire, avant le décompte des observations créées. */
@@ -373,15 +379,30 @@ function titleKey(title: string): string {
 /**
  * Ajoute en tête les résultats complémentaires absents des éléments déjà collectés. Google News
  * renvoie des liens de redirection : un même article se reconnaît aussi à son titre.
+ *
+ * Un résultat complémentaire en doublon n'est pas ajouté à la liste : il est gardé en réserve
+ * sur l'élément qu'il double (`backup`, le premier résultat pour un même élément). Si la date de
+ * cet élément ne peut pas être confirmée, le service de collecte reprend la réserve à sa place.
  */
 export function mergeEnrichment(items: RawItem[], extra: RawItem[]): RawItem[] {
-  const urls = new Set(items.map((i) => i.url));
+  const merged = [...items];
   const titles = items.map((i) => titleKey(i.title));
-  const sameStory = (key: string) =>
-    titles.some(
-      (t) => Math.min(t.length, key.length) >= 25 && (t.startsWith(key) || key.startsWith(t)),
+  const sameStory = (t: string, key: string) =>
+    Math.min(t.length, key.length) >= 25 && (t.startsWith(key) || key.startsWith(t));
+  const added: RawItem[] = [];
+  for (const candidate of extra) {
+    const key = titleKey(candidate.title);
+    const doubles = merged.flatMap((item, index) =>
+      item.url === candidate.url || sameStory(titles[index]!, key) ? [index] : [],
     );
-  return [...extra.filter((i) => !urls.has(i.url) && !sameStory(titleKey(i.title))), ...items];
+    if (doubles.length === 0) {
+      added.push(candidate);
+      continue;
+    }
+    const free = doubles.find((index) => !merged[index]!.backup);
+    if (free !== undefined) merged[free] = { ...merged[free]!, backup: candidate };
+  }
+  return [...added, ...merged];
 }
 
 /** Nombre de résultats demandés à Perplexity (10 par défaut dans l'API, 20 au plus). */
@@ -577,9 +598,15 @@ export class RealCollector implements Collector {
     // Sans date de publication, la fraîcheur n'est pas vérifiable. Certains flux (agendas
     // d'événements) mettent la date de l'événement à venir à sa place : une date future non plus.
     const future = input.now.getTime() + 86_400_000;
-    items = items.filter((i) => {
+    const fresh = (i: RawItem) => {
       const t = i.publishedAt ? new Date(i.publishedAt).getTime() : NaN;
       return t >= cutoff && t <= future;
+    };
+    // Une réserve suit la même règle de fraîcheur que l'élément qu'elle pourrait remplacer.
+    items = items.filter(fresh).map((i) => {
+      if (!i.backup || fresh(i.backup)) return i;
+      const { backup: _stale, ...rest } = i;
+      return rest;
     });
     items.sort((a, b) => b.publishedAt!.localeCompare(a.publishedAt!));
     return {

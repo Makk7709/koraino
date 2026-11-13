@@ -342,6 +342,8 @@ export const DATE_UNCHECKED = "DATE_UNCHECKED";
 interface DateChecks {
   /** Date originale confirmée, dans la fenêtre de fraîcheur : article gardé. */
   confirmed: number;
+  /** Date non vérifiable, article repris dans sa version Perplexity (`backup`). */
+  recovered: number;
   /** Page d'éditeur refusée, injoignable, en erreur, redirigée, non HTML ou trop lourde. */
   inaccessible: number;
   /** Page lue, mais date de publication absente, illisible ou contradictoire. */
@@ -353,6 +355,9 @@ interface DateChecks {
   /** Non examiné : au-delà de `MAX_GOOGLE_NEWS_CHECKS` ou de `GOOGLE_NEWS_DATE_BUDGET_MS`. */
   nonExamine: number;
 }
+
+/** Motifs qui ne disent rien de la date : la page n'a pas été lue, ou ne porte pas de date. */
+type UnverifiedReason = "inaccessible" | "sansDate" | "lienNonResolu" | "nonExamine";
 
 /**
  * Vérifie la date originale de chaque article Google News encore inconnu, qu'il
@@ -367,6 +372,12 @@ interface DateChecks {
  *
  * Chaque article écarté ou non examiné est compté : la collecte le rapporte dans
  * son avertissement, pour qu'une source ne se vide pas sans explication.
+ *
+ * Un article dont la date n'a pas pu être vérifiée est remplacé par sa réserve
+ * (`backup`) quand Perplexity a renvoyé le même : il entre alors comme tout
+ * résultat Perplexity, avec la date et l'adresse de ce résultat, et n'est pas
+ * compté parmi les articles écartés. Une page lue qui date l'article hors de la
+ * fenêtre l'emporte sur la réserve : l'article est écarté.
  */
 async function resolveGoogleNewsItems(
   state: CollectState,
@@ -380,6 +391,7 @@ async function resolveGoogleNewsItems(
   const out: RawItem[] = [];
   const checks: DateChecks = {
     confirmed: 0,
+    recovered: 0,
     inaccessible: 0,
     sansDate: 0,
     horsFenetre: 0,
@@ -387,7 +399,13 @@ async function resolveGoogleNewsItems(
     nonExamine: 0,
   };
   const expired = () => Date.now() - started >= GOOGLE_NEWS_DATE_BUDGET_MS;
-  for (const item of items) {
+  for (const { backup, ...item } of items) {
+    const unverified = (reason: UnverifiedReason) => {
+      if (backup) {
+        out.push(backup);
+        checks.recovered += 1;
+      } else checks[reason] += 1;
+    };
     if (item.via !== "google_news") {
       out.push(item);
       continue;
@@ -397,7 +415,7 @@ async function resolveGoogleNewsItems(
       continue;
     }
     if (stop || examined >= MAX_GOOGLE_NEWS_CHECKS || expired()) {
-      checks.nonExamine += 1;
+      unverified("nonExamine");
       continue;
     }
     examined += 1;
@@ -408,11 +426,11 @@ async function resolveGoogleNewsItems(
     );
     if (url === DATE_BUDGET_EXPIRED) {
       stop = true;
-      checks.nonExamine += 1;
+      unverified("nonExamine");
       continue;
     }
     if (!url) {
-      checks.lienNonResolu += 1;
+      unverified("lienNonResolu");
       continue;
     }
     const next: RawItem = { ...item, url };
@@ -422,7 +440,7 @@ async function resolveGoogleNewsItems(
     }
     if (expired()) {
       stop = true;
-      checks.nonExamine += 1;
+      unverified("nonExamine");
       continue;
     }
     const check = await checkPublishedAt(
@@ -433,8 +451,8 @@ async function resolveGoogleNewsItems(
     if (check.ok) {
       checks.confirmed += 1;
       out.push({ ...next, publishedAt: check.publishedAt });
-    } else if (check.reason === "inaccessible") checks.inaccessible += 1;
-    else if (check.reason === "sans_date") checks.sansDate += 1;
+    } else if (check.reason === "inaccessible") unverified("inaccessible");
+    else if (check.reason === "sans_date") unverified("sansDate");
     else checks.horsFenetre += 1;
   }
   return { items: out, checks };
@@ -460,7 +478,7 @@ function dateWarning(checks: DateChecks): CollectWarning | undefined {
   add(checks.lienNonResolu, "lien non résolu", "liens non résolus");
   const rejected =
     checks.inaccessible + checks.sansDate + checks.horsFenetre + checks.lienNonResolu;
-  const starved = checks.nonExamine > 0 && checks.confirmed < MAX_ITEMS;
+  const starved = checks.nonExamine > 0 && checks.confirmed + checks.recovered < MAX_ITEMS;
   if (rejected === 0 && !starved) return undefined;
 
   const sentences: string[] = [];
