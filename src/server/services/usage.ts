@@ -9,8 +9,9 @@ import {
   quotaExceeded,
 } from "../domain/budget";
 import { monthKey } from "../domain/dates";
+import { ApiMeter, roundEur } from "../domain/pricing";
 import type { QuotaKey, UsageKind } from "../store/records";
-import { conflict } from "../http";
+import { HttpError, conflict } from "../http";
 import type { Repository } from "../store/repository";
 import { audit, notify } from "./journal";
 import { withLock } from "./locks";
@@ -132,14 +133,19 @@ export interface UsageLine {
 }
 
 /**
- * Appel payant : réserve le coût estimé AVANT l'appel. Si le plafond serait dépassé,
+ * Appel payant : réserve le coût maximal estimé AVANT l'appel. Si le plafond serait dépassé,
  * rien n'est appelé (402 `budget_exhausted`) et les appels payants sont suspendus.
+ *
+ * Le coût enregistré est celui mesuré : `fn` reçoit un compteur que les adaptateurs alimentent à
+ * chaque requête facturée. Sans `actual`, une ligne porte ce coût ; avec, l'appelant le ventile
+ * (une collecte : recherche, publications, lectures par le modèle). Un coût mesuré supérieur à la
+ * réservation est enregistré en entier.
  */
 export async function paidCall<T>(
   ctx: Pick<Ctx, "repo" | "user" | "now">,
   call: PaidCall,
-  fn: () => T | Promise<T>,
-  actual?: (result: T) => UsageLine[],
+  fn: (meter: ApiMeter) => T | Promise<T>,
+  actual?: (result: T, meter: ApiMeter) => UsageLine[],
 ): Promise<T> {
   const { repo, now } = ctx;
   const month = monthKey(now);
@@ -161,7 +167,7 @@ export async function paidCall<T>(
       }
       return { ...decision, suspending };
     }
-    settings.reservedEur += call.estimate;
+    settings.reservedEur = roundEur(settings.reservedEur + call.estimate);
     await repo.saveSettings(settings);
     return decision;
   });
@@ -178,25 +184,40 @@ export async function paidCall<T>(
     throw budgetExhausted(reservation.reason);
   }
 
+  const meter = new ApiMeter();
+  const record = (line: UsageLine) =>
+    repo.usage.insert({
+      id: repo.nextId("use"),
+      at: now.toISOString(),
+      kind: line.kind,
+      units: line.units,
+      costEur: roundEur(Math.max(0, line.costEur)),
+      label: line.label,
+    });
   let result: T;
   try {
-    result = await fn();
+    try {
+      result = await fn(meter);
+    } catch (e) {
+      // Interrompu après des requêtes facturées : elles restent comptées.
+      if (meter.costEur > 0) {
+        await record({
+          kind: call.kind,
+          costEur: meter.costEur,
+          units: 0,
+          label: `${call.label} (interrompu)`,
+        }).catch((err: unknown) => {
+          console.error("[budget] coût d'un appel interrompu non enregistré", err);
+        });
+      }
+      throw e;
+    }
     const lines = actual
-      ? actual(result)
-      : [{ kind: call.kind, costEur: call.estimate, units: call.units, label: call.label }];
-    let remaining = call.estimate;
+      ? actual(result, meter)
+      : [{ kind: call.kind, costEur: meter.costEur, units: call.units, label: call.label }];
     for (const line of lines) {
       if (line.costEur <= 0 && line.units <= 0) continue;
-      const cost = Math.max(0, Math.min(line.costEur, remaining));
-      remaining -= cost;
-      await repo.usage.insert({
-        id: repo.nextId("use"),
-        at: now.toISOString(),
-        kind: line.kind,
-        units: line.units,
-        costEur: Math.round(cost * 10000) / 10000,
-        label: line.label,
-      });
+      await record(line);
     }
   } finally {
     await releaseReservation(repo, call.estimate);
@@ -211,13 +232,21 @@ export async function paidCall<T>(
 async function releaseReservation(repo: Repository, amount: number): Promise<void> {
   const release = async () => {
     const s = await repo.getSettings();
-    s.reservedEur = Math.max(0, s.reservedEur - amount);
+    s.reservedEur = Math.max(0, roundEur(s.reservedEur - amount));
     await repo.saveSettings(s);
   };
   await withBudgetLock(repo, release).catch(async (e: unknown) => {
     console.error("[budget] réservation libérée hors verrou", e);
     await release();
   });
+}
+
+/**
+ * Refus du budget (plafond atteint ou verrou occupé). Un appel facultatif, comme la réécriture
+ * d'un résumé, y renonce au lieu de faire échouer l'action qui l'entoure.
+ */
+export function isBudgetRefusal(e: unknown): boolean {
+  return e instanceof HttpError && (e.status === 402 || e.code === "budget_busy");
 }
 
 /** Les appels payants sont-ils suspendus ce mois-ci ? */

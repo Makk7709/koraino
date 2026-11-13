@@ -2,6 +2,7 @@ import type { QuotaMeter, UsageSnapshot } from "@/lib/api/types";
 import { HttpError, unprocessable } from "../http";
 import type { QuotaKey, Settings, UsageEntry, UsageKind } from "../store/records";
 import { monthKey } from "./dates";
+import { openAiMaxCostEur, PERPLEXITY_SEARCH_EUR, roundEur } from "./pricing";
 
 /** Quotas mensuels de l'offre (§12). */
 export const DEFAULT_LIMITS: Record<QuotaKey, number> = {
@@ -16,15 +17,20 @@ export const DEFAULT_LIMITS: Record<QuotaKey, number> = {
   storage_gb: 10,
 };
 
-/** Coûts estimés réservés avant chaque appel payant (€ HT). */
-export const COSTS = {
-  article: 0.45,
-  linkedin: 0.08,
-  summary: 0.02,
+/**
+ * Coût maximal estimé d'un appel payant (€ HT), réservé avant de l'émettre. Ce n'est pas ce qui
+ * est compté : le journal de consommation reçoit le coût mesuré à l'appel (jetons facturés par
+ * OpenAI, requêtes Perplexity réussies, voir `pricing.ts`). Lire un flux RSS ou Google News est
+ * gratuit.
+ */
+export const MAX_COSTS = {
+  article: openAiMaxCostEur("article"),
+  linkedin: openAiMaxCostEur("linkedin"),
+  summary: openAiMaxCostEur("summary"),
   /** Lecture d'une publication par le modèle (catégorie, importance) à la collecte. */
-  classification: 0.005,
-  search: 0.012,
-  observation: 0.021,
+  classification: openAiMaxCostEur("classification"),
+  /** Recherche Perplexity qui complète une source de presse. */
+  search: PERPLEXITY_SEARCH_EUR,
 } as const;
 
 const METERS: { key: QuotaKey; label: string; unit: string }[] = [
@@ -54,14 +60,15 @@ export interface UsageTotals {
 /** Totaux du mois calculés à partir du journal de consommation. */
 export function monthTotals(entries: UsageEntry[], month: string): UsageTotals {
   const units = Object.fromEntries(METERS.map((m) => [m.key, 0])) as Record<QuotaKey, number>;
-  let cents = 0;
+  // Somme en millionièmes d'euro entiers : un appel au modèle coûte quelques dix-millièmes d'euro.
+  let micro = 0;
   for (const e of entries) {
     if (monthKey(new Date(e.at)) !== month) continue;
-    cents += Math.round(e.costEur * 10000);
+    micro += Math.round(e.costEur * 1e6);
     const meter = KIND_TO_METER[e.kind];
     if (meter) units[meter] += e.units;
   }
-  return { costEur: Math.round(cents / 100) / 100, units };
+  return { costEur: micro / 1e6, units };
 }
 
 export function alertLevel(ratio: number): QuotaMeter["alert"] {
@@ -83,7 +90,7 @@ export function buildSnapshot(input: {
   const totals = monthTotals(input.entries, month);
   const used: Record<QuotaKey, number> = {
     ...totals.units,
-    api_budget_eur: totals.costEur,
+    api_budget_eur: Math.round(totals.costEur * 100) / 100,
     newsletters: input.newslettersThisMonth,
     companies: input.companies,
     sources: input.sources,
@@ -131,7 +138,7 @@ export function decideReservation(input: {
       reason: "Les appels payants sont suspendus : plafond budgétaire API du mois atteint.",
     };
   }
-  if (spentEur + settings.reservedEur + estimateEur > limit + 1e-9) {
+  if (roundEur(spentEur + settings.reservedEur + estimateEur) > limit) {
     return {
       ok: false,
       reason: `Plafond budgétaire API atteint (${spentEur.toFixed(2)} € consommés sur ${limit} €) : les appels payants sont suspendus. Consultation et exports restent disponibles.`,

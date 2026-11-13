@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollectionRun, HumanImport } from "@/lib/api/types";
-import { COSTS, monthTotals } from "@/server/domain/budget";
+import { setAdapters } from "@/server/adapters";
+import { MAX_COSTS, monthTotals } from "@/server/domain/budget";
 import { monthKey } from "@/server/domain/dates";
 import { getRepository } from "@/server/store/memory";
 import { call, multipart, NOW, setup, teardown } from "./helpers";
@@ -130,8 +131,20 @@ describe("deux demandes simultanées : une seule création", () => {
     const repo = await getRepository();
     const settings = await repo.getSettings();
     const spent = monthTotals(await repo.usage.list(), monthKey(NOW)).costEur;
-    settings.quotaLimits.api_budget_eur = spent + COSTS.linkedin * 1.5;
+    settings.quotaLimits.api_budget_eur = spent + MAX_COSTS.linkedin * 1.5;
     await repo.saveSettings(settings);
+    // Le premier appel coûte ce qu'il a réservé : réservé ou déjà compté, il ferme le plafond au second.
+    setAdapters({
+      ai: {
+        enhanceDossier: async (_i, base) => base,
+        enhanceSummary: async (_i, base) => base,
+        classify: async () => null,
+        enhanceLinkedInVariants: async (_i, base, meter) => {
+          meter?.add(MAX_COSTS.linkedin);
+          return base;
+        },
+      },
+    });
     const [a, b] = await freeSignals(2);
     const res = await Promise.all(
       [a, b].map((signalId) => call("POST", "/linkedin", { body: { signalId } })),

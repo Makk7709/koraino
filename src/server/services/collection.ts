@@ -9,7 +9,7 @@ import {
 import { googleNewsArticleId, type LinkResolver } from "../adapters/google-news";
 import { now as clock } from "../clock";
 import type { Ctx } from "../context";
-import { budgetExhausted, COSTS } from "../domain/budget";
+import { budgetExhausted, MAX_COSTS } from "../domain/budget";
 import {
   CLUSTER_WINDOW_DAYS,
   canonicalUrl,
@@ -21,6 +21,7 @@ import {
 } from "../domain/clustering";
 import { PRIORITY_SCORE } from "../domain/dashboard";
 import { DAY } from "../domain/dates";
+import type { ApiMeter } from "../domain/pricing";
 import { isDecided } from "../domain/scoring";
 import { sanitizeText, validateSourceUrl } from "../domain/security";
 import { HttpError, conflict } from "../http";
@@ -36,7 +37,7 @@ import { notify } from "./journal";
 import { withLock } from "./locks";
 import { checkPublishedAt } from "./publisher-page";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
-import { paidCall, type UsageLine } from "./usage";
+import { isBudgetRefusal, paidCall, type UsageLine } from "./usage";
 
 /** Nombre maximal d'essais par exécution (§6 : tentatives bornées), sur erreur transitoire seulement. */
 export const MAX_ATTEMPTS = 3;
@@ -86,6 +87,10 @@ interface CollectState {
 interface Outcome {
   result: CollectResult;
   attempts: number;
+  /** Coût mesuré de la recherche payante de la source (Perplexity) ; nul pour un flux. */
+  searchEur: number;
+  /** Coût mesuré des lectures de publications par le modèle. */
+  readingEur: number;
 }
 
 type RunBase = Pick<CollectionRun, "id" | "sourceId" | "companyId" | "startedAt">;
@@ -316,20 +321,40 @@ function replaceSignal(
 
 /**
  * Résumés améliorés par l'IA pour les signaux créés dans le lot, en parallèle et hors du chemin
- * critique de l'ingestion. Sans clé IA, rien n'est appelé ni réécrit.
+ * critique de l'ingestion. Sans clé IA, rien n'est appelé ni réécrit. Ces appels sont réservés
+ * et comptés comme les autres ; si le budget les refuse (plafond atteint pendant le lot, verrou
+ * occupé), les résumés par gabarit restent en place et la collecte aboutit.
  */
 async function enhanceSummaries(
-  repo: Pick<Ctx, "repo">["repo"],
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
   pending: CollectState["pendingSummaries"],
 ): Promise<void> {
   const ai = adapters().ai;
   if (!ai || pending.length === 0) return;
-  await parallel(pending, CONCURRENCY, async (p) => {
-    const summary = await ai.enhanceSummary({ title: p.title, text: p.text }, p.base);
-    if (summary === p.base) return;
-    const current = await repo.signals.get(p.signalId);
-    if (current) await repo.signals.update({ ...current, summary });
-  });
+  const { repo } = ctx;
+  try {
+    await paidCall(
+      ctx,
+      {
+        kind: "generation_summary",
+        estimate: pending.length * MAX_COSTS.summary,
+        units: pending.length,
+        label:
+          pending.length === 1
+            ? `Résumé du signal collecté : ${pending[0]!.title}`
+            : `Résumés de ${pending.length} signaux collectés`,
+      },
+      (meter) =>
+        parallel(pending, CONCURRENCY, async (p) => {
+          const summary = await ai.enhanceSummary({ title: p.title, text: p.text }, p.base, meter);
+          if (summary === p.base) return;
+          const current = await repo.signals.get(p.signalId);
+          if (current) await repo.signals.update({ ...current, summary });
+        }),
+    );
+  } catch (e) {
+    if (!isBudgetRefusal(e)) throw e;
+  }
 }
 
 async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<CollectionRun> {
@@ -600,6 +625,7 @@ async function assessItems(
   state: CollectState,
   items: RawItem[],
   company: CompanyRecord | null,
+  meter: ApiMeter,
 ): Promise<RawItem[]> {
   const { ai } = adapters();
   if (!ai) return items;
@@ -612,21 +638,31 @@ async function assessItems(
     const title = sanitizeText(item.title, 300);
     const text = sanitizeText(item.html, 1200);
     if (!title || !text) return item;
-    const assessment = await ai.classify({ title, text, companyName: company?.name ?? null });
+    const assessment = await ai.classify(
+      { title, text, companyName: company?.name ?? null },
+      meter,
+    );
     return assessment ? { ...item, assessment } : item;
   });
   const byOriginal = new Map([...picked].map((item, i) => [item, assessed[i]!]));
   return items.map((item) => byOriginal.get(item) ?? item);
 }
 
-/** Appel du collecteur, réessayé sur erreur transitoire seulement (§6 : tentatives bornées). */
+/**
+ * Appel du collecteur, réessayé sur erreur transitoire seulement (§6 : tentatives bornées). Le
+ * coût de la source est mesuré à part (recherche payante, lectures par le modèle) et reporté sur
+ * le compteur du lot.
+ */
 async function fetchOutcome(
   ctx: Pick<Ctx, "now">,
   state: CollectState,
   source: SourceRecord,
   company: CompanyRecord | null,
+  meter: ApiMeter,
 ): Promise<Outcome> {
   const collector = adapters().collector;
+  const search = meter.child();
+  const reading = meter.child();
   let attempt = 1;
   const input = () => ({
     source,
@@ -634,6 +670,7 @@ async function fetchOutcome(
     attempt,
     now: ctx.now,
     knownEvents: knownEvents(state, source.companyId),
+    meter: search,
   });
   let result = await collector.collect(input());
   while (!result.ok && result.transient && attempt < MAX_ATTEMPTS) {
@@ -642,37 +679,47 @@ async function fetchOutcome(
   }
   if (result.ok) {
     const checked = await resolveGoogleNewsItems(state, result.items, ctx.now);
-    const items = await assessItems(state, checked.items, company);
+    const items = await assessItems(state, checked.items, company, reading);
     // L'avertissement du collecteur (Google News relayé par Perplexity) garde la priorité :
     // dans ce cas aucun article Google News n'a été lu, donc aucun n'a été écarté.
     const warning = result.warning ?? dateWarning(checked.checks);
     result = { ...result, items, ...(warning ? { warning } : {}) };
   }
-  return { result, attempts: attempt };
+  return { result, attempts: attempt, searchEur: search.costEur, readingEur: reading.costEur };
 }
 
-/** Coût réel d'une source : une requête, les nouvelles publications retenues, les lectures par le modèle. */
+/**
+ * Consommation d'une source. Les compteurs de volume (une collecte, les nouvelles publications
+ * retenues) ne coûtent rien : seuls la recherche payante et les lectures par le modèle portent un
+ * coût, celui mesuré à l'appel.
+ */
 function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome): UsageLine[] {
   const items = outcome.result.ok ? outcome.result.items : [];
   const units = Math.min(items.filter((i) => !isKnown(state, i)).length, MAX_ITEMS);
   const assessed = items.filter((i) => i.assessment).length;
   return [
-    { kind: "search_query", costEur: COSTS.search, units: 1, label: `Collecte ${source.label}` },
+    {
+      kind: "search_query",
+      costEur: outcome.searchEur,
+      units: 1,
+      label: `Collecte ${source.label}`,
+    },
     ...(units
       ? [
           {
             kind: "observation" as const,
-            costEur: units * COSTS.observation,
+            costEur: 0,
             units,
             label: `Observations ${source.label}`,
           },
         ]
       : []),
-    ...(assessed
+    // Une lecture sans réponse exploitable est facturée elle aussi : elle reste comptée.
+    ...(assessed || outcome.readingEur > 0
       ? [
           {
             kind: "classification" as const,
-            costEur: assessed * COSTS.classification,
+            costEur: outcome.readingEur,
             units: assessed,
             label: `Lecture par le modèle ${source.label}`,
           },
@@ -681,10 +728,13 @@ function usageLines(state: CollectState, source: SourceRecord, outcome: Outcome)
   ];
 }
 
-/** Coût estimé d'une source, réservé avant l'appel : requête, publications, lectures par le modèle. */
+/**
+ * Coût maximal estimé d'une source, réservé avant l'appel : la recherche payante (réservée pour
+ * toute source, un flux ne la consomme pas) et les lectures par le modèle. Les résumés des signaux
+ * créés sont réservés à part, une fois le lot ingéré.
+ */
 function estimatePerSource(): number {
-  const perItem = COSTS.observation + (adapters().ai ? COSTS.classification : 0);
-  return COSTS.search + MAX_ITEMS * perItem;
+  return MAX_COSTS.search + (adapters().ai ? MAX_ITEMS * MAX_COSTS.classification : 0);
 }
 
 /** Suite d'une exécution après l'appel réseau : état de la source, ingestion, exécution consignée. */
@@ -809,7 +859,8 @@ async function runBatch(
             ? `Collecte ${sources[0]!.label}`
             : `Collecte de ${sources.length} sources`,
       },
-      () => parallel(sources, CONCURRENCY, (s) => fetchOutcome(ctx, state, s, companyOf(s))),
+      (meter) =>
+        parallel(sources, CONCURRENCY, (s) => fetchOutcome(ctx, state, s, companyOf(s), meter)),
       (outs) => outs.flatMap((o, i) => usageLines(state, sources[i]!, o)),
     );
   } catch (e) {
@@ -842,7 +893,7 @@ async function runBatch(
   for (const [i, source] of sources.entries()) {
     runs.push(await settle(ctx, state, source, outcomes[i]!, bases.get(source.id)!));
   }
-  await enhanceSummaries(repo, state.pendingSummaries.splice(0));
+  await enhanceSummaries(ctx, state.pendingSummaries.splice(0));
   return runs;
 }
 

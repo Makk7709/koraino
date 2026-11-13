@@ -205,7 +205,7 @@ Quand le modèle a lu la publication (voir ci-dessous), sa catégorie est retenu
 
 ### Lecture du contenu par le modèle
 
-Quand une clé `AI_API_KEY` est configurée, chaque publication nouvelle (au plus `MAX_ITEMS` par source et par collecte) est soumise au modèle avant l'ingestion, pendant la phase réseau du lot (`assessItems` dans [`services/collection.ts`](../src/server/services/collection.ts), `classify` dans [`adapters/openai.ts`](../src/server/adapters/openai.ts)) : titre et extrait nettoyés, nom de l'entreprise suivie, consigne qui rappelle que le texte est une donnée et non une instruction, réponse JSON imposée et bornée (160 jetons, température 0, délai de 15 s). Le modèle rend une catégorie, une importance éditoriale de 0 à 100 (90 et plus : levée majeure, acquisition, contrat ou implantation structurants ; 70–89 : annonce substantielle ; 50–69 : actualité ordinaire ; moins de 50 : contenu promotionnel ou reprise sans nouveauté) et un motif d'une phrase. Une réponse hors format (catégorie inconnue, importance hors de 0–100, motif vide) est ignorée : la publication est ingérée comme sans lecture. L'évaluation est enregistrée sur le signal (`assessment` : catégorie, importance, motif, modèle) et resservie à chaque recalcul du score (ajout d'une publication, fusion, changement de grille) ; une publication rattachée à un signal existant ne change pas la lecture de ce signal. Chaque lecture est comptée (`classification`, 0,005 €) dans la réservation du lot.
+Quand une clé `AI_API_KEY` est configurée, chaque publication nouvelle (au plus `MAX_ITEMS` par source et par collecte) est soumise au modèle avant l'ingestion, pendant la phase réseau du lot (`assessItems` dans [`services/collection.ts`](../src/server/services/collection.ts), `classify` dans [`adapters/openai.ts`](../src/server/adapters/openai.ts)) : titre et extrait nettoyés, nom de l'entreprise suivie, consigne qui rappelle que le texte est une donnée et non une instruction, réponse JSON imposée et bornée (160 jetons, température 0, délai de 15 s). Le modèle rend une catégorie, une importance éditoriale de 0 à 100 (90 et plus : levée majeure, acquisition, contrat ou implantation structurants ; 70–89 : annonce substantielle ; 50–69 : actualité ordinaire ; moins de 50 : contenu promotionnel ou reprise sans nouveauté) et un motif d'une phrase. Une réponse hors format (catégorie inconnue, importance hors de 0–100, motif vide) est ignorée : la publication est ingérée comme sans lecture. L'évaluation est enregistrée sur le signal (`assessment` : catégorie, importance, motif, modèle) et resservie à chaque recalcul du score (ajout d'une publication, fusion, changement de grille) ; une publication rattachée à un signal existant ne change pas la lecture de ce signal. Chaque lecture est réservée dans le lot (0,0005 € au plus) et comptée à son coût mesuré (`classification`), y compris quand le modèle ne donne pas de réponse exploitable.
 
 ### Regroupement d'un même événement
 
@@ -224,7 +224,7 @@ Le collecteur réel ne fournit jamais de date d'événement : la date de référ
 
 `POST /api/signals/:id/merge` (`signal.write`) fusionne les signaux `otherIds` (1 à 50) dans le signal `:id`. Les contrôles sont les suivants : un signal ne peut être fusionné avec lui-même (422 `invalid_merge`), tous les signaux doivent exister (404), et ils ne peuvent concerner deux entreprises différentes (422 `company_mismatch`). Les observations sont déplacées. Les articles, posts LinkedIn et éléments de newsletter des signaux absorbés sont repointés vers le signal cible ; un doublon dans une même édition est retiré. Les signaux absorbés sont supprimés. Le signal cible garde son statut, prend la confiance maximale et l'union des tags (six au plus), et sa revue est effacée. Il est reconstruit, avec préservation du score s'il est décidé, puis l'événement `signal.merge` est journalisé. Le statut et le motif propres aux signaux absorbés sont perdus ; seul le journal d'audit en garde trace.
 
-`POST /api/signals/:id/split` (`signal.write`) détache les observations `observationIds` (1 à 200) dans un nouveau signal. Toutes doivent appartenir au signal et au moins une doit y rester (422 `invalid_split`). Le nouveau signal est au statut `nouveau`, de même entreprise et catégorie, titré d'après la plus ancienne observation déplacée, et son résumé est produit par `enhanceSummary`. Une revue `fusion_incertaine` du signal d'origine est effacée. Les deux signaux sont reconstruits. La réponse est 201 `{ original, created }` et l'événement `signal.split` est journalisé.
+`POST /api/signals/:id/split` (`signal.write`) détache les observations `observationIds` (1 à 200) dans un nouveau signal. Toutes doivent appartenir au signal et au moins une doit y rester (422 `invalid_split`). Le nouveau signal est au statut `nouveau`, de même entreprise et catégorie, titré d'après la plus ancienne observation déplacée, et son résumé est produit par `signalSummary` ([`services/signals.ts`](../src/server/services/signals.ts)) : gabarit, réécrit par le modèle dans un appel payant réservé et compté ; si le budget le refuse, le gabarit est gardé et la défusion aboutit. Une revue `fusion_incertaine` du signal d'origine est effacée. Les deux signaux sont reconstruits. La réponse est 201 `{ original, created }` et l'événement `signal.split` est journalisé.
 
 ### Dates
 
@@ -324,13 +324,14 @@ Pour Google News, le lien d'une entrée pointe vers `news.google.com` et non ver
 
 1. Une source désactivée est refusée (409 `source_disabled`) ; la collecte globale l'ignore.
 2. Une seule collecte à la fois : la collecte globale comme la collecte d'une source prennent le verrou `collecte` (durée de vie de 5 minutes, le temps d'un lot), sans attente. Si une autre collecte le détient, la demande répond aussitôt 409 `collection_in_progress` (« Une collecte est déjà en cours : réessayez dans quelques minutes. ») et rien n'est enregistré. Deux collectes simultanées partiraient du même état et enregistreraient deux fois les mêmes publications. La collecte globale se fait par lots (8 sources par défaut, 25 au plus) : le verrou ne couvre qu'un lot et se libère entre deux lots ; les lots d'une même collecte ne reprennent jamais une source déjà collectée depuis son début (`since`).
-3. Le coût est réservé avant l'appel (`paidCall`, type `search_query`, estimation `COSTS.search + 5 × COSTS.observation`, soit 0,117 € par source, réservée en une fois pour tout le lot). En cas de refus, la collecte est enregistrée au statut `bloque_quota` avec le code `budget_exhausted`. Une collecte unitaire répond alors 402 ; la collecte globale marque aussi `bloque_quota` toutes les sources du lot et les sources restantes, répond 200 avec ces collectes et `remaining: 0`. Si le budget est seulement occupé (verrou `budget` non obtenu en 5 secondes, 409 `budget_busy`), seule cette exécution est enregistrée `echec`, avec le code `budget_busy` et le message « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. » : le collecteur n'est pas appelé, rien n'est facturé, la source garde son état (ni passage en `erreur`, ni notification, ni mise à jour de la date de passage) et la collecte globale continue avec la source suivante. Une collecte unitaire répond 200 avec cette exécution en échec.
+3. Le coût est réservé avant l'appel (`paidCall`, type `search_query`, coût maximal `MAX_COSTS.search`, soit 0,005 € par source, plus 5 × `MAX_COSTS.classification` si `AI_API_KEY` est définie ; réservé en une fois pour tout le lot). En cas de refus, la collecte est enregistrée au statut `bloque_quota` avec le code `budget_exhausted`. Une collecte unitaire répond alors 402 ; la collecte globale marque aussi `bloque_quota` toutes les sources du lot et les sources restantes, répond 200 avec ces collectes et `remaining: 0`. Si le budget est seulement occupé (verrou `budget` non obtenu en 5 secondes, 409 `budget_busy`), seule cette exécution est enregistrée `echec`, avec le code `budget_busy` et le message « Le budget API est en cours de mise à jour : réessayez dans quelques secondes. » : le collecteur n'est pas appelé, rien n'est facturé, la source garde son état (ni passage en `erreur`, ni notification, ni mise à jour de la date de passage) et la collecte globale continue avec la source suivante. Une collecte unitaire répond 200 avec cette exécution en échec.
 4. Le collecteur est appelé jusqu'à trois fois (`MAX_ATTEMPTS`) dans la même requête, sans délai entre les essais, seulement si l'échec est transitoire (`transient: true` : délai dépassé, erreur réseau, HTTP 5xx, etc.) ; un refus définitif (HTTP 403/404, refus SSRF du collecteur, `HOST_MISMATCH`, `NO_FEED`, …) n'est pas réessayé et le compteur d'essais vaut 1. La recherche Perplexity, menée en parallèle de Google News, n'est lancée qu'une fois par exécution : un réessai de Google News réutilise son résultat. Dans un lot, les lectures réseau de trois sources se font en parallèle, puis l'ingestion est faite en série, source par source, dans l'ordre du lot.
 5. En cas d'échec, la source passe en `erreur` avec le code et le motif (`failureCode`, `failureReason`) et un compteur d'essais limité à 3. Une notification `erreur_source` n'est émise qu'au premier échec, pas si la source était déjà en erreur. La collecte est enregistrée au statut `echec`.
 6. En cas de succès, les entrées sont ingérées dans l'ordre, de la plus récente à la plus ancienne, jusqu'à cinq observations nouvelles (`MAX_ITEMS`, voir [Chaîne d'ingestion](#chaîne-dingestion)) : une publication déjà connue ne prend plus de place dans cette limite. Si un flux publie plus de cinq entrées entre deux collectes, les suivantes sont reprises aux collectes suivantes, tant qu'elles figurent encore dans le flux et datent de 30 jours au plus. La source repasse en `ok`, la date de dernière réussite est mise à jour et le motif d'échec effacé. La collecte est au statut `succes` si au moins une observation nouvelle a été créée, `succes_sans_actualite` sinon ; elle porte l'avertissement éventuel (échec de Google News relayé par Perplexity, ou `DATE_REJECTED` / `DATE_UNCHECKED` : articles Google News écartés ou non examinés par la vérification de la date) dans `errorCode` et `errorMessage`, et le bilan Perplexity dans `enrichment`.
-7. La consommation enregistrée est d'une recherche (0,012 €), même en cas d'échec, et d'une observation (0,021 €) par publication renvoyée dont l'URL est acceptée et encore inconnue, dans la limite de cinq. Les publications déjà connues ne sont plus facturées.
+7. La consommation enregistrée est d'une recherche, même en cas d'échec, au coût mesuré de la recherche Perplexity (0,005 € si elle a réussi, 0 € pour un flux ou une recherche en échec), et d'une observation sans coût par publication renvoyée dont l'URL est acceptée et encore inconnue, dans la limite de cinq. Les lectures par le modèle sont comptées à leur coût mesuré.
+8. Les résumés des signaux créés sont réécrits par le modèle après l'ingestion du lot, dans une réservation à part (`generation_summary`, 0,0009 € par résumé). Si le budget la refuse (plafond atteint pendant le lot, verrou occupé), les résumés par gabarit restent en place et la collecte aboutit.
 
-**Coût de la collecte réelle.** Les flux RSS et Google News sont gratuits, mais chaque exécution reste imputée au budget comme un appel payant, aux coûts estimés d'un fournisseur de recherche. Une source sans nouveauté coûte 0,012 € par collecte, et 0,117 € au plus avec cinq publications nouvelles. Pour 150 sources, une collecte complète coûte entre 1,80 € et 17,55 € environ : même au coût maximal, le budget mensuel de 150 € permet huit collectes complètes. La recherche Perplexity n'est pas imputée à part : son coût réel n'est pas mesuré.
+**Coût de la collecte réelle.** Lire un flux RSS ou Google News est gratuit et n'impute rien au budget. Seuls coûtent la recherche Perplexity d'une source de presse (0,005 € par requête réussie, une par exécution, essais compris) et les appels au modèle : lecture et résumé de chaque nouvelle publication, 0,0014 € au plus à eux deux. Pour 150 sources de presse, une collecte complète coûte au plus 0,75 € de recherches ; une collecte quotidienne, au plus 23,25 € de recherches par mois, loin du plafond de 150 €.
 
 **États.** Une source a un accès `ok`, `erreur`, `en_attente` ou `desactivee`. Une collecte (`CollectionRun`) est `succes`, `succes_sans_actualite`, `echec` ou `bloque_quota`. Une requête en échec n'est jamais présentée comme « succès sans actualité ». Une page lue sans flux détectable reste au statut `succes_sans_actualite`, mais l'avertissement `NO_FEED` et son motif sont enregistrés sur la collecte et affichés dans l'historique : l'utilisateur voit qu'aucune publication n'a pu y être lue, comme le demande le §6. L'accès d'une source ne peut pas être mis manuellement à `erreur` (422 `invalid_access`) ; une modification d'URL le repasse en `en_attente`.
 
@@ -346,7 +347,7 @@ Pour Google News, le lien d'une entrée pointe vers `news.google.com` et non ver
 
 **Rôles.** Rédacteur et administrateur créent, modifient et soumettent (`article.write`) ; validateur et administrateur approuvent ou rejettent (`article.decide`) ; l'arbitrage du dossier factuel est ouvert aux deux groupes.
 
-**Contrôles avant génération.** Le signal doit exister (404) et ne pas avoir déjà d'article (409 `article_exists`). Il ne doit pas être rejeté (422 `signal_rejected`). Le quota d'articles doit être disponible (422 `quota_exceeded`) et le budget aussi (402 `budget_exhausted`, coût réservé `COSTS.article` = 0,45 €).
+**Contrôles avant génération.** Le signal doit exister (404) et ne pas avoir déjà d'article (409 `article_exists`). Il ne doit pas être rejeté (422 `signal_rejected`). Le quota d'articles doit être disponible (422 `quota_exceeded`) et le budget aussi (402 `budget_exhausted`, coût maximal réservé `MAX_COSTS.article` = 0,009 €).
 
 **Génération du dossier.** `generateDossier` ([`adapters/text-model.ts`](../src/server/adapters/text-model.ts)) produit :
 
@@ -435,7 +436,7 @@ stateDiagram-v2
 
 **Rôles.** Rédacteur et administrateur créent, modifient et soumettent (`linkedin.write`) ; validateur et administrateur approuvent (`linkedin.decide`) et publient ou exportent (`publish`). Chaque utilisateur, quel que soit son rôle, peut relier son propre compte LinkedIn.
 
-**Contrôles à la création.** L'article ou le signal doit exister (404). Un seul post en préparation est admis par contenu : un post non `exporte` ni `publie` sur le même article, ou sur le même signal sans article, répond 409 `post_exists`. Le quota `linkedin_posts` (422) et le budget (402, `COSTS.linkedin` = 0,08 €) doivent être disponibles. Le serveur accepte un article dans n'importe quel statut, y compris `brouillon`, alors que le cahier des charges décrit WF4 comme le « post LinkedIn d'un article approuvé » ; l'interface se contente de proposer d'abord les articles approuvés.
+**Contrôles à la création.** L'article ou le signal doit exister (404). Un seul post en préparation est admis par contenu : un post non `exporte` ni `publie` sur le même article, ou sur le même signal sans article, répond 409 `post_exists`. Le quota `linkedin_posts` (422) et le budget (402, `MAX_COSTS.linkedin` = 0,0017 € réservés) doivent être disponibles. Le serveur accepte un article dans n'importe quel statut, y compris `brouillon`, alors que le cahier des charges décrit WF4 comme le « post LinkedIn d'un article approuvé » ; l'interface se contente de proposer d'abord les articles approuvés.
 
 **Génération.** Le gabarit produit deux variantes à partir du titre et d'une accroche : chapô de la version courante, à défaut extrait de l'article, à défaut résumé du signal, sans le préfixe « [À vérifier] ». Les hashtags sont `#Inovallée`, `#Grenoble` et jusqu'à deux thématiques. OpenAI peut remplacer ces variantes (trois au plus). Le post est créé au statut `brouillon`, version 1.
 
@@ -699,13 +700,13 @@ Quatre points sont à connaître :
 
 ## Quotas et budget
 
-Les plafonds et coûts sont dans [`domain/budget.ts`](../src/server/domain/budget.ts), leur application dans [`services/usage.ts`](../src/server/services/usage.ts). L'état est consultable par `GET /api/usage` ; les réponses 402 et 422 sont décrites dans [Budget API et quotas](03-reference-api.md#budget-api-et-quotas).
+Les plafonds et les réservations sont dans [`domain/budget.ts`](../src/server/domain/budget.ts), les tarifs des fournisseurs dans [`domain/pricing.ts`](../src/server/domain/pricing.ts), leur application dans [`services/usage.ts`](../src/server/services/usage.ts). L'état est consultable par `GET /api/usage` ; les réponses 402 et 422 sont décrites dans [Budget API et quotas](03-reference-api.md#budget-api-et-quotas).
 
 ### Compteurs et plafonds
 
 | Compteur | Clé | Plafond (`DEFAULT_LIMITS`) | Mesure | Blocage au plafond |
 |---|---|---|---|---|
-| Budget API | `api_budget_eur` | 150 € HT | Somme des coûts du mois | 402 `budget_exhausted` |
+| Budget API | `api_budget_eur` | 150 € HT | Somme des coûts mesurés du mois | 402 `budget_exhausted` |
 | Recherches web | `search_queries` | 3 000 | Recherches du mois | aucun |
 | Nouvelles observations | `observations` | 6 000 | Observations du mois | aucun |
 | Dossiers et articles | `articles` | 25 | Générations d'articles du mois | 422 à `POST /articles` |
@@ -715,34 +716,50 @@ Les plafonds et coûts sont dans [`domain/budget.ts`](../src/server/domain/budge
 | Sources configurées | `sources` | 300 | Total du registre | 422 à `POST /sources`, pas à `POST /companies` |
 | Stockage | `storage_gb` | 10 Go | Base fixe des réglages plus taille des imports | 422 à `POST /imports` |
 
-`assertQuota` répond 422 `quota_exceeded`. Les compteurs `search_queries` et `observations` sont mesurés et alertés mais ne bloquent rien ; seul le budget limite la collecte. Chaque exécution de collecte compte une recherche, qu'elle interroge Google News ou lise directement un flux. La source Google News créée avec chaque entreprise échappe au contrôle du quota de sources (voir [WF1](#wf1--collecte-et-classement)). Le stockage part de la base fixe `storageBaseGb`, qui vaut 2,4 Go dans les réglages initiaux, y compris pour une base de production vide. La conversion d'un import ne consomme pas le quota d'articles. Les autres plafonds du §12 ne sont pas appliqués : cinq comptes, deux variantes par article, une collecte quotidienne par source, nombre de traitements simultanés.
+`assertQuota` répond 422 `quota_exceeded`. Les compteurs `search_queries` et `observations` sont mesurés et alertés mais ne bloquent rien ; seul le budget limite la collecte. Chaque exécution de collecte compte une recherche, qu'elle interroge Google News ou lise directement un flux. La source Google News créée avec chaque entreprise échappe au contrôle du quota de sources (voir [WF1](#wf1--collecte-et-classement)). Le stockage part de la base fixe `storageBaseGb`, qui vaut 2,4 Go dans les réglages initiaux, y compris pour une base de production vide. La conversion d'un import ne consomme pas le quota d'articles. Le plafond de cinq comptes est appliqué à la création d'un utilisateur (422 `account_limit`). Les autres plafonds du §12 ne sont pas appliqués : deux variantes par article, une collecte quotidienne par source, nombre de traitements simultanés.
 
-### Coûts unitaires
+### Coût réel et réservations
 
-| Clé (`COSTS`) | Coût estimé (€ HT) | Appel concerné |
+Le budget compte ce que les fournisseurs facturent, mesuré à chaque appel ([`domain/pricing.ts`](../src/server/domain/pricing.ts), tarifs publics relevés le 13 novembre 2026) :
+
+| Fournisseur | Tarif | Mesure |
 |---|---|---|
-| `article` | 0,45 | Dossier et brouillon (`generation_article`) |
-| `linkedin` | 0,08 | Variantes LinkedIn (`generation_linkedin`) |
-| `summary` | 0,02 | Résumé d'un sujet de newsletter (`generation_summary`) |
-| `classification` | 0,005 | Lecture d'une publication par le modèle à la collecte (`classification`) |
-| `search` | 0,012 | Recherche de la collecte (`search_query`) |
-| `observation` | 0,021 | Observation collectée (`observation`) |
+| OpenAI (`gpt-4o-mini`) | 0,15 $ par million de jetons soumis, 0,60 $ par million de jetons produits | Jetons renvoyés par la réponse (`usage.prompt_tokens`, `usage.completion_tokens`) |
+| Perplexity Search | 5 $ les 1 000 requêtes, soit 0,005 $ par requête | Requête réussie, même sans résultat ; une par exécution d'une source de presse, essais compris |
+| Flux RSS, Google News, pages des éditeurs | Gratuit | Rien n'est compté |
 
-Le coût est réservé et enregistré par unité, que le texte soit produit par les gabarits ou par OpenAI : la présence de la clé `AI_API_KEY` ne change ni l'estimation ni la consommation enregistrée. Le coût réellement facturé par OpenAI n'est pas mesuré.
+Les fournisseurs facturent en dollars et le budget est tenu en euros hors taxes : la conversion se fait à parité (`EUR_PER_USD = 1`), ce qui majore un peu la dépense tant que le dollar vaut moins qu'un euro. Les jetons servis depuis le cache d'OpenAI, facturés moitié prix, sont comptés plein tarif. Le compteur ne sous-estime donc pas la dépense ; il reste une mesure côté KORA, à rapprocher des factures des fournisseurs.
+
+Quand la facturation d'une requête n'est pas connue :
+
+- Requête refusée ou en erreur chez le fournisseur (HTTP 4xx ou 5xx), ou qui n'a pas pu partir : rien n'est compté. OpenAI et Perplexity ne facturent pas ces requêtes.
+- Requête OpenAI dont le délai est dépassé, ou acceptée sans décompte de jetons lisible : elle a pu être traitée et facturée. Elle est comptée à son coût maximal : un jeton pour deux caractères soumis, réponse de la longueur maximale (`max_tokens`).
+
+Avant chaque appel, `paidCall` réserve un coût maximal estimé (`MAX_COSTS` de [`domain/budget.ts`](../src/server/domain/budget.ts)), calculé sur le texte soumis le plus long couvert et la réponse la plus longue admise (`OPENAI_CALLS` de `pricing.ts`) :
+
+| Clé (`MAX_COSTS`) | Réservé (€ HT) | Bornes (jetons soumis / produits) | Appel concerné |
+|---|---|---|---|
+| `article` | 0,0090 | 50 000 / 2 500 | Dossier et brouillon (`generation_article`) |
+| `linkedin` | 0,0017 | 8 000 / 900 | Variantes LinkedIn (`generation_linkedin`) |
+| `summary` | 0,0009 | 5 000 / 220 | Résumé d'un sujet de newsletter, d'un signal collecté ou d'un signal défusionné (`generation_summary`) |
+| `classification` | 0,0005 | 2 500 / 160 | Lecture d'une publication par le modèle à la collecte (`classification`) |
+| `search` | 0,0050 | une requête | Recherche Perplexity d'une source de presse (`search_query`) ; réservée pour toute source, un flux ne la consomme pas |
+
+La réservation n'est jamais ce qui est compté : le journal reçoit le coût mesuré, enregistré au millionième d'euro. Sans clé `AI_API_KEY`, les textes viennent des gabarits : les unités avancent (articles, posts) et aucun euro n'est compté. Les lignes enregistrées avant le 13 novembre 2026 portent les anciens forfaits (0,45 € par article, 0,08 € par post, 0,02 € par résumé, 0,005 € par lecture, 0,012 € par collecte, 0,021 € par observation) ; elles restent dans le total de leur mois. Le jeu de démonstration garde lui aussi ces montants d'illustration.
 
 ### Réservation avant l'appel
 
 `paidCall` encadre chaque appel payant :
 
 1. Sous le verrou `budget` (voir ci-dessous), il calcule la dépense du mois à partir du journal de consommation.
-2. `decideReservation` refuse l'appel si les appels payants sont déjà suspendus pour le mois, ou si la dépense, plus les réservations en cours (`reservedEur`), plus l'estimation dépassent le plafond.
+2. `decideReservation` refuse l'appel si les appels payants sont déjà suspendus pour le mois, ou si la dépense, plus les réservations en cours (`reservedEur`), plus le coût maximal estimé de l'appel dépassent le plafond.
 3. En cas de refus, il marque la suspension pour le mois (`paidCallsSuspended`, `suspendedMonth`), puis, hors verrou, journalise `quota.suspension` au nom de « KORA », notifie « Budget API : appels payants suspendus » et répond 402 `budget_exhausted`.
-4. Sinon il ajoute l'estimation aux réservations, toujours sous le verrou, puis exécute l'appel hors verrou.
-5. Si l'appel réussit, il enregistre les lignes de consommation : le coût réel fourni par l'appelant (seule la collecte en fournit un) ou, à défaut, l'estimation. Le total enregistré ne dépasse jamais l'estimation réservée.
+4. Sinon il ajoute ce coût maximal aux réservations, toujours sous le verrou, puis exécute l'appel hors verrou en lui remettant un compteur (`ApiMeter`) que les adaptateurs alimentent à chaque requête facturée.
+5. Si l'appel réussit, il enregistre les lignes de consommation au coût mesuré : une ligne portant le total du compteur, ou la ventilation fournie par l'appelant (la collecte : recherche, observations, lectures par le modèle). Un coût mesuré supérieur à la réservation est enregistré en entier. Si l'appel échoue après des requêtes facturées, leur coût est enregistré sur une ligne « (interrompu) », sans unité.
 6. Il libère ensuite la réservation, sous le verrou, que l'appel ait réussi ou échoué. Le coût réel étant enregistré avant la libération, l'appel reste compté à tout instant, en réservation ou en consommation, et ne peut échapper au plafond.
 7. Il vérifie les alertes. Un échec de cette vérification (verrou `budget` occupé, base indisponible) est seulement journalisé côté serveur : l'appel, déjà payé et enregistré, aboutit quand même, et les alertes sont revérifiées au prochain appel payant.
 
-Deux appels à OpenAI échappent à cette réservation. Le résumé produit à la collecte est calculé pendant l'ingestion, après l'enregistrement de la consommation et la libération de la réservation, et aucune ligne de consommation ne lui correspond en propre. Le résumé produit à la défusion n'est encadré par aucun `paidCall` et reste possible quand le budget est suspendu.
+Aucun appel à OpenAI n'échappe à cette réservation. Le résumé des signaux créés par une collecte est réécrit après l'ingestion, dans un `paidCall` à part (`generation_summary`, 0,0009 € réservés par résumé) ; celui d'un signal défusionné passe par `signalSummary` ([`services/signals.ts`](../src/server/services/signals.ts)). Ces deux réécritures sont facultatives : si le budget les refuse (402 `budget_exhausted` ou verrou `budget` occupé), le résumé par gabarit est gardé et la collecte ou la défusion aboutit.
 
 Les réservations (`reservedEur`), la suspension et les alertes déjà notifiées sont stockées dans un seul document de réglages, relu puis réécrit en entier (`saveSettings`). Ces écritures sont sérialisées par le verrou `budget` (durée de vie de 10 secondes) : la réservation, la libération et la mémorisation des alertes le prennent tour à tour, en attendant jusqu'à 5 secondes ; au-delà, la requête répond 409 `budget_busy` (« Le budget API est en cours de mise à jour : réessayez dans quelques secondes. »). Ce refus ne survient qu'à la réservation, avant l'appel : la libération ne le renvoie jamais (voir ci-dessous) et la vérification des alertes ne fait pas échouer l'appel. Pour une collecte, il ne fait échouer que l'exécution de la source concernée (voir [WF1](#wf1--collecte-et-classement)). Deux appels simultanés ne peuvent donc plus dépasser ensemble le plafond ni perdre une réservation. Si la libération ne peut pas prendre le verrou, elle est faite sans lui plutôt que laissée en suspens. Une exécution interrompue par l'hébergeur entre la réservation et la libération laisserait encore sa réservation en base, où aucun redémarrage ne l'efface.
 
@@ -752,7 +769,7 @@ Les réservations (`reservedEur`), la suspension et les alertes déjà notifiée
 
 ### Comportement à 100 % du budget
 
-Les appels payants sont refusés : création d'article, création de post LinkedIn, ajout d'un sujet à une newsletter, collecte. La consultation, les exports CSV et JSON, la publication et les exports LinkedIn, les exports de newsletter, les décisions (approbation, rejet, publication), les imports, les modifications du registre et l'enregistrement de versions restent possibles. Le test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts) vérifie la consultation, l'export CSV, l'export de newsletter et la publication WordPress. Le moteur est affiché comme inactif sur le tableau de bord.
+Les appels payants sont refusés : création d'article, création de post LinkedIn, ajout d'un sujet à une newsletter, collecte. La défusion d'un signal reste possible : son résumé vient alors du gabarit, sans appel au modèle. La consultation, les exports CSV et JSON, la publication et les exports LinkedIn, les exports de newsletter, les décisions (approbation, rejet, publication), les imports, les modifications du registre et l'enregistrement de versions restent possibles. Le test « budget épuisé » de [`budget.test.ts`](../src/test/server/budget.test.ts) vérifie la consultation, l'export CSV, l'export de newsletter et la publication WordPress. Le moteur est affiché comme inactif sur le tableau de bord.
 
 La suspension dure jusqu'à la fin du mois, même si le plafond était relevé ; en base, elle survit aux redémarrages. Aucun endpoint ne modifie les plafonds (`quotaLimits`). Le dépôt en mémoire les copie de `DEFAULT_LIMITS` à chaque démarrage ; la base Supabase ne les copie qu'une fois, à l'initialisation des réglages, si bien qu'une modification ultérieure de `DEFAULT_LIMITS` n'a plus d'effet sur une base existante (voir [Exploitation](09-exploitation.md)).
 
@@ -843,7 +860,7 @@ L'édition courante est l'édition non exportée la plus récente. Une nouvelle 
 
 ### Sélection et résumés
 
-Un sujet est ajouté par `POST /api/newsletters/:id/items` (signal ou article), ou par l'interrupteur « Inclure dans la prochaine édition » (`PATCH /api/signals/:id` avec `inNewsletter`). Son titre est celui de l'article, à défaut celui du signal. Son résumé est un appel payant (`COSTS.summary` = 0,02 €) qui part de l'extrait de l'article, à défaut du résumé du signal, à défaut du titre. Le gabarit retient la première phrase, 280 caractères au plus, sans le préfixe « [À vérifier] » ; OpenAI peut la remplacer par un résumé de 400 caractères au plus.
+Un sujet est ajouté par `POST /api/newsletters/:id/items` (signal ou article), ou par l'interrupteur « Inclure dans la prochaine édition » (`PATCH /api/signals/:id` avec `inNewsletter`). Son titre est celui de l'article, à défaut celui du signal. Son résumé est un appel payant (`MAX_COSTS.summary` = 0,0009 € réservés) qui part de l'extrait de l'article, à défaut du résumé du signal, à défaut du titre. Le gabarit retient la première phrase, 280 caractères au plus, sans le préfixe « [À vérifier] » ; OpenAI peut la remplacer par un résumé de 400 caractères au plus.
 
 ### Ordre et modifications
 
@@ -872,11 +889,11 @@ La chaîne de génération est décrite dans [Architecture](02-architecture.md#c
 
 | Point | Fichier | Texte remplacé | Encadrement budgétaire |
 |---|---|---|---|
-| Résumé de signal à la collecte | [`services/collection.ts`](../src/server/services/collection.ts) | `summary` du signal créé | hors réservation, après la réservation de la collecte |
-| Résumé de signal à la défusion | [`handlers/signals.ts`](../src/server/handlers/signals.ts) | `summary` du nouveau signal | aucun |
-| Dossier et brouillon | [`handlers/articles.ts`](../src/server/handlers/articles.ts) | titre, chapô, corps, extrait, titre SEO de la version 1 | `paidCall`, 0,45 € |
-| Variantes LinkedIn | [`handlers/distribution.ts`](../src/server/handlers/distribution.ts) | variantes du post (trois au plus) | `paidCall`, 0,08 € |
-| Résumé de newsletter | [`services/newsletters.ts`](../src/server/services/newsletters.ts) | résumé du sujet (400 caractères au plus) | `paidCall`, 0,02 € |
+| Résumé de signal à la collecte | [`services/collection.ts`](../src/server/services/collection.ts) | `summary` du signal créé | `paidCall` à part après l'ingestion du lot, 0,0009 € réservés par résumé ; abandonné si le budget refuse |
+| Résumé de signal à la défusion | [`services/signals.ts`](../src/server/services/signals.ts) (`signalSummary`) | `summary` du nouveau signal | `paidCall`, 0,0009 € réservés ; abandonné si le budget refuse |
+| Dossier et brouillon | [`handlers/articles.ts`](../src/server/handlers/articles.ts) | titre, chapô, corps, extrait, titre SEO de la version 1 | `paidCall`, 0,009 € réservés |
+| Variantes LinkedIn | [`handlers/distribution.ts`](../src/server/handlers/distribution.ts) | variantes du post (trois au plus) | `paidCall`, 0,0017 € réservés |
+| Résumé de newsletter | [`services/newsletters.ts`](../src/server/services/newsletters.ts) | résumé du sujet (400 caractères au plus) | `paidCall`, 0,0009 € réservés |
 
 OpenAI ne touche jamais aux faits du dossier, aux angles, au plan, aux catégories, aux tags, aux notes éditoriales, au score ni à l'indicateur documentaire.
 
@@ -892,4 +909,4 @@ Le gabarit lui-même retire le marqueur « [À vérifier] » de l'accroche Linke
 
 ### Budget
 
-La réservation se fait par unité, selon `COSTS`, quel que soit le fournisseur ; la consommation enregistrée est l'estimation, pas le coût réel en jetons (voir [Coûts unitaires](#coûts-unitaires)). Le modèle (`gpt-4o-mini`) et la température (0,4) sont fixés dans le code ; aucune limite de jetons (`max_tokens`) ni format de réponse imposé (`response_format`) n'est transmis.
+La réservation se fait par appel, selon `MAX_COSTS` ; la consommation enregistrée est le coût mesuré d'après les jetons de la réponse (voir [Coût réel et réservations](#coût-réel-et-réservations)). Le modèle (`gpt-4o-mini`, constante `OPENAI_MODEL` de [`domain/pricing.ts`](../src/server/domain/pricing.ts), où son prix doit être renseigné) et la température (0,4 ; 0 pour la lecture d'une publication) sont fixés dans le code. Chaque appel borne sa réponse (`max_tokens` : 2 500 pour un dossier, 900 pour les variantes LinkedIn, 220 pour un résumé, 160 pour une lecture) ; le dossier, les variantes et la lecture imposent une réponse JSON (`response_format`).

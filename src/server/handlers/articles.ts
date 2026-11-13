@@ -1,7 +1,7 @@
 import type { Approval, ArticleStatus, ArticleVersion, PublicationAttempt } from "@/lib/api/types";
 import { adapters } from "../adapters";
 import type { Ctx, Handler } from "../context";
-import { COSTS } from "../domain/budget";
+import { MAX_COSTS } from "../domain/budget";
 import { KORA_AUTHOR } from "../domain/dna";
 import { assertCan, can } from "../domain/permissions";
 import { truncate } from "../domain/text";
@@ -118,11 +118,11 @@ async function generateArticle(
     ctx,
     {
       kind: "generation_article",
-      estimate: COSTS.article,
+      estimate: MAX_COSTS.article,
       units: 1,
       label: `Dossier et brouillon : ${signal.title}`,
     },
-    async () => {
+    async (meter) => {
       const dossierInput = {
         signal,
         company: company ?? null,
@@ -131,7 +131,7 @@ async function generateArticle(
         rules: rules.filter((r) => r.active),
       };
       const base = adapters().textModel.generateDossier(dossierInput);
-      return (await adapters().ai?.enhanceDossier(dossierInput, base)) ?? base;
+      return (await adapters().ai?.enhanceDossier(dossierInput, base, meter)) ?? base;
     },
   );
   const id = ctx.repo.nextId("art");

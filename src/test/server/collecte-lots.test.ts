@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollectionBatch, CollectionRun, Source } from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
 import type { CollectInput, CollectResult } from "@/server/adapters/collector";
-import { COSTS, monthTotals } from "@/server/domain/budget";
+import { monthTotals } from "@/server/domain/budget";
 import { monthKey } from "@/server/domain/dates";
 import { BATCH_SIZE, MAX_ITEMS, parallel } from "@/server/services/collection";
 import { getRepository } from "@/server/store/memory";
@@ -96,7 +96,7 @@ describe("collecte globale par lots", () => {
     expect(second.body.runs.map((r) => r.sourceId).sort()).toEqual([...expected].sort());
   });
 
-  it("réserve le budget une fois par lot et consigne le coût réel par source", async () => {
+  it("réserve le budget une fois par lot et consigne les volumes par source, sans coût pour un flux", async () => {
     const repo = await getRepository();
     const month = monthKey(NOW);
     const before = monthTotals(await repo.usage.list(), month);
@@ -131,11 +131,8 @@ describe("collecte globale par lots", () => {
     const after = monthTotals(await repo.usage.list(), month);
     expect(after.units.search_queries - before.units.search_queries).toBe(5);
     expect(after.units.observations - before.units.observations).toBe(created);
-    // Le journal est au centime près ; les lignes, elles, portent le coût exact.
-    expect(entries.reduce((s, u) => s + u.costEur, 0)).toBeCloseTo(
-      5 * COSTS.search + created * COSTS.observation,
-      5,
-    );
+    // Lire un flux est gratuit : les volumes sont comptés, aucun euro n'est imputé.
+    expect(entries.reduce((s, u) => s + u.costEur, 0)).toBe(0);
     expect((await repo.getSettings()).reservedEur).toBe(0);
     const labels = entries.map((u) => u.label);
     for (const run of batch.body.runs) {

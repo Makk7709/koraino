@@ -1,7 +1,7 @@
 import type { NewsletterItem } from "@/lib/api/types";
 import { adapters } from "../adapters";
 import type { Ctx } from "../context";
-import { COSTS } from "../domain/budget";
+import { MAX_COSTS } from "../domain/budget";
 import { addDays, dayStart, HOUR, mondayOf } from "../domain/dates";
 import { invalidateApproval, MODIFIED_AFTER_APPROVAL } from "../domain/workflow";
 import { conflict, notFound } from "../http";
@@ -157,14 +157,14 @@ async function insertItem(
     ctx,
     {
       kind: "generation_summary",
-      estimate: COSTS.summary,
+      estimate: MAX_COSTS.summary,
       units: 1,
       label: `Résumé newsletter : ${title}`,
     },
-    async () => {
+    async (meter) => {
       const input = { title, text };
       const base = adapters().textModel.summarize(input);
-      return (await adapters().ai?.enhanceSummary(input, base)) ?? base;
+      return (await adapters().ai?.enhanceSummary(input, base, meter)) ?? base;
     },
   );
   const next = await withLock(

@@ -65,7 +65,7 @@ CREATE TABLE workspace_settings (
   limit_storage_gb      numeric(8, 2) NOT NULL DEFAULT 10 CHECK (limit_storage_gb >= 0),
   paid_calls_suspended  boolean NOT NULL DEFAULT false,
   suspended_month       char(7) CHECK (suspended_month ~ '^\d{4}-\d{2}$'),
-  reserved_eur          numeric(10, 4) NOT NULL DEFAULT 0 CHECK (reserved_eur >= 0),
+  reserved_eur          numeric(12, 6) NOT NULL DEFAULT 0 CHECK (reserved_eur >= 0),
   storage_base_gb       numeric(8, 3) NOT NULL DEFAULT 0 CHECK (storage_base_gb >= 0)
 );
 
@@ -534,9 +534,10 @@ CREATE TABLE usage_ledger (
   workspace_id text NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
   id           text NOT NULL,
   at           timestamptz NOT NULL DEFAULT now(),
-  kind         text NOT NULL CHECK (kind IN ('generation_article', 'generation_linkedin', 'generation_summary', 'search_query', 'observation')),
+  kind         text NOT NULL CHECK (kind IN ('generation_article', 'generation_linkedin', 'generation_summary', 'classification', 'search_query', 'observation')),
   units        integer NOT NULL DEFAULT 0 CHECK (units >= 0),
-  cost_eur     numeric(10, 4) NOT NULL DEFAULT 0 CHECK (cost_eur >= 0),
+  -- Coût mesuré, au millionième d'euro (un appel au modèle coûte quelques dix-millièmes d'euro).
+  cost_eur     numeric(12, 6) NOT NULL DEFAULT 0 CHECK (cost_eur >= 0),
   label        text NOT NULL,
   PRIMARY KEY (workspace_id, id)
 );

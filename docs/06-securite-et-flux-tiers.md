@@ -297,10 +297,10 @@ flowchart LR
 |---|---|---|---|---|---|
 | Supabase | Réel dès que `SUPABASE_URL` est définie, hors tests | Toutes les données métier et les réglages | `SUPABASE_SERVICE_ROLE_KEY` | Aucun fixé par le code | Hors budget KORA |
 | Supabase Auth | Réel en mode supabase | Adresses e-mail et mots de passe (navigateur) ; jetons à vérifier et adresses invitées (serveur) | `SUPABASE_PUBLISHABLE_KEY` (publique) ; `SUPABASE_SERVICE_ROLE_KEY` pour les invitations | Aucun fixé par le code | Hors budget KORA |
-| OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons ; à la collecte, titre et extrait nettoyés de chaque publication nouvelle avec le nom de l'entreprise (classification) | `AI_API_KEY` | 30 s par appel (15 s pour une classification) | Estimé par `COSTS` |
-| Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par appel `safeFetchText` | Gratuit ; estimé par `COSTS` |
-| Perplexity | Réel si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, hors tests | Nom de l'entreprise, dans la requête de recherche | `LOVABLE_API_KEY`, `PERPLEXITY_API_KEY` | 20 s par requête | Coût réel non lu ; compris dans l'estimation de la collecte |
-| Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par appel `safeFetchText` | Gratuit ; estimé par `COSTS` |
+| OpenAI | Réel si `AI_API_KEY` est définie | Titres, extraits, dossiers, brouillons ; à la collecte, titre et extrait nettoyés de chaque publication nouvelle avec le nom de l'entreprise (classification) | `AI_API_KEY` | 30 s par appel (15 s pour une classification) | Coût mesuré : jetons de la réponse au tarif de `gpt-4o-mini` |
+| Google News | Réel, hors tests | Nom de l'entreprise ou libellé de la source | Aucun | 15 s par appel `safeFetchText` | Gratuit : rien n'est imputé au budget |
+| Perplexity | Réel si `LOVABLE_API_KEY` et `PERPLEXITY_API_KEY` sont définies, hors tests | Nom de l'entreprise, dans la requête de recherche | `LOVABLE_API_KEY`, `PERPLEXITY_API_KEY` | 20 s par requête | 0,005 € par requête réussie, imputé à la collecte de la source |
+| Sites des sources | Réel, hors tests | URL demandée | Aucun | 15 s par appel `safeFetchText` | Gratuit : rien n'est imputé au budget |
 | WordPress | Réel si les trois variables `WORDPRESS_*` sont définies ; simulé en démonstration et sous Vitest | Titre, contenu, extrait, catégories et étiquettes du brouillon | `WORDPRESS_APP_PASSWORD` | 15 s par requête | Aucun |
 | LinkedIn | Réel pour l'utilisateur qui a relié son compte ; export manuel sinon | Texte du post (variante choisie et hashtags) | `LOVABLE_API_KEY`, `LINKEDIN_APP_USER_CONNECTOR_CLIENT_API_KEY`, clé de connexion de l'utilisateur | 10 s pour l'identité, 20 s pour la publication | Aucun |
 | Google Fonts | Réel, depuis le navigateur | Requête HTTP du navigateur | Aucun | — | Aucun |
@@ -341,7 +341,7 @@ Sur Cloudflare Workers, chaque requête vers Supabase, Supabase Auth, OpenAI, Go
 
 **Délai et erreurs.** Chaque appel est interrompu après 30 secondes (`AbortSignal.timeout`). Les appels sont séquentiels : une collecte qui crée plusieurs signaux attend un résumé après l'autre. Toute erreur (réseau, délai, statut non 2xx, réponse vide ou mal formée) renvoie `null` et le texte du gabarit est conservé. Rien n'est journalisé.
 
-**Coût.** Le budget est réservé par unité selon `COSTS`, que le texte vienne d'OpenAI ou des gabarits. Le coût réel en jetons n'est ni lu ni enregistré (voir [Quotas et budget](05-regles-metier.md#quotas-et-budget)).
+**Coût.** Chaque appel est réservé à son coût maximal (`MAX_COSTS`), puis compté à son coût mesuré : les jetons renvoyés par la réponse (`usage`), au tarif de `gpt-4o-mini`. Une requête refusée par OpenAI ne coûte rien ; une requête dont le délai est dépassé est comptée à son coût maximal. Un texte produit par les gabarits, sans appel à OpenAI, ne coûte rien (voir [Quotas et budget](05-regles-metier.md#quotas-et-budget)).
 
 **Données transmises.** Elles relèvent du §7 (RGPD, sous-traitants) :
 
@@ -377,7 +377,7 @@ Il envoie l'agent utilisateur `Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et u
 
 **Conditions d'utilisation.** La balise `copyright` du flux Google News réserve son usage à un lecteur de flux personnel : « This XML feed is made available solely for the purpose of rendering Google News results within a personal feed reader for personal, non-commercial use. Any other use of the feed is expressly prohibited. » Son usage dans un service commercial est à valider avant production. Le §3.1 prévoit un fournisseur de recherche web : Perplexity complète Google News pour les recherches presse, sans le remplacer. Ses conditions d'utilisation et de conservation des requêtes ne sont pas documentées par le projet.
 
-**Erreurs et coût.** Un échec renvoie un code (`HTTP_<statut>`, `TIMEOUT`, ou `NETWORK` pour une erreur réseau sans code) et un motif. La collecte fait trois essais au plus et rend l'échec visible sur la source. La recherche Perplexity ne fait jamais échouer la collecte : son résultat est consigné sur l'exécution (`enrichment`, statut `ok`, `non_configure` ou `erreur`). En cas d'erreur, le statut HTTP et les 200 premiers caractères de la réponse de la passerelle figurent dans le message de l'exécution, visible dans l'historique des collectes, et dans la console du serveur ; les clés n'y figurent pas. Si Google News échoue mais que Perplexity répond, l'exécution réussit avec un avertissement « Google News : … ». Les flux sont gratuits, mais chaque exécution est imputée au budget selon `COSTS` (voir [WF1](05-regles-metier.md#wf1--collecte-et-classement)) ; le coût réel des appels Perplexity n'est pas lu. Les contrôles réseau manquants sont listés dans [Filtrage SSRF](#filtrage-ssrf).
+**Erreurs et coût.** Un échec renvoie un code (`HTTP_<statut>`, `TIMEOUT`, ou `NETWORK` pour une erreur réseau sans code) et un motif. La collecte fait trois essais au plus et rend l'échec visible sur la source. La recherche Perplexity ne fait jamais échouer la collecte : son résultat est consigné sur l'exécution (`enrichment`, statut `ok`, `non_configure` ou `erreur`). En cas d'erreur, le statut HTTP et les 200 premiers caractères de la réponse de la passerelle figurent dans le message de l'exécution, visible dans l'historique des collectes, et dans la console du serveur ; les clés n'y figurent pas. Si Google News échoue mais que Perplexity répond, l'exécution réussit avec un avertissement « Google News : … ». Les flux sont gratuits et n'imputent rien au budget ; chaque recherche Perplexity réussie est comptée 0,005 € sur la collecte de la source, une recherche en échec ne coûte rien (voir [WF1](05-regles-metier.md#wf1--collecte-et-classement)). Les contrôles réseau manquants sont listés dans [Filtrage SSRF](#filtrage-ssrf).
 
 ### WordPress
 
@@ -483,7 +483,7 @@ Cette liste compare l'état du code aux exigences du §7. Elle complète la [Cou
 
 14. Inventaire des sous-traitants (Supabase de Lovable Cloud pour les données et l'authentification, hébergeur de l'application et sa passerelle de connexion, fournisseur d'IA, Perplexity, Google Fonts ou polices auto-hébergées), accord de traitement, conditions de non-réutilisation pour l'entraînement, région et transferts hors Union européenne, alerte en cas de violation sous 24 heures (§7).
 15. Consigne explicite contre les instructions injectées dans la consigne système, et contrôles de sortie : conservation des marqueurs « [À vérifier] » et de la section « Sources consultées », absence de chiffres nouveaux.
-16. Coût réel des appels OpenAI et Perplexity dans le budget, et conservation du modèle, des paramètres et du gabarit de requête de chaque appel (§5).
+16. Conservation du modèle, des paramètres et du gabarit de requête de chaque appel (§5). Le coût réel des appels OpenAI et Perplexity est compté dans le budget depuis le 13 novembre 2026.
 17. Collecte : valider l'usage du flux Google News au regard de ses conditions, réservées à un usage personnel et non commercial, ou s'appuyer sur la recherche Perplexity, qui ne le remplace aujourd'hui que pour les sources presse rattachées à une entreprise ; décider du respect de `robots.txt`.
 
 **Secrets**

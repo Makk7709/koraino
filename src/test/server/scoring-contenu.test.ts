@@ -3,7 +3,6 @@ import type { CollectionRun, Paginated, Signal, Source } from "@/lib/api/types";
 import { setAdapters } from "@/server/adapters";
 import type { RawItem } from "@/server/adapters/collector";
 import { toAssessment, type AiTextEnhancer, type ClassifyInput } from "@/server/adapters/openai";
-import { COSTS } from "@/server/domain/budget";
 import { assess } from "@/server/domain/scoring";
 import { getRepository } from "@/server/store/memory";
 import { call, NOW, setup, teardown } from "./helpers";
@@ -26,14 +25,19 @@ function item(n: number, title: string, html: string): RawItem {
   };
 }
 
+/** Coût mesuré d'une lecture par le modèle factice. */
+const READING_EUR = 0.0002;
+
 /** Modèle factice : juge par le titre, et refuse de répondre sur les titres marqués « muet ». */
 function fakeAi(seen: ClassifyInput[]): AiTextEnhancer {
   return {
     enhanceDossier: async (_i, base) => base,
     enhanceLinkedInVariants: async (_i, base) => base,
     enhanceSummary: async (_i, base) => base,
-    async classify(input) {
+    async classify(input, meter) {
       seen.push(input);
+      // Chaque lecture est facturée, même celle qui ne donne pas de réponse exploitable.
+      meter?.add(READING_EUR);
       if (input.title.includes("muet")) return null;
       if (/lève|série/.test(input.title))
         return { category: "financement", importance: 93, reason: "Levée majeure", model: "test" };
@@ -222,7 +226,8 @@ describe("évaluation du contenu : collecte", () => {
     const entries = (await repo.usage.list()).slice(entriesBefore);
     const lecture = entries.find((u) => u.kind === "classification")!;
     expect(lecture).toMatchObject({ units: 2, label: `Lecture par le modèle ${src.label}` });
-    expect(lecture.costEur).toBeCloseTo(2 * COSTS.classification, 6);
+    // Trois lectures facturées (dont celle restée sans réponse), au coût mesuré et non au forfait.
+    expect(lecture.costEur).toBeCloseTo(3 * READING_EUR, 6);
   });
 
   it("recalcule le score d'un signal évalué avec la même lecture quand une publication s'y ajoute", async () => {

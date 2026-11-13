@@ -8,7 +8,7 @@ import {
 } from "../appUserConnections.server";
 import { LINKEDIN_CONNECTOR_ID } from "./connectors";
 import type { Ctx, Handler } from "../context";
-import { COSTS } from "../domain/budget";
+import { MAX_COSTS } from "../domain/budget";
 import { renderNewsletterHtml, renderNewsletterText } from "../domain/newsletter";
 import { assertCan } from "../domain/permissions";
 import { isoDay } from "../domain/dates";
@@ -127,11 +127,11 @@ async function generateLinkedIn(
     ctx,
     {
       kind: "generation_linkedin",
-      estimate: COSTS.linkedin,
+      estimate: MAX_COSTS.linkedin,
       units: 1,
       label: `Post LinkedIn : ${title}`,
     },
-    async () => {
+    async (meter) => {
       const input = {
         title,
         lead: version?.chapo || article?.excerpt || signal?.summary || title,
@@ -140,7 +140,7 @@ async function generateLinkedIn(
         tags: signal?.tags ?? version?.tags ?? [],
       };
       const base = adapters().textModel.linkedinVariants(input);
-      return (await adapters().ai?.enhanceLinkedInVariants(input, base)) ?? base;
+      return (await adapters().ai?.enhanceLinkedInVariants(input, base, meter)) ?? base;
     },
   );
   const id = ctx.repo.nextId("li");

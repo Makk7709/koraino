@@ -1,5 +1,4 @@
 import type { ScoringGrid, Signal, SignalStatus } from "@/lib/api/types";
-import { adapters, enhanceSummary } from "../adapters";
 import type { Ctx, Handler } from "../context";
 import { assertCan } from "../domain/permissions";
 import { applyGrid, isDecided, validateWeights } from "../domain/scoring";
@@ -14,6 +13,7 @@ import {
   applyGridToSignals,
   rebuildSignal,
   saveRebuilt,
+  signalSummary,
   STATUS_LABEL,
 } from "../services/signals";
 import { currentEdition, loadSignalView, signalDetail, toSignal } from "../services/view";
@@ -371,7 +371,11 @@ export const splitSignal: Handler = async (ctx) => {
     ...original,
     id: createdId,
     title: first.title,
-    summary: await enhanceSummary({ title: first.title, text: first.excerpt }),
+    summary: await signalSummary(
+      ctx,
+      { title: first.title, text: first.excerpt },
+      `Résumé du signal défusionné : ${first.title}`,
+    ),
     status: "nouveau",
     statusReason: null,
     observationIds: moving,

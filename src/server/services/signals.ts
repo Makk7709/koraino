@@ -1,11 +1,39 @@
 import type { Signal } from "@/lib/api/types";
 import { adapters } from "../adapters";
+import type { Ctx } from "../context";
+import { MAX_COSTS } from "../domain/budget";
 import { DAY, daysBetween, parseDate } from "../domain/dates";
 import { markSyndication } from "../domain/evidence";
 import { applyGrid, assess, isDecided } from "../domain/scoring";
 import { wordCount } from "../domain/text";
 import type { CompanyRecord, GridRecord, ObservationRecord, SignalRecord } from "../store/records";
 import type { Repository } from "../store/repository";
+import { isBudgetRefusal, paidCall } from "./usage";
+
+/**
+ * Résumé d'un signal : gabarit, réécrit par le modèle quand une clé est configurée. La réécriture
+ * est un appel payant, réservé et compté ; si le budget la refuse (plafond atteint, verrou occupé),
+ * le gabarit est gardé et l'action en cours aboutit.
+ */
+export async function signalSummary(
+  ctx: Pick<Ctx, "repo" | "user" | "now">,
+  input: { title: string; text: string },
+  label: string,
+): Promise<string> {
+  const base = adapters().textModel.summarize(input);
+  const ai = adapters().ai;
+  if (!ai) return base;
+  try {
+    return await paidCall(
+      ctx,
+      { kind: "generation_summary", estimate: MAX_COSTS.summary, units: 1, label },
+      (meter) => ai.enhanceSummary(input, base, meter),
+    );
+  } catch (e) {
+    if (!isBudgetRefusal(e)) throw e;
+    return base;
+  }
+}
 
 export async function activeGrid(repo: Repository): Promise<GridRecord> {
   const grids = await repo.grids.list();

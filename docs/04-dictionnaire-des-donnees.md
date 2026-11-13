@@ -413,7 +413,7 @@ Plafonds et compteurs (`METERS` et `DEFAULT_LIMITS` de [`domain/budget.ts`](../s
 
 #### Ligne de consommation (`UsageEntry`)
 
-**Rôle.** Trace d'un appel payant (génération, recherche, observation) avec son coût estimé.
+**Rôle.** Trace d'un appel payant ou d'une production comptée (génération, recherche, observation) avec son coût mesuré.
 
 | Champ | Type TS | Présence | Description | Contraintes et valeurs |
 |---|---|---|---|---|
@@ -421,14 +421,14 @@ Plafonds et compteurs (`METERS` et `DEFAULT_LIMITS` de [`domain/budget.ts`](../s
 | `at` | `string` | oui | Horodatage | ISO 8601 ; détermine le mois de rattachement |
 | `kind` | `UsageKind` | oui | Nature de l'appel | `generation_article`, `generation_linkedin`, `generation_summary`, `classification`, `search_query`, `observation` |
 | `units` | `number` | oui | Unités consommées | Entier ≥ 0 |
-| `costEur` | `number` | oui | Coût estimé | € HT, quatre décimales ; plafonné au montant réservé pour l'appel |
+| `costEur` | `number` | oui | Coût mesuré | € HT, six décimales ; 0 pour une production sans requête payante (flux gratuit, texte du gabarit) |
 | `label` | `string` | oui | Libellé lisible | Par exemple « Collecte <libellé de la source> » |
 
 - **Enregistrement uniquement.** Exposé de façon agrégée par `GET /api/usage`.
-- **Coûts unitaires** (`COSTS` de [`domain/budget.ts`](../src/server/domain/budget.ts)) : article 0,45 €, post LinkedIn 0,08 €, résumé 0,02 €, recherche web 0,012 €, observation 0,021 €. Ce sont des estimations, pas le coût facturé par le fournisseur.
-- **Intégrité.** `paidCall` réserve l'estimation dans `Settings.reservedEur` avant l'appel, sous le verrou `budget`. Après l'appel, il insère les lignes, puis libère la réservation dans un `finally` et vérifie les seuils d'alerte ; si l'appel lève une exception, la réservation est libérée sans aucune ligne. Une ligne sans unité ni coût n'est pas insérée. Une collecte réserve 0,075 € (une recherche et trois observations), puis enregistre une ligne `search_query` et, si la source a renvoyé des publications nouvelles, une ligne `observation` dont `units` compte ces publications (trois au plus) : une publication dont l'URL canonique est déjà connue, ou refusée par le filtrage SSRF, n'est pas comptée.
-- **Collecte réelle.** Le collecteur réel lit des flux RSS et Google News gratuits (la recherche Perplexity n'a pas de ligne propre), mais chaque exécution reste comptée comme un appel payant estimé. Une collecte complète de 150 sources consomme entre 1,80 € (aucune nouveauté) et 11,25 € (trois nouveautés par source) : le budget de 150 € couvre au moins 13 collectes complètes par mois.
-- **SQL.** `usage_ledger`, avec `cost_eur numeric(10,4)`.
+- **Coût mesuré.** `costEur` est ce que le fournisseur facture pour l'appel : jetons OpenAI au tarif de `gpt-4o-mini`, 0,005 € par recherche Perplexity réussie, à parité dollar-euro ([`domain/pricing.ts`](../src/server/domain/pricing.ts)). Les lignes antérieures au 13 novembre 2026 portent les anciens forfaits (article 0,45 €, post LinkedIn 0,08 €, résumé 0,02 €, lecture 0,005 €, recherche 0,012 €, observation 0,021 €).
+- **Intégrité.** `paidCall` réserve le coût maximal estimé (`MAX_COSTS`) dans `Settings.reservedEur` avant l'appel, sous le verrou `budget`. Après l'appel, il insère les lignes, puis libère la réservation dans un `finally` et vérifie les seuils d'alerte ; si l'appel lève une exception, la réservation est libérée et les requêtes déjà facturées laissent une ligne « (interrompu) » sans unité. Une ligne sans unité ni coût n'est pas insérée. Une collecte réserve 0,005 € par source (plus les lectures par le modèle), puis enregistre une ligne `search_query` au coût de la recherche Perplexity (0 pour un flux) et, si la source a renvoyé des publications nouvelles, une ligne `observation` sans coût dont `units` compte ces publications (cinq au plus) : une publication dont l'URL canonique est déjà connue, ou refusée par le filtrage SSRF, n'est pas comptée.
+- **Collecte réelle.** Lire un flux RSS ou Google News ne coûte rien. La recherche Perplexity d'une source de presse est portée par la ligne `search_query`, les lectures par le modèle par une ligne `classification`, les résumés réécrits des signaux créés par une ligne `generation_summary`. Une collecte complète de 150 sources de presse coûte au plus 0,75 € de recherches.
+- **SQL.** `usage_ledger`, avec `cost_eur numeric(12,6)`.
 
 #### Compteurs de quotas (`QuotaMeter`, `UsageSnapshot`)
 
@@ -1353,14 +1353,14 @@ Dans les tests, une entreprise réelle (`fictional: false`) ne reçoit jamais d'
 
 **`UsageKind`** (interne, sans libellé)
 
-| Valeur | Compteur alimenté | Coût unitaire |
+| Valeur | Compteur alimenté | Coût porté par la ligne |
 |---|---|---|
-| `generation_article` | `articles` | 0,45 € |
-| `generation_linkedin` | `linkedin_posts` | 0,08 € |
-| `generation_summary` | — (budget seulement) | 0,02 € |
-| `classification` | — (budget seulement) | 0,005 € |
-| `search_query` | `search_queries` | 0,012 € |
-| `observation` | `observations` | 0,021 € |
+| `generation_article` | `articles` | Coût mesuré de la réécriture par le modèle |
+| `generation_linkedin` | `linkedin_posts` | Coût mesuré de la réécriture par le modèle |
+| `generation_summary` | — (budget seulement) | Coût mesuré du résumé (newsletter, signal collecté ou défusionné) |
+| `classification` | — (budget seulement) | Coût mesuré des lectures d'une source |
+| `search_query` | `search_queries` | 0,005 € si la recherche Perplexity a réussi, sinon 0 |
+| `observation` | `observations` | 0 (compteur de volume) |
 
 **`QuotaMeter.alert`** (libellés de [`parametres/QuotasTab.tsx`](../src/components/parametres/QuotasTab.tsx))
 
@@ -1530,7 +1530,7 @@ SELECT reserved_eur, limit_api_budget_eur, paid_calls_suspended, suspended_month
 FROM kora.workspace_settings WHERE workspace_id = $1 FOR UPDATE;
 SELECT coalesce(sum(cost_eur), 0) FROM kora.usage_ledger
 WHERE workspace_id = $1 AND at >= $2;  -- début du mois local
--- si dépensé + réservé + estimation > plafond : suspendre (paid_calls_suspended, suspended_month) et refuser (402)
+-- si dépensé + réservé + coût maximal de l'appel > plafond : suspendre (paid_calls_suspended, suspended_month) et refuser (402)
 UPDATE kora.workspace_settings SET reserved_eur = reserved_eur + $3 WHERE workspace_id = $1;
 COMMIT;
 
@@ -1837,6 +1837,6 @@ Points apparus avec le stockage Supabase et le collecteur réel :
 30. **`transient` ignoré** ([`services/collection.ts`](../src/server/services/collection.ts), lignes 274 à 283) : un 403 ou un 404, marqué non transitoire par le collecteur, est quand même réessayé trois fois.
 31. **Publications perdues (corrigé)** ([`services/collection.ts`](../src/server/services/collection.ts), lignes 33 et 357 à 365) : la limite de trois ne s'applique plus qu'aux publications nouvelles, les URL déjà connues ne comptant pas. Au-delà de trois nouveautés entre deux collectes, les suivantes sont reprises aux collectes suivantes, tant qu'elles ont moins de 30 jours. Les entrées sans date sont désormais écartées, leur fraîcheur n'étant pas vérifiable ([`adapters/collector.ts`](../src/server/adapters/collector.ts), lignes 429 à 437).
 32. **Lien Google News au lieu de l'article** ([`adapters/collector.ts`](../src/server/adapters/collector.ts), `parseFeed`, lignes 218 à 245) : `Observation.url` et `Signal.primaryUrl` pointent vers une redirection `news.google.com`. Le même article lu dans le flux du média puis par Google News n'est pas reconnu comme doublon d'URL.
-33. **Coût fictif de la collecte** : chaque exécution est comptée 0,012 € de recherche, plus 0,021 € par nouvelle publication (trois au plus), soit de 0,012 à 0,075 €, alors que les flux RSS et Google News sont gratuits ; 150 sources consomment jusqu'à 11,25 € par collecte complète. Le coût réel de Perplexity (crédits de la passerelle de connexion) n'est pas lu.
+33. **Coût fictif de la collecte (corrigé)** : jusqu'au 13 novembre 2026, chaque exécution était comptée 0,012 € de recherche plus 0,021 € par nouvelle publication, alors que les flux RSS et Google News sont gratuits, et le coût réel de Perplexity n'était pas lu. Le budget compte désormais le coût mesuré : rien pour un flux, 0,005 € par recherche Perplexity réussie, et les jetons facturés par OpenAI.
 34. **Ordre de lecture instable** ([`store/db.ts`](../src/server/store/db.ts), lignes 38 et 39) : `list()` trie sur `created_at` seul ; les lignes installées dans une même requête ont la même valeur, et la pagination par tranches de 1 000 peut alors sauter ou répéter une ligne.
 35. **Typage perdu** ([`store/db.ts`](../src/server/store/db.ts), lignes 80 à 97) : les collections sont déclarées `DbCollection<any>`, sans contrôle de type par rapport au `Repository`. L'index `kora_records_collection_idx` ([`0000_kora_records.sql`](../drizzle/migrations/0000_kora_records.sql), ligne 9) double la clé primaire.

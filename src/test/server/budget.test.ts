@@ -70,7 +70,7 @@ describe("consommation et quotas", () => {
   });
 
   it("budget épuisé : 402, appels payants suspendus sans appel, lecture et exports disponibles", async () => {
-    await spend(37.4);
+    await spend(37.6); // 150,00 € : le plafond est atteint
     const calls = spyTextModel();
     const articlesBefore = await call<Article[]>("GET", "/articles");
 
@@ -101,7 +101,7 @@ describe("consommation et quotas", () => {
 
     const usage = await call<UsageSnapshot>("GET", "/usage");
     expect(usage.body.paidCallsSuspended).toBe(true);
-    expect(meter(usage.body, "api_budget_eur").used).toBeCloseTo(149.8, 5);
+    expect(meter(usage.body, "api_budget_eur").used).toBe(150);
     const articlesAfter = await call<Article[]>("GET", "/articles");
     expect(articlesAfter.body).toHaveLength(articlesBefore.body.length);
 
@@ -125,8 +125,8 @@ describe("consommation et quotas", () => {
     );
   });
 
-  it("réserve le coût estimé avant l'appel : refus si la réservation dépasserait le plafond", async () => {
-    await spend(37.3); // 149,70 € : un article (0,45 €) dépasserait 150 €
+  it("réserve le coût maximal estimé avant l'appel : refus si la réservation dépasserait le plafond", async () => {
+    await spend(37.595); // 149,995 € : le coût maximal d'un article (0,009 €) dépasserait 150 €
     const calls = spyTextModel();
     const res = await call<ApiErrorBody>("POST", "/articles", {
       body: { signalId: "sig_verkor" },

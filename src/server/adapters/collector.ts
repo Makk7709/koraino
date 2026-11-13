@@ -5,6 +5,7 @@ import type {
   ObservationVia,
   Outlet,
 } from "@/lib/api/types";
+import { PERPLEXITY_SEARCH_EUR, type ApiMeter } from "../domain/pricing";
 import { slugify } from "../domain/text";
 import {
   CITIES,
@@ -70,6 +71,8 @@ export interface CollectInput {
   now: Date;
   /** Derniers événements connus de l'entreprise (pour simuler les reprises). */
   knownEvents: { title: string; excerpt: string }[];
+  /** Compteur du coût mesuré : le collecteur y ajoute chaque requête payante (Perplexity). */
+  meter?: ApiMeter;
 }
 
 export interface Collector {
@@ -519,8 +522,11 @@ export class RealCollector implements Collector {
     this.fetchTimeoutMs = timeout_ms ? timeout_ms : 15000;
   }
 
-  /** Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas. */
-  private search(company: CompanyRecord, source: SourceRecord, now: Date) {
+  /**
+   * Recherche Perplexity mémoïsée sur la date d'exécution : un réessai ne la relance pas, et elle
+   * n'est comptée qu'une fois. Perplexity facture la requête réussie, même sans résultat.
+   */
+  private search(company: CompanyRecord, source: SourceRecord, now: Date, meter?: ApiMeter) {
     let bySource = this.searches.get(now);
     if (!bySource) {
       bySource = new Map();
@@ -528,7 +534,10 @@ export class RealCollector implements Collector {
     }
     let pending = bySource.get(source.id);
     if (!pending) {
-      pending = perplexitySearch(company, this.env);
+      pending = perplexitySearch(company, this.env).then((found) => {
+        if (found.outcome.status === "ok") meter?.add(PERPLEXITY_SEARCH_EUR);
+        return found;
+      });
       bySource.set(source.id, pending);
     }
     return pending;
@@ -551,7 +560,8 @@ export class RealCollector implements Collector {
     const fallback: Outlet = company
       ? { name: company.name, domain: company.domain, brand: company.brand }
       : { name: hostOf(url), domain: hostOf(url), brand: brandFor(hostOf(url)) };
-    const search = useGoogle && company ? this.search(company, source, input.now) : null;
+    const search =
+      useGoogle && company ? this.search(company, source, input.now, input.meter) : null;
 
     let items: RawItem[];
     let warning: CollectWarning | undefined;
@@ -559,7 +569,11 @@ export class RealCollector implements Collector {
       const feed = await this.readFeed(url, fallback);
       // Page sans flux, même aux adresses habituelles : échec définitif, visible sur la source
       // (et non un succès silencieux), jusqu'à ce que son adresse soit corrigée.
-      if (!feed) return { ok: false, code: "NO_FEED", reason: NO_FEED_REASON, transient: false };
+      if (!feed) {
+        // La recherche est déjà partie : attendue, pour que son coût soit compté.
+        if (search) await search;
+        return { ok: false, code: "NO_FEED", reason: NO_FEED_REASON, transient: false };
+      }
       const via: ObservationVia = useGoogle ? "google_news" : "flux";
       items = feed.map((i) => ({ ...i, via }));
     } catch (e) {

@@ -125,9 +125,11 @@ function BudgetPanel({
         </div>
       </div>
       <p className="mt-5 border-t border-white/10 pt-3 text-[11px] leading-relaxed text-white/65">
-        Atteint avant un quota, ce plafond prévaut. Le moteur réserve un coût maximal estimé avant
-        chaque appel. Alertes à 80 % puis 100 % ; à 100 %, les appels payants sont suspendus,
-        consultation et exports restent accessibles.
+        Ce compteur additionne le coût réel des appels au modèle de texte (OpenAI) et des recherches
+        Perplexity ; lire un flux RSS ou Google News est gratuit. Atteint avant un quota, ce plafond
+        prévaut. Le moteur réserve un coût maximal estimé avant chaque appel. Alertes à 80 % puis
+        100 % ; à 100 %, les appels payants sont suspendus, consultation et exports restent
+        accessibles.
       </p>
     </section>
   );

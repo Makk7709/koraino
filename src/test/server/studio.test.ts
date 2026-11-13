@@ -65,9 +65,9 @@ describe("WF2 : dossier factuel et brouillon sourcé", () => {
     const usageAfter = await call<UsageSnapshot>("GET", "/usage");
     const meter = (u: UsageSnapshot, key: string) => u.meters.find((m) => m.key === key)!.used;
     expect(meter(usageAfter.body, "articles")).toBe(meter(usageBefore.body, "articles") + 1);
-    expect(meter(usageAfter.body, "api_budget_eur")).toBeCloseTo(
-      meter(usageBefore.body, "api_budget_eur") + 0.45,
-      2,
+    // Sans clé IA, le brouillon vient du gabarit : aucun appel payant, donc aucun coût.
+    expect(meter(usageAfter.body, "api_budget_eur")).toBe(
+      meter(usageBefore.body, "api_budget_eur"),
     );
   });
 
