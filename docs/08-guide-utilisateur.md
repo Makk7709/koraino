@@ -247,12 +247,14 @@ Le type de source détermine ce que la collecte lit réellement (voir ci-dessous
 
 | Motif affiché | Ce que cela veut dire | Que faire |
 |---|---|---|
-| page d'éditeur inaccessible | Le site du média a refusé la lecture ou n'a pas répondu. Plusieurs titres de la presse économique refusent toute lecture automatique : leurs articles sont écartés à chaque collecte. | Rien à corriger dans KORA. Si l'article compte, vérifiez-le vous-même sur le site du média. Perplexity peut le retrouver de son côté. |
+| page d'éditeur inaccessible | Le site du média a refusé la lecture ou n'a pas répondu. Plusieurs titres de la presse économique refusent toute lecture automatique : leurs articles sont écartés à chaque collecte. | Rien à corriger dans KORA. Si l'article compte, vérifiez-le vous-même sur le site du média. |
 | sans date de publication lisible | La page a été lue, mais elle n'indique pas sa date de publication sous une forme exploitable. | Idem. |
 | hors de la fenêtre de 30 jours | L'article est en réalité ancien : c'est le cas que cette vérification doit écarter. | Rien. |
 | lien non résolu | Google News n'a pas donné l'adresse de l'article. | Relancez la collecte plus tard. |
 
 La vérification s'arrête à 15 articles ou 60 secondes par source. Les articles qui restent ne sont pas écartés, seulement « non examinés » : ils sont cités à la suite du message (« … ; 7 non examinées (limite de 15 vérifications ou de 60 s par source). »), ou seuls sous le code `DATE_UNCHECKED` si aucun article n'a été écarté. Relancez la collecte : ils seront examinés s'ils figurent encore dans Google News. Quand KORA a déjà trouvé ses cinq publications nouvelles et n'a rien écarté, il n'affiche aucun avertissement.
+
+**Quand Perplexity a trouvé le même article.** Si la date d'un article Google News ne peut pas être vérifiée mais que Perplexity a renvoyé le même article, KORA garde la version de Perplexity : l'observation porte la pastille violette « Perplexity », l'adresse et la date données par Perplexity, et l'article n'apparaît pas dans le décompte des écartés. Seule exception : si la page du média a pu être lue et montre que l'article est ancien, il est écarté quoi qu'en dise Perplexity. Les articles qui restent dans le décompte sont donc ceux que Perplexity n'a pas renvoyés.
 
 Un article écarté n'est pas mémorisé : tant que Google News le propose, il est examiné de nouveau et compté de nouveau à chaque collecte. Voir un même décompte d'une collecte à l'autre est donc normal. Les flux RSS des entreprises et les résultats de Perplexity ne sont pas concernés par cette vérification.
 
