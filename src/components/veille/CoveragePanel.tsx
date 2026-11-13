@@ -16,7 +16,7 @@ import { SOURCE_ACCESS, SOURCE_TYPE } from "@/components/kora/labels";
 import type { CollectionRun, Source, SourceAccess, SourceType } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { BlockSkeleton, DataTable, EmptyRow, ErrorPanel, Td, Th, Tr, formatNumber } from "./kit";
-import { isFailedRun, runsByDay, type RunDay } from "./runs";
+import { isFailedRun, runsByDay, topNotices, type RunDay } from "./runs";
 
 const DAYS = 14;
 const ACCESS_BAR: Record<SourceAccess, string> = {
@@ -161,12 +161,7 @@ function CoverageStats({ runs, sources }: { runs: CollectionRun[]; sources: Sour
     const reached = new Set(recent.filter((r) => !isFailedRun(r.status)).map((r) => r.sourceId));
     const active = sources.filter((s) => s.access !== "desactivee");
     const covered = active.filter((s) => reached.has(s.id)).length;
-    const codes = new Map<string, number>();
-    for (const r of recent) {
-      if (r.errorCode) codes.set(r.errorCode, (codes.get(r.errorCode) ?? 0) + 1);
-    }
-    const topCodes = [...codes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
-    return { active: active.length, covered, topCodes };
+    return { active: active.length, covered, ...topNotices(recent) };
   }, [runs, sources]);
   const ratio = stats.active ? stats.covered / stats.active : 0;
 
@@ -197,23 +192,43 @@ function CoverageStats({ runs, sources }: { runs: CollectionRun[]; sources: Sour
           <p className="mb-2 text-[12px] font-semibold text-kora-ink">
             Codes d&apos;erreur fréquents
           </p>
-          {stats.topCodes.length === 0 ? (
+          {stats.errors.length === 0 ? (
             <p className="text-[12px] text-muted-foreground">Aucune erreur sur la période.</p>
           ) : (
             <ul className="space-y-1.5">
-              {stats.topCodes.map(([code, n]) => (
-                <li key={code} className="flex items-center justify-between gap-2">
+              {stats.errors.map((e) => (
+                <li key={e.code} className="flex items-center justify-between gap-2">
                   <Pill tone="rose" size="sm" className="font-mono">
-                    {code}
+                    {e.label}
                   </Pill>
                   <span className="text-[12px] font-semibold text-kora-ink-soft tabular-nums">
-                    {n} occurrence{n > 1 ? "s" : ""}
+                    {e.count} occurrence{e.count > 1 ? "s" : ""}
                   </span>
                 </li>
               ))}
             </ul>
           )}
         </div>
+        {stats.warnings.length > 0 && (
+          <div>
+            <p className="mb-2 text-[12px] font-semibold text-kora-ink">Avertissements fréquents</p>
+            <ul className="space-y-1.5">
+              {stats.warnings.map((w) => (
+                <li key={w.label} className="flex items-center justify-between gap-2">
+                  <Pill tone="orange" size="sm" className="font-semibold">
+                    {w.label}
+                  </Pill>
+                  <span className="text-[12px] font-semibold text-kora-ink-soft tabular-nums">
+                    {w.count} collecte{w.count > 1 ? "s" : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Ces collectes ont réussi ; le détail figure dans l&apos;historique.
+            </p>
+          </div>
+        )}
       </div>
     </KoraCard>
   );

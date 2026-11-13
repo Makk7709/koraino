@@ -4,20 +4,36 @@ import { api } from "@/lib/api/client";
 import { useKoraMutation } from "@/lib/api/hooks";
 import type { CollectionBatch, CollectionRun } from "@/lib/api/types";
 import { plural } from "./kit";
-import { summarizeRuns } from "./runs";
+import { runNotice, summarizeRuns } from "./runs";
 
-/** Bilan d'une collecte unitaire : un échec reste un échec, jamais « aucune actualité ». */
-function toastRun(run: CollectionRun) {
+/**
+ * Bilan d'une collecte unitaire : un échec reste un échec, jamais « aucune actualité ». Une
+ * collecte réussie qui porte un avertissement l'affiche, pour qu'une source sans nouveauté ne
+ * passe pas pour une source où rien n'a été publié.
+ */
+export function toastRun(run: CollectionRun) {
+  const notice = runNotice(run);
+  const warning = notice?.kind === "avertissement" ? notice : null;
   switch (run.status) {
-    case "succes":
-      toast.success("Collecte réussie", {
-        description: plural(run.newObservations, "nouvelle observation", "nouvelles observations"),
-      });
+    case "succes": {
+      const count = plural(run.newObservations, "nouvelle observation", "nouvelles observations");
+      if (warning) {
+        toast.warning(`Collecte réussie · ${warning.label}`, {
+          description: warning.message ? `${count}. ${warning.message}` : count,
+        });
+      } else toast.success("Collecte réussie", { description: count });
       break;
+    }
     case "succes_sans_actualite":
-      toast.success(RUN_STATUS.succes_sans_actualite.label, {
-        description: "Source joignable, aucune nouvelle actualité publiée.",
-      });
+      if (warning) {
+        toast.warning(`Aucune nouvelle actualité · ${warning.label}`, {
+          description: warning.message ?? "Source joignable, aucune actualité retenue.",
+        });
+      } else {
+        toast.success(RUN_STATUS.succes_sans_actualite.label, {
+          description: "Source joignable, aucune nouvelle actualité publiée.",
+        });
+      }
       break;
     case "bloque_quota":
       toast.warning("Collecte bloquée par le quota", {
@@ -78,6 +94,7 @@ export function useCollectAll() {
           plural(s.failed, "échec", "échecs"),
         ];
         if (s.blocked > 0) parts.push(plural(s.blocked, "collecte bloquée", "collectes bloquées"));
+        if (s.warnings > 0) parts.push(plural(s.warnings, "avertissement", "avertissements"));
         const title = `Collecte terminée sur ${plural(s.total, "source", "sources")}`;
         if (s.failed + s.blocked > 0) toast.warning(title, { description: parts.join(" · ") });
         else toast.success(title, { description: parts.join(" · ") });

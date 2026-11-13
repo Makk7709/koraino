@@ -21,7 +21,7 @@ import {
   type WithAll,
 } from "./kit";
 import { RUN_STATUS_OPTIONS } from "./labels";
-import { runDuration } from "./runs";
+import { runDuration, runNotice } from "./runs";
 
 const PAGE_SIZE = 20;
 
@@ -53,7 +53,10 @@ export function CollectionHistory({
         if (!needle) return true;
         const label = sources.get(r.sourceId)?.label ?? "";
         const name = companies.get(r.companyId)?.name ?? "";
-        return [label, name, r.errorCode ?? ""].some((v) => v.toLowerCase().includes(needle));
+        const notice = runNotice(r);
+        return [label, name, notice?.code ?? "", notice?.label ?? ""].some((v) =>
+          v.toLowerCase().includes(needle),
+        );
       })
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }, [runs, sources, companies, status, q]);
@@ -66,7 +69,11 @@ export function CollectionHistory({
       badge={runs && <CountBadge value={runs.length} tone="blue" />}
       action={
         <FilterBar>
-          <SearchField value={q} onChange={setQ} placeholder="Source, entreprise, code…" />
+          <SearchField
+            value={q}
+            onChange={setQ}
+            placeholder="Source, entreprise, code, avertissement…"
+          />
           <FilterSelect
             value={status}
             onChange={setStatus}
@@ -94,7 +101,7 @@ export function CollectionHistory({
                 <Th>Statut</Th>
                 <Th className="text-right">Nouvelles observations</Th>
                 <Th>Perplexity</Th>
-                <Th>Code d&apos;erreur</Th>
+                <Th>Erreur ou avertissement</Th>
               </tr>
             </thead>
             <tbody>
@@ -105,6 +112,7 @@ export function CollectionHistory({
                 const source = sources.get(r.sourceId);
                 const company = companies.get(r.companyId);
                 const st = RUN_STATUS[r.status];
+                const notice = runNotice(r);
                 return (
                   <Tr key={r.id} interactive onClick={() => onSelectSource(r.sourceId)}>
                     <Td className="whitespace-nowrap">
@@ -153,17 +161,25 @@ export function CollectionHistory({
                     <Td className="max-w-[220px]">
                       <EnrichmentCell enrichment={r.enrichment} />
                     </Td>
-                    <Td className="max-w-[300px]">
-                      {r.errorCode ? (
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Pill tone="rose" size="sm" className="font-mono">
-                            {r.errorCode}
-                          </Pill>
+                    <Td className={cn("max-w-[360px]", notice && "min-w-[200px]")}>
+                      {notice ? (
+                        <div className="flex min-w-0 flex-col items-start gap-1">
+                          {notice.kind === "erreur" ? (
+                            <Pill tone="rose" size="sm" className="font-mono">
+                              {notice.label}
+                            </Pill>
+                          ) : (
+                            <span title={`Avertissement ${notice.code} : la collecte a réussi.`}>
+                              <Pill tone="orange" size="sm" className="font-semibold">
+                                {notice.label}
+                              </Pill>
+                            </span>
+                          )}
                           <span
-                            className="truncate text-[12px] text-kora-ink-soft"
-                            title={r.errorMessage ?? ""}
+                            className="line-clamp-3 text-[12px] leading-snug text-kora-ink-soft"
+                            title={notice.message ?? ""}
                           >
-                            {r.errorMessage}
+                            {notice.message}
                           </span>
                         </div>
                       ) : (
