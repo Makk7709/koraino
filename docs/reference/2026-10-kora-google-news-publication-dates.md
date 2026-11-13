@@ -3,6 +3,7 @@
 - **Projet :** KORA Newsroom / veille Inovallée
 - **Branche de travail :** `fix/kora-publication-dates`
 - **Date de rédaction :** 29 octobre 2026
+- **Statut au 13 novembre 2026 :** PR #2 fusionnée dans `main`, avec un complément : le motif et le nombre des articles écartés sont affichés dans l'historique des collectes. Voir la [revue des PR 2 et 3](2026-11-13-revue-pr2-pr3.md) ; le comportement à jour est décrit dans [Règles métier](../05-regles-metier.md#wf1--collecte-et-classement). Ce qui suit est conservé comme historique daté.
 - **Statut au 29 octobre 2026 (historique) :** PR Draft #2 ouverte ; correctif RSS poussé (`d618a10`) ; CI GitHub réussie avec 639/639 tests. Recette applicative isolée restante à cette date.
 **Périmètre :** collecte Google News, confirmation des dates de publication, protections réseau et tests de régression
 
