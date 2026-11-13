@@ -1087,12 +1087,14 @@ Les vérifications sont bornées par source : 15 entrées (`MAX_GOOGLE_NEWS_CHEC
 
 | Motif | Libellé dans `errorMessage` | Cas |
 |---|---|---|
-| `inaccessible` | « page(s) d'éditeur inaccessible(s) » | Adresse refusée par le filtrage SSRF, délai dépassé, erreur réseau, statut HTTP autre que 2xx (dont le 403 d'un site qui refuse les lectures automatiques), redirection, type autre que du HTML, page de plus de 1 Mio. |
+| `inaccessible` | « page(s) d'éditeur inaccessible(s) » | Adresse refusée par le filtrage SSRF, délai dépassé, erreur réseau, statut HTTP autre que 2xx (dont le 403 d'un site qui refuse les lectures automatiques), redirection, type autre que du HTML, page de plus de 1 Mio ; ou page non demandée parce que son média a déjà refusé deux fois la lecture (voir plus bas). |
 | `sans_date` | « sans date de publication lisible » | Page lue, mais date absente, illisible ou contradictoire. |
 | `hors_fenetre` | « hors de la fenêtre de 30 jours » | Date lue, de plus de 30 jours ou de plus d'un jour dans le futur : c'est le cas visé, l'archive réindexée. |
 | lien non résolu | « lien(s) non résolu(s) » | La redirection Google News ne mène à aucune adresse d'éditeur acceptable. |
 
 Exemple : « Google News : 5 publications écartées par la vérification de la date (4 pages d'éditeur inaccessibles, 1 sans date de publication lisible). »
+
+**Média qui refuse la lecture.** Un refus d'accès est une réponse 401, 403 ou 429 (`PublishedAtCheck.refused`). `resolveGoogleNewsItems` les compte par média : celui que nomme le flux (`outlet.domain`, sans `www.`), si la page refusée est sur cet hôte ou sur un de ses sous-domaines ; sinon l'hôte de la page (`refusedMedia`). À partir de `MAX_PUBLISHER_REFUSALS` = 2 refus pour une source et une collecte, les autres entrées de ce média sont comptées `inaccessible` sans résolution du lien ni lecture de la page, et sans compter dans `MAX_GOOGLE_NEWS_CHECKS` : les vérifications restent aux autres médias. Une erreur 404 ou 5xx, une redirection, un délai dépassé ou une page sans date ne sont pas des refus. Le décompte n'est pas conservé d'une collecte à l'autre. La reprise par Perplexity s'applique à une entrée ainsi écartée.
 
 Les entrées **non examinées** (au-delà d'une des deux bornes) ne sont pas des refus et sont comptées à part. Avec au moins un refus, elles suivent dans le même message : « Google News : 3 publications écartées par la vérification de la date (3 pages d'éditeur inaccessibles) ; 7 non examinées (limite de 15 vérifications ou de 60 s par source). » Sans aucun refus, elles ne donnent un avertissement, de code `DATE_UNCHECKED`, que si la vérification s'est arrêtée avant d'avoir confirmé `MAX_ITEMS` articles (« Google News : 2 publications non examinées (limite de 15 vérifications ou de 60 s par source). ») : c'est le cas d'un budget de 60 s épuisé par des sites lents. Une source dont cinq articles sont confirmés et aucun écarté ne porte pas d'avertissement ; le surplus attend la collecte suivante, comme pour un flux.
 
