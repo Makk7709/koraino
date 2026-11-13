@@ -74,6 +74,7 @@ SUPABASE_URL= bun run dev   # http://localhost:8080
 |---|---|
 | `bun run dev` | Serveur de développement avec rechargement à chaud. |
 | `bun run test` | Suite Vitest (base en mémoire, collecte simulée, sans réseau). |
+| `bun run test:e2e` | Tests navigateur Playwright (Chromium) sur la démonstration en mémoire, port 8765. Une fois par poste : `bunx playwright install chromium`. |
 | `npx tsc --noEmit -p .` | Vérification TypeScript. |
 | `bun run lint` | ESLint et Prettier. |
 | `bun run build` | Build de production dans `.output/`. |
@@ -103,6 +104,7 @@ Les variables publiques sont dans `.env` (versionné). Les secrets sont lus côt
 | `WORDPRESS_USERNAME` | Identifiant du compte WordPress dédié à KORA, de rôle **Contributeur** : il crée des brouillons et ne peut rien publier. |
 | `WORDPRESS_APP_PASSWORD` | Mot de passe d'application de ce compte (Profil > Mots de passe d'application), pas son mot de passe de connexion. **Secret.** |
 | `LOVABLE_DB_MIGRATION_URL` | Connexion utilisée pour appliquer les migrations de `drizzle/migrations/`. |
+| `VITE_BRANDFETCH_CLIENT_ID` | Facultative. Identifiant client **public** de la Logo API Brandfetch, lu à la compilation : sans lui, les entreprises gardent leurs initiales. Jamais une clé secrète, et pas dans `.env` (voir [Logos entreprises](docs/12-logos-entreprises-brandfetch.md)). |
 
 Sans les trois variables `WORDPRESS_*`, l'envoi vers WordPress répond « WordPress n'est pas configuré » en production. En mode démonstration et sous Vitest, il reste simulé : aucun site n'est contacté. L'état de la configuration et la correspondance des catégories se règlent dans Paramètres > WordPress.
 
