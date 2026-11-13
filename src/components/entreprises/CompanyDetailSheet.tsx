@@ -50,7 +50,7 @@ function SheetHeader({ company: c }: { company: Company }) {
   return (
     <header className="border-b border-border/80 bg-white/90 px-6 pt-5 pb-4">
       <div className="flex items-start gap-4 pr-8">
-        <BrandMark name={c.name} brand={c.brand} size="lg" />
+        <BrandMark name={c.name} brand={c.brand} domain={c.domain} size="lg" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[20px] leading-tight font-bold text-kora-ink">{c.name}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">

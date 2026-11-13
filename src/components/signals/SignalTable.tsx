@@ -161,7 +161,12 @@ function SignalRow({
       </span>
 
       <span role="cell" className="flex min-w-0 items-center gap-2">
-        <BrandMark name={company?.name ?? name} brand={company?.brand ?? UNKNOWN_BRAND} size="sm" />
+        <BrandMark
+          name={company?.name ?? name}
+          brand={company?.brand ?? UNKNOWN_BRAND}
+          domain={company?.domain}
+          size="sm"
+        />
         <span className="min-w-0">
           <span
             className={cn(

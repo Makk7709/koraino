@@ -91,6 +91,7 @@ export function SignalDetailView({
         <BrandMark
           name={company?.name ?? name}
           brand={company?.brand ?? UNKNOWN_BRAND}
+          domain={company?.domain}
           size="lg"
           className="shadow-[0_6px_16px_-8px_oklch(0.27_0.05_233/70%)]"
         />

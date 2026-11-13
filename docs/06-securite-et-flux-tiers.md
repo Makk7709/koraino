@@ -486,3 +486,11 @@ Cette liste compare l'état du code aux exigences du §7. Elle complète la [Cou
 **Secrets**
 
 18. Détection de secrets sur le dépôt, en particulier sur le `.env` versionné, qui ne doit contenir que des valeurs publiques. Procédure écrite de rotation et de révocation de `SUPABASE_SERVICE_ROLE_KEY`, de `AI_API_KEY` et des clés de la passerelle, de Perplexity, de LinkedIn et de WordPress avec Lovable Cloud. Base distincte pour le développement, afin qu'aucun poste ne détienne la clé de service de la production.
+
+## Logos d’entreprises : flux externe optionnel Brandfetch
+
+Activation seulement si `VITE_BRANDFETCH_CLIENT_ID` (client ID public, non secret) est fourni au build. Le navigateur demande les logos à `https://cdn.brandfetch.io` à partir du domaine public présent dans les fiches entreprises. Aucun appel réseau serveur et aucune modification de la base. Le navigateur transmet son IP et l’origine de l’application dans l’en-tête Referer, exigé par le fournisseur (`strict-origin-when-cross-origin`), mais pas le chemin de la page.
+
+Les URL sont construites sur un hôte CDN fixe après validation stricte du domaine et du Client ID ; aucun accès à une destination fournie directement par l’utilisateur. Logo API est utilisé en hotlinking, sans stockage, téléchargement ou proxy applicatif. La route `fallback/404` permet d’afficher le monogramme local si le logo est indisponible. En cas d’erreur de chargement ou après dix secondes, le monogramme est affiché.
+
+Avant activation en production, documenter la politique de confidentialité, vérifier les conditions de licence et la politique CSP (`img-src https://cdn.brandfetch.io` si CSP restrictive), et mesurer la couverture des marques sans promettre l’exhaustivité. Les marques de médias ne sont pas concernées.

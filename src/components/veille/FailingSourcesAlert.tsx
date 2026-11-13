@@ -75,7 +75,12 @@ export function FailingSourcesAlert({
             >
               <div className="flex min-w-0 items-center gap-2.5">
                 {company ? (
-                  <BrandMark name={company.name} brand={company.brand} size="sm" />
+                  <BrandMark
+                    name={company.name}
+                    brand={company.brand}
+                    domain={company.domain}
+                    size="sm"
+                  />
                 ) : (
                   <span className="size-8 shrink-0 rounded-lg bg-muted" />
                 )}

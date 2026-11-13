@@ -1,0 +1,37 @@
+name: Company logos validation
+
+on:
+  push:
+    branches:
+      - feat/company-logos
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: TypeScript typecheck
+        run: bunx tsc --noEmit
+      - name: Lint changed code (full-repo lint has pre-existing formatting errors)
+        run: |
+          git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' | xargs -r bunx eslint
+      - name: Tests
+        run: bun run test
+      - name: Build
+        run: bun run build
+      - name: Install headless Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Browser E2E (isolated demo and mocked CDN)
+        run: bun run test:e2e

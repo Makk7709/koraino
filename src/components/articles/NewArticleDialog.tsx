@@ -57,7 +57,7 @@ function SignalRow({
         {selected && <Check className="size-3" strokeWidth={3} />}
       </span>
       {company ? (
-        <BrandMark name={company.name} brand={company.brand} size="md" />
+        <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="md" />
       ) : (
         <span className="size-10 shrink-0 rounded-lg bg-muted" />
       )}

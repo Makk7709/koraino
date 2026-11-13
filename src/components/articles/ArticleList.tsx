@@ -39,7 +39,7 @@ function ArticleCard({
     >
       <div className="flex items-center gap-2.5">
         {company ? (
-          <BrandMark name={company.name} brand={company.brand} size="sm" />
+          <BrandMark name={company.name} brand={company.brand} domain={company.domain} size="sm" />
         ) : (
           <IconTile icon={article.origin === "import_humain" ? UserPen : FileText} tone="blue" />
         )}

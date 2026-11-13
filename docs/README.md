@@ -21,6 +21,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 | [09 — Exploitation](09-exploitation.md) | Tests, déploiement, supervision, procédures d'incident, sauvegarde, exports, rétention. | Ingénieurs, exploitation |
 | [10 — Couverture du cahier des charges](10-couverture-cahier-des-charges.md) | Statut de chaque exigence, préparation des épreuves R01 à R13, reste à faire. | Chef de projet, ingénieurs |
 | [11 — Anomalies connues](11-anomalies-connues.md) | Bugs, incohérences et écarts relevés dans le code, classés par priorité, avec emplacement et piste de correction. | Ingénieurs, chef de projet |
+| [12 — Logos entreprises / Brandfetch](12-logos-entreprises-brandfetch.md) | Dossier de revue PR, architecture et configuration, CI, recette locale, limites, sécurité et critères avant fusion. | Ingénieurs, reviewer, exploitation |
 
 ## Parcours de lecture conseillés
 

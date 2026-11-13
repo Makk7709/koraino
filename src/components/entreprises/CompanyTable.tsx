@@ -38,7 +38,7 @@ export function CompanyTable({
           <Tr key={c.id} interactive selected={c.id === selectedId} onClick={() => onOpen(c.id)}>
             <Td className="max-w-[260px]">
               <div className="flex items-center gap-3">
-                <BrandMark name={c.name} brand={c.brand} size="md" />
+                <BrandMark name={c.name} brand={c.brand} domain={c.domain} size="md" />
                 <div className="min-w-0">
                   <p className="truncate font-bold">{c.name}</p>
                   <p className="truncate text-[11px] text-kora-teal">{c.domain}</p>
