@@ -9,6 +9,9 @@
  *
  * Quand Perplexity a renvoyé le même article, sa version remplace l'article Google News dont la
  * date n'a pas pu être vérifiée : l'article n'est alors ni perdu ni compté parmi les écartés.
+ *
+ * Un média qui refuse deux fois la lecture n'est plus sollicité pendant la collecte : ses autres
+ * articles sont comptés inaccessibles sans requête, et les vérifications restent aux autres médias.
  * Aucun test n'appelle le réseau.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +24,7 @@ import {
   GOOGLE_NEWS_DATE_BUDGET_MS,
   MAX_GOOGLE_NEWS_CHECKS,
   MAX_ITEMS,
+  MAX_PUBLISHER_REFUSALS,
 } from "@/server/services/collection";
 import { checkPublishedAt } from "@/server/services/publisher-page";
 import { getRepository } from "@/server/store/memory";
@@ -37,7 +41,11 @@ interface Article {
   page: string | (() => Response);
   /** Adresse rendue par la résolution du lien Google News ; `null` : lien non résolu. */
   link?: string | null;
+  /** Adresse du média annoncée par le flux ; par défaut, l'origine de `url`. */
+  media?: string;
 }
+
+const HOST = "presse-motifs.example";
 
 function page(datePublished?: string): string {
   const ld = {
@@ -55,7 +63,7 @@ function article(slug: string, body: Article["page"], link?: string | null): Art
   return {
     title: `KORA-MOTIFS Pasqal ${slug}`,
     // Adresse en ASCII : l'application la normalise, le double de `fetch` compare à l'identique.
-    url: `https://www.presse-motifs.example/${slug.replace(/[^a-z0-9]+/gi, "-")}`,
+    url: `https://www.${HOST}/${slug.replace(/[^a-z0-9]+/gi, "-")}`,
     page: body,
     ...(link === undefined ? {} : { link }),
   };
@@ -78,7 +86,7 @@ interface PerplexityResult {
 function samePerplexity(a: Article, daysAgo = 4): PerplexityResult {
   return {
     title: a.title,
-    url: a.url.replace("presse-motifs.example", "reprise-perplexity.example"),
+    url: `https://www.reprise-perplexity.example${new URL(a.url).pathname}`,
     snippet: `${a.title}, d'après la presse.`,
     date: isoAgo(daysAgo),
   };
@@ -110,7 +118,7 @@ async function collect(
   <link>${redirect(index)}</link>
   <pubDate>${new Date(NOW.getTime() - (index + 1) * 60_000).toUTCString()}</pubDate>
   <description>${a.title}</description>
-  <source url="https://www.presse-motifs.example">Presse Motifs</source>
+  <source url="${a.media ?? new URL(a.url).origin}">Presse Motifs</source>
 </item>`,
   );
   stubPages(
@@ -247,6 +255,152 @@ describe("articles Google News écartés : motif dans l'historique", () => {
       errorMessage:
         "Google News : 1 publication écartée par la vérification de la date (1 page d'éditeur inaccessible).",
     });
+  });
+});
+
+describe("média qui refuse la lecture : ses autres pages ne sont plus demandées", () => {
+  beforeEach(() => setup());
+  afterEach(teardown);
+
+  /** Le même article, publié par un autre média. */
+  const on = (host: string, a: Article): Article => ({ ...a, url: a.url.replace(HOST, host) });
+
+  /** Pages d'éditeur demandées pendant la collecte. */
+  const pageRequests = () =>
+    vi
+      .mocked(fetch)
+      .mock.calls.map(([input]) => String(input instanceof Request ? input.url : input))
+      .filter((url) => !url.includes("news.google.com") && !url.includes("/perplexity/"));
+
+  async function collectCounting(articles: Article[], perplexity?: PerplexityResult[]) {
+    let resolved = 0;
+    const run = await collect(articles, {
+      onResolve: () => (resolved += 1),
+      ...(perplexity ? { perplexity } : {}),
+    });
+    return { run, resolved, pages: pageRequests() };
+  }
+
+  it.each([401, 403, 429])(
+    "après deux refus %i, les autres articles du média sont comptés inaccessibles sans requête",
+    async (status) => {
+      const closed = Array.from({ length: 5 }, (_, n) =>
+        blocked(`refus ${status} numéro ${n}`, status),
+      );
+      const { run, resolved, pages } = await collectCounting(closed);
+      expect(MAX_PUBLISHER_REFUSALS).toBe(2);
+      expect(outcome(run)).toEqual({
+        status: "succes_sans_actualite",
+        newObservations: 0,
+        errorCode: DATE_REJECTED,
+        errorMessage:
+          "Google News : 5 publications écartées par la vérification de la date (5 pages d'éditeur inaccessibles).",
+      });
+      expect(pages).toEqual([closed[0]!.url, closed[1]!.url]);
+      expect(resolved).toBe(2);
+    },
+  );
+
+  it("un média fermé n'occupe plus les vérifications : les autres médias sont lus", async () => {
+    const closed = Array.from({ length: MAX_GOOGLE_NEWS_CHECKS + 2 }, (_, n) =>
+      blocked(`média fermé ${n}`),
+    );
+    const open = [
+      on("autre-media.example", fresh("lu après le média fermé")),
+      on("autre-media.example", fresh("lu aussi")),
+    ];
+    const { run, pages } = await collectCounting([...closed, ...open]);
+    expect(outcome(run)).toEqual({
+      status: "succes",
+      newObservations: 2,
+      errorCode: DATE_REJECTED,
+      errorMessage: `Google News : ${closed.length} publications écartées par la vérification de la date (${closed.length} pages d'éditeur inaccessibles).`,
+    });
+    expect(pages).toEqual([closed[0]!.url, closed[1]!.url, open[0]!.url, open[1]!.url]);
+  });
+
+  it("deux médias sont comptés séparément : un refus chacun ne ferme ni l'un ni l'autre", async () => {
+    const articles = [
+      blocked("premier média, premier refus"),
+      on("autre-media.example", blocked("second média, premier refus")),
+      fresh("premier média, page lisible"),
+      on("autre-media.example", fresh("second média, page lisible")),
+    ];
+    const { run, pages } = await collectCounting(articles);
+    expect(outcome(run)).toMatchObject({
+      newObservations: 2,
+      errorMessage:
+        "Google News : 2 publications écartées par la vérification de la date (2 pages d'éditeur inaccessibles).",
+    });
+    expect(pages).toHaveLength(4);
+  });
+
+  it.each<[string, Article["page"]]>([
+    ["erreur 500", () => new Response("panne", { status: 500 })],
+    ["page introuvable 404", () => new Response("introuvable", { status: 404 })],
+    [
+      "erreur réseau",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+    ["page sans date", page()],
+  ])("%s : ce n'est pas un refus, le média reste lu", async (label, body) => {
+    const articles = [
+      article(`${label} un`, body),
+      article(`${label} deux`, body),
+      article(`${label} trois`, body),
+      fresh(`${label} puis une page lisible`),
+    ];
+    const { run, pages } = await collectCounting(articles);
+    expect(pages).toEqual(articles.map((a) => a.url));
+    expect(run.newObservations).toBe(1);
+  });
+
+  it("reprend par Perplexity un article d'un média fermé, sans le demander", async () => {
+    const closed = [blocked("fermé un"), blocked("fermé deux"), blocked("fermé et repris")];
+    const twin = samePerplexity(closed[2]!);
+    const { run, pages } = await collectCounting(closed, [twin]);
+    expect(outcome(run)).toEqual({
+      status: "succes",
+      newObservations: 1,
+      errorCode: DATE_REJECTED,
+      errorMessage:
+        "Google News : 2 publications écartées par la vérification de la date (2 pages d'éditeur inaccessibles).",
+    });
+    expect(pages).toEqual([closed[0]!.url, closed[1]!.url]);
+    expect((await created()).map((o) => [o.url, o.via])).toEqual([[twin.url, "perplexity"]]);
+  });
+
+  it("rattache au média les refus d'un de ses sous-domaines", async () => {
+    const media = "https://www.grand-media.example";
+    const closed = ["un", "deux", "trois"].map((n) => ({
+      ...blocked(`sous-domaine ${n}`),
+      url: `https://bourse.grand-media.example/sous-domaine-${n}`,
+      media,
+    }));
+    const { run, pages } = await collectCounting(closed);
+    expect(pages).toEqual([closed[0]!.url, closed[1]!.url]);
+    expect(run.errorMessage).toContain("3 pages d'éditeur inaccessibles");
+  });
+
+  it("ne ferme pas un média pour les refus d'un hôte sans rapport avec lui", async () => {
+    const closed = ["un", "deux", "trois"].map((n) => ({
+      ...blocked(`hébergeur ${n}`),
+      url: `https://hebergeur-tiers.example/hebergeur-${n}`,
+      media: `https://www.${HOST}`,
+    }));
+    const readable = fresh("page du média annoncé");
+    const { run, pages } = await collectCounting([...closed, readable]);
+    expect(pages).toEqual([...closed, readable].map((a) => a.url));
+    expect(run.newObservations).toBe(1);
+  });
+
+  it("recommence à chaque collecte : un refus n'est pas mémorisé", async () => {
+    const closed = [blocked("mémoire un"), blocked("mémoire deux"), blocked("mémoire trois")];
+    await collect(closed);
+    await collect(closed);
+    expect(pageRequests()).toEqual([closed[0]!.url, closed[1]!.url]);
   });
 });
 
@@ -410,13 +564,45 @@ describe("checkPublishedAt : motif du refus", () => {
       },
     ],
   ])("inaccessible : %s", async (_label, body) => {
-    expect(await check(body)).toEqual({ ok: false, reason: "inaccessible" });
+    expect(await check(body)).toMatchObject({ ok: false, reason: "inaccessible" });
+  });
+
+  it.each<[number, boolean]>([
+    [401, true],
+    [403, true],
+    [429, true],
+    [404, false],
+    [410, false],
+    [500, false],
+    [503, false],
+  ])("inaccessible : HTTP %i, refus d'accès : %s", async (status, refused) => {
+    expect(await check(() => new Response("non", { status }))).toEqual({
+      ok: false,
+      reason: "inaccessible",
+      refused,
+    });
+  });
+
+  it.each<[string, Article["page"]]>([
+    [
+      "redirection",
+      () => new Response(null, { status: 302, headers: { location: "https://ailleurs.example/" } }),
+    ],
+    [
+      "erreur réseau",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+  ])("inaccessible sans refus d'accès : %s", async (_label, body) => {
+    expect(await check(body)).toEqual({ ok: false, reason: "inaccessible", refused: false });
   });
 
   it("inaccessible : adresse interne, jamais demandée", async () => {
     expect(await check(page(isoAgo(3)), "http://127.0.0.1/article")).toEqual({
       ok: false,
       reason: "inaccessible",
+      refused: false,
     });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -429,13 +615,17 @@ describe("checkPublishedAt : motif du refus", () => {
       `${page(isoAgo(3))}<meta property="article:published_time" content="${isoAgo(9)}" />`,
     ],
   ])("sans_date : %s", async (_label, body) => {
-    expect(await check(body)).toEqual({ ok: false, reason: "sans_date" });
+    expect(await check(body)).toEqual({ ok: false, reason: "sans_date", refused: false });
   });
 
   it.each<[string, string]>([
     ["publication de 60 jours", isoAgo(60)],
     ["date dans le futur", isoAgo(-3)],
   ])("hors_fenetre : %s", async (_label, published) => {
-    expect(await check(page(published))).toEqual({ ok: false, reason: "hors_fenetre" });
+    expect(await check(page(published))).toEqual({
+      ok: false,
+      reason: "hors_fenetre",
+      refused: false,
+    });
   });
 });

@@ -22,8 +22,15 @@ export const MAX_PUBLISHER_HTML_BYTES = 1024 * 1024;
  */
 export type DateRejection = "inaccessible" | "sans_date" | "hors_fenetre";
 
+/**
+ * `refused` : le site a répondu par un refus d'accès (`REFUSAL_STATUSES`). L'appelant s'en sert
+ * pour ne pas redemander les autres pages du même média pendant la collecte.
+ */
 export type PublishedAtCheck =
-  { ok: true; publishedAt: string } | { ok: false; reason: DateRejection };
+  { ok: true; publishedAt: string } | { ok: false; reason: DateRejection; refused: boolean };
+
+/** Statuts HTTP par lesquels un site refuse la lecture : authentification, interdiction, débit. */
+const REFUSAL_STATUSES = new Set([401, 403, 429]);
 
 /**
  * Date originale confirmée par la page éditeur, dans la fenêtre de fraîcheur, ou le motif
@@ -45,12 +52,12 @@ export async function checkPublishedAt(
   now: Date,
   budgetMs = TIMEOUT_MS,
 ): Promise<PublishedAtCheck> {
-  if (budgetMs <= 0) return { ok: false, reason: "inaccessible" };
-  const html = await fetchPublisherHtml(url, Math.min(TIMEOUT_MS, budgetMs));
-  if (html === null) return { ok: false, reason: "inaccessible" };
-  const original = readOriginalPublishedAt(html);
-  if (!original) return { ok: false, reason: "sans_date" };
-  if (!isFresh(original, now)) return { ok: false, reason: "hors_fenetre" };
+  if (budgetMs <= 0) return { ok: false, reason: "inaccessible", refused: false };
+  const page = await fetchPublisherHtml(url, Math.min(TIMEOUT_MS, budgetMs));
+  if (page.html === null) return { ok: false, reason: "inaccessible", refused: page.refused };
+  const original = readOriginalPublishedAt(page.html);
+  if (!original) return { ok: false, reason: "sans_date", refused: false };
+  if (!isFresh(original, now)) return { ok: false, reason: "hors_fenetre", refused: false };
   return { ok: true, publishedAt: original };
 }
 
@@ -62,10 +69,14 @@ function isFresh(iso: string, now: Date): boolean {
   return t >= cutoff && t <= future;
 }
 
-async function fetchPublisherHtml(url: string, timeoutMs: number): Promise<string | null> {
-  if (timeoutMs <= 0) return null;
+type PublisherPage = { html: string } | { html: null; refused: boolean };
+
+const UNREADABLE: PublisherPage = { html: null, refused: false };
+
+async function fetchPublisherHtml(url: string, timeoutMs: number): Promise<PublisherPage> {
+  if (timeoutMs <= 0) return UNREADABLE;
   const check = validateSourceUrl(url);
-  if (!check.ok || check.url.hostname === "news.google.com") return null;
+  if (!check.ok || check.url.hostname === "news.google.com") return UNREADABLE;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -77,20 +88,21 @@ async function fetchPublisherHtml(url: string, timeoutMs: number): Promise<strin
         accept: "text/html,application/xhtml+xml;q=0.9",
       },
     });
-    if (res.status >= 300 && res.status < 400) return null;
-    if (!res.ok) return null;
+    if (res.status >= 300 && res.status < 400) return UNREADABLE;
+    if (!res.ok) return { html: null, refused: REFUSAL_STATUSES.has(res.status) };
     if (!acceptableHtmlType(res.headers.get("content-type"))) {
       await res.body?.cancel().catch(() => undefined);
-      return null;
+      return UNREADABLE;
     }
     const declared = declaredLength(res);
     if (declared !== null && declared > MAX_PUBLISHER_HTML_BYTES) {
       await res.body?.cancel().catch(() => undefined);
-      return null;
+      return UNREADABLE;
     }
-    return await readCappedHtml(res);
+    const html = await readCappedHtml(res);
+    return html === null ? UNREADABLE : { html };
   } catch {
-    return null;
+    return UNREADABLE;
   } finally {
     clearTimeout(timer);
   }

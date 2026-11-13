@@ -56,6 +56,12 @@ export const MAX_GOOGLE_NEWS_CHECKS = 15;
  * est celui de l'application, pas une promesse de l'hébergeur.
  */
 export const GOOGLE_NEWS_DATE_BUDGET_MS = 60_000;
+/**
+ * Refus d'accès (HTTP 401, 403, 429) d'un même média, pour une source et une collecte, à partir
+ * desquels ses autres pages ne sont plus demandées : elles sont comptées inaccessibles sans
+ * requête, et sans occuper une des `MAX_GOOGLE_NEWS_CHECKS` vérifications.
+ */
+export const MAX_PUBLISHER_REFUSALS = 2;
 /** Sources traitées par appel de collecte globale (`POST /collect`), à défaut de `limit`. */
 export const BATCH_SIZE = 8;
 /** Borne haute de `limit` : un lot reste court pour tenir dans une requête de l'hébergeur. */
@@ -373,6 +379,11 @@ type UnverifiedReason = "inaccessible" | "sansDate" | "lienNonResolu" | "nonExam
  * Chaque article écarté ou non examiné est compté : la collecte le rapporte dans
  * son avertissement, pour qu'une source ne se vide pas sans explication.
  *
+ * Un média qui a refusé la lecture `MAX_PUBLISHER_REFUSALS` fois n'est plus sollicité :
+ * ses autres articles sont comptés inaccessibles sans résolution ni lecture, et les
+ * vérifications restent disponibles pour les autres médias. Le média est celui que
+ * nomme le flux Google News (`outlet.domain`).
+ *
  * Un article dont la date n'a pas pu être vérifiée est remplacé par sa réserve
  * (`backup`) quand Perplexity a renvoyé le même : il entre alors comme tout
  * résultat Perplexity, avec la date et l'adresse de ce résultat, et n'est pas
@@ -399,6 +410,7 @@ async function resolveGoogleNewsItems(
     nonExamine: 0,
   };
   const expired = () => Date.now() - started >= GOOGLE_NEWS_DATE_BUDGET_MS;
+  const refusals = new Map<string, number>();
   for (const { backup, ...item } of items) {
     const unverified = (reason: UnverifiedReason) => {
       if (backup) {
@@ -412,6 +424,11 @@ async function resolveGoogleNewsItems(
     }
     if (isKnown(state, item)) {
       out.push(item);
+      continue;
+    }
+    const media = mediaKey(item.outlet.domain);
+    if ((refusals.get(media) ?? 0) >= MAX_PUBLISHER_REFUSALS) {
+      unverified("inaccessible");
       continue;
     }
     if (stop || examined >= MAX_GOOGLE_NEWS_CHECKS || expired()) {
@@ -448,6 +465,10 @@ async function resolveGoogleNewsItems(
       now,
       GOOGLE_NEWS_DATE_BUDGET_MS - (Date.now() - started),
     );
+    if (!check.ok && check.refused) {
+      const refused = refusedMedia(media, next.url);
+      refusals.set(refused, (refusals.get(refused) ?? 0) + 1);
+    }
     if (check.ok) {
       checks.confirmed += 1;
       out.push({ ...next, publishedAt: check.publishedAt });
@@ -456,6 +477,25 @@ async function resolveGoogleNewsItems(
     else checks.horsFenetre += 1;
   }
   return { items: out, checks };
+}
+
+/** Nom d'hôte d'un média sans casse ni `www.`, pour reconnaître ses autres articles. */
+function mediaKey(host: string): string {
+  return host
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+}
+
+/**
+ * Média auquel imputer un refus : celui que nomme le flux, s'il s'accorde avec l'hôte de la page
+ * refusée (même hôte, ou sous-domaine l'un de l'autre). Sinon l'hôte de la page : un flux qui ne
+ * nomme pas ses médias ne doit pas faire écarter tous ses articles pour deux refus sans rapport.
+ */
+function refusedMedia(media: string, pageUrl: string): string {
+  const host = mediaKey(new URL(pageUrl).hostname);
+  const related = host === media || host.endsWith(`.${media}`) || media.endsWith(`.${host}`);
+  return media && related ? media : host;
 }
 
 /**
