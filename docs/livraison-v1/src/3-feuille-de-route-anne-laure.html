@@ -207,7 +207,7 @@ git merge origin/main --no-edit
 | P1-06 | La neutralisation des formules ne s'appliquait qu'aux valeurs de type chaîne …
 &gt;&gt;&gt;&gt;&gt;&gt;&gt; origin/main</pre>
 <p>Supprime <b>seulement les trois lignes de marqueurs</b> (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code>, <code>=======</code>, <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt; origin/main</code>) et garde les deux lignes de tableau, l'une sous l'autre.</p>
-<pre>grep -n -E '^(<<<<<<<|=======$|>>>>>>>)' docs/11-anomalies-connues.md   <span class="c"># ne doit RIEN afficher</span>
+<pre>grep -n -E '^(&lt;&lt;&lt;&lt;&lt;&lt;&lt;|=======$|&gt;&gt;&gt;&gt;&gt;&gt;&gt;)' docs/11-anomalies-connues.md   <span class="c"># ne doit RIEN afficher</span>
 grep -c '^| P2-09 (partiel)\|^| P1-06 |' docs/11-anomalies-connues.md    <span class="c"># doit afficher 2</span>
 git add docs/11-anomalies-connues.md
 git commit --no-edit
@@ -321,7 +321,7 @@ head -1 /tmp/test-p209.txt              <span class="c"># it("ne considère pas 
 <p><b>3. Recoller ce test au bon endroit.</b> Ouvre <code>src/test/server/collecte-reelle.test.ts</code> et cherche <code>describe("C01 · intégration collecte (exercice 4b)"</code>. Deux lignes plus haut se trouve une ligne <code>});</code> seule, au début de la ligne : c'est la fin du bloc <code>describe("collecte réelle : flux des entreprises"</code>. Place-toi sur une ligne vide <b>juste au-dessus de ce <code>});</code></b> et colle tout le contenu de <code>/tmp/test-p209.txt</code> (il commence par <code>it("ne considère pas un domaine…</code> et finit par <code>});</code> indenté de deux espaces). <b>Pas à la fin du fichier</b> : le test utilise <code>ownFeed</code> et <code>stubPage</code>, qui n'existent que dans ce bloc.</p>
 <pre><span class="c"># 4. Vérifications, toutes obligatoires</span>
 grep -c notkalray src/test/server/collecte-reelle.test.ts                       <span class="c"># doit afficher 2</span>
-grep -n -E '^(<<<<<<<|=======$|>>>>>>>)' src/test/server/collecte-reelle.test.ts  <span class="c"># ne doit RIEN afficher</span>
+grep -n -E '^(&lt;&lt;&lt;&lt;&lt;&lt;&lt;|=======$|&gt;&gt;&gt;&gt;&gt;&gt;&gt;)' src/test/server/collecte-reelle.test.ts  <span class="c"># ne doit RIEN afficher</span>
 bunx vitest run src/test/server/collecte-reelle.test.ts                          <span class="c"># 24 tests verts</span>
 
 <span class="c"># 5. Terminer la fusion</span>

@@ -40,7 +40,7 @@
 | Base de données | Supabase de Lovable Cloud, accès serveur par clé de service, RLS sans policy, sans transaction, verrous applicatifs à expiration |
 | Séparation de l'espace | Un seul espace, sans filtrage |
 | Journal d'audit | Écritures métier tracées, persistantes en base, sans protection en écriture |
-| En-têtes de sécurité | Absents, sauf `nosniff` sur les fichiers |
+| En-têtes de sécurité | `nosniff` sur toutes les réponses ; politique de contenu (CSP) émise en observation, sans blocage ; pas de HSTS |
 | Secrets | Clé de service Supabase, clés OpenAI, passerelle, Perplexity, LinkedIn et WordPress, lues côté serveur ; `.env` versionné avec des valeurs publiques |
 | Flux tiers réels | Supabase et Supabase Auth ; Google News et sites des sources ; Perplexity par la passerelle de connexion de la plateforme si les clés sont configurées ; OpenAI si la clé est configurée ; WordPress si les variables `WORDPRESS_*` sont définies ; LinkedIn pour les comptes reliés ; polices Google chargées par le navigateur |
 
@@ -80,7 +80,7 @@ Set-Cookie: __Host-kora_session=<jeton>; Path=/; HttpOnly; Secure; SameSite=Stri
 
 Sa durée est celle qui reste au jeton, plafonnée à une heure, et `POST /api/auth/logout` l'efface. Le serveur ne l'accepte que sur les routes marquées `download: true` (exports CSV et JSON, manifeste, export de newsletter, export LinkedIn), en `GET` ou `HEAD`, et seulement si l'en-tête `sec-fetch-site` vaut `same-origin` ou `none`, ou est absent. Toute autre route exige l'en-tête `Authorization`.
 
-**Limites.** Il n'existe pas de MFA. La durée de vie des jetons, la politique de mot de passe et l'ouverture des inscriptions relèvent de la configuration Supabase Auth du projet, qui n'est pas versionnée dans le dépôt. Le jeton conservé dans le `localStorage` est lisible par tout script exécuté dans la page, et aucune `Content-Security-Policy` n'est émise (voir [En-têtes et réponses HTTP](#en-têtes-et-réponses-http)). `GET /api/users` liste tous les comptes, avec leur adresse e-mail et leurs rôles, à tout utilisateur connecté.
+**Limites.** Il n'existe pas de MFA. La durée de vie des jetons, la politique de mot de passe et l'ouverture des inscriptions relèvent de la configuration Supabase Auth du projet, qui n'est pas versionnée dans le dépôt. Le jeton conservé dans le `localStorage` est lisible par tout script exécuté dans la page, et la `Content-Security-Policy` n'est émise qu'en observation, sans rien bloquer (voir [En-têtes et réponses HTTP](#en-têtes-et-réponses-http)). `GET /api/users` liste tous les comptes, avec leur adresse e-mail et leurs rôles, à tout utilisateur connecté.
 
 **Mode démonstration.** Il n'y a pas d'authentification. L'utilisateur courant est déterminé par le cookie `kora_uid`, qui contient son identifiant en clair :
 
@@ -203,7 +203,11 @@ Les contenus collectés sont traités comme des données, jamais comme des instr
 
 Les réponses JSON portent `cache-control: no-store`. Les fichiers (`fileResponse` dans [`http.ts`](../src/server/http.ts)) portent `content-disposition: attachment` avec un nom ASCII et un nom UTF-8 au format RFC 5987, `cache-control: no-store` et `x-content-type-options: nosniff`. Les erreurs suivent le format `{ "error": { "code", "message", "details" } }`. Une erreur inattendue répond 500 `internal_error` avec un message générique, et l'erreur complète n'est écrite que dans la console du serveur (`[api] erreur interne`).
 
-Aucun en-tête `Content-Security-Policy`, `Strict-Transport-Security`, `X-Frame-Options` ou `Referrer-Policy` n'est émis, ni par l'API ni par les pages. Aucune limitation de débit n'existe.
+Toute réponse du serveur porte `x-content-type-options: nosniff` (`withSecurityHeaders` dans [`securityHeaders.ts`](../src/server/securityHeaders.ts), appelé par [`server.ts`](../src/server.ts)). Les fichiers statiques, servis par l'hébergeur sans passer par le serveur, le reçoivent par [`public/_headers`](../public/_headers).
+
+Les pages HTML portent en plus une politique de contenu, émise en observation (`content-security-policy-report-only`) : le navigateur signale les écarts dans sa console et ne bloque rien. Elle limite les scripts, styles, polices et appels du navigateur à l'application, aux polices Google et à la base Supabase du projet (`SUPABASE_URL`), accepte les images en `https:`, et réserve l'affichage dans un cadre à l'application et à l'éditeur Lovable (`frame-ancestors`). Les scripts en ligne restent permis (`'unsafe-inline'`) : ceux que TanStack Start insère pour l'hydratation n'ont pas de nonce. Pour appliquer la politique, remplacer `CSP_HEADER` par `content-security-policy`, après avoir contrôlé l'aperçu de l'éditeur et le site publié.
+
+Aucun en-tête `Strict-Transport-Security`, `X-Frame-Options` ou `Referrer-Policy` n'est émis, ni par l'API ni par les pages. Aucune limitation de débit n'existe.
 
 ### Accès à la base de données
 
@@ -386,7 +390,7 @@ Il envoie l'agent utilisateur `Mozilla/5.0 (compatible; KORA-Newsroom/1.0)` et u
 
 **Statut.** Réel pour l'utilisateur qui a relié son propre compte LinkedIn ; export manuel sinon. `ExportOnlyLinkedIn` reste l'adaptateur par défaut, mais `POST /api/linkedin/:id/publish` publie le post approuvé sur le compte relié de l'utilisateur qui publie ([`linkedin/publish.ts`](../src/server/linkedin/publish.ts)). Sans compte relié, la publication consigne l'export et le texte est récupéré par `GET /api/linkedin/:id/export` pour une diffusion manuelle. La collecte de pages LinkedIn tierces est hors périmètre (§4.3).
 
-**Connexion par utilisateur.** Chaque utilisateur relie son compte par OAuth depuis KORA ([`handlers/connectors.ts`](../src/server/handlers/connectors.ts)), par la passerelle de connexion de la plateforme d'hébergement, avec les autorisations `openid`, `profile` et `w_member_social`. Le serveur transmet à la passerelle l'identifiant KORA de l'utilisateur et une URL de retour construite sur `KORA_PUBLIC_URL`. La clé de connexion obtenue reste côté serveur, chiffrée en AES-256-GCM avec `APP_USER_CONNECTION_KEY_SECRET` dans `app_user_connections` ; le navigateur ne reçoit que le nom affiché et l'identifiant de membre du compte. La déconnexion et la suppression de l'utilisateur révoquent la connexion auprès de la passerelle quand c'est possible, puis effacent la clé.
+**Connexion par utilisateur.** Chaque utilisateur relie son compte par OAuth depuis KORA ([`handlers/connectors.ts`](../src/server/handlers/connectors.ts)), par la passerelle de connexion de la plateforme d'hébergement, avec les autorisations `openid`, `profile` et `w_member_social`. Le serveur transmet à la passerelle l'identifiant KORA de l'utilisateur et une URL de retour construite sur `KORA_PUBLIC_URL`. La clé de connexion obtenue reste côté serveur, chiffrée en AES-256-GCM avec `APP_USER_CONNECTION_KEY_SECRET` dans `app_user_connections` (tag d'authentification de 16 octets exigé à la lecture : une valeur tronquée ou altérée est refusée) ; le navigateur ne reçoit que le nom affiché et l'identifiant de membre du compte. La déconnexion et la suppression de l'utilisateur révoquent la connexion auprès de la passerelle quand c'est possible, puis effacent la clé.
 
 **Requêtes.** Les appels passent par la passerelle avec `LOVABLE_API_KEY` et la clé de connexion de l'utilisateur : lecture de l'identité (`/v2/userinfo`, 10 secondes), puis publication (`POST /v2/ugcPosts`, 20 secondes). Le texte envoyé est la variante choisie suivie de ses hashtags. Les journaux du serveur masquent la clé de connexion et les jetons `Bearer`.
 
@@ -468,7 +472,7 @@ Cette liste compare l'état du code aux exigences du §7. Elle complète la [Cou
 **Contrôles applicatifs**
 
 10. Vérifier l'en-tête `Origin` en complément de `x-kora-request`.
-11. En-têtes de sécurité (`Content-Security-Policy`, `Strict-Transport-Security`, `frame-ancestors`) et limitation de débit.
+11. En-têtes de sécurité : **partiellement fait** (`nosniff` sur toutes les réponses, politique de contenu en observation). Restent l'application de la politique (dont `frame-ancestors`), `Strict-Transport-Security` et la limitation de débit.
 12. Filtrage SSRF au moment de la connexion : **partiellement fait** (`validateSourceUrl` avec ports 80/443 et plages réservées courantes ; `safeFetchText` — revalidation à chaque URL et redirection, plafond corps, délai, politique d'hôte). Restent la résolution DNS. L'absence d'accès aux adresses privées depuis Cloudflare Workers est à confirmer.
 13. Contrôle de taille des imports sans `content-length` avant la lecture du corps.
 

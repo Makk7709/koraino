@@ -10,9 +10,12 @@ function key(): Buffer {
   return Buffer.from(raw, "base64");
 }
 
+const IV_LENGTH = 12;
+const TAG_LENGTH = 16;
+
 export function encryptConnectionKey(plaintext: string): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key(), iv);
+  const iv = randomBytes(IV_LENGTH);
+  const cipher = createCipheriv("aes-256-gcm", key(), iv, { authTagLength: TAG_LENGTH });
   const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   // iv | tag | ciphertext, base64 — valeur opaque en base.
   return Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64");
@@ -20,10 +23,14 @@ export function encryptConnectionKey(plaintext: string): string {
 
 export function decryptConnectionKey(stored: string): string {
   const buf = Buffer.from(stored, "base64");
-  const iv = buf.subarray(0, 12);
-  const tag = buf.subarray(12, 28);
-  const ct = buf.subarray(28);
-  const decipher = createDecipheriv("aes-256-gcm", key(), iv);
+  // Une valeur plus courte donnerait un tag tronqué, que GCM accepte dès 4 octets.
+  if (buf.length < IV_LENGTH + TAG_LENGTH) {
+    throw new Error("Connection key ciphertext is too short");
+  }
+  const iv = buf.subarray(0, IV_LENGTH);
+  const tag = buf.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+  const ct = buf.subarray(IV_LENGTH + TAG_LENGTH);
+  const decipher = createDecipheriv("aes-256-gcm", key(), iv, { authTagLength: TAG_LENGTH });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
