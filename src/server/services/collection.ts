@@ -1,6 +1,11 @@
 import type { CollectionBatch, CollectionRun } from "@/lib/api/types";
 import { adapters } from "../adapters";
-import type { CollectResult, RawItem } from "../adapters/collector";
+import {
+  FRESHNESS_DAYS,
+  type CollectResult,
+  type CollectWarning,
+  type RawItem,
+} from "../adapters/collector";
 import { googleNewsArticleId, type LinkResolver } from "../adapters/google-news";
 import { now as clock } from "../clock";
 import type { Ctx } from "../context";
@@ -29,7 +34,7 @@ import type {
 } from "../store/records";
 import { notify } from "./journal";
 import { withLock } from "./locks";
-import { confirmedPublishedAt } from "./publisher-page";
+import { checkPublishedAt } from "./publisher-page";
 import { activeGrid, rebuildSignal, saveRebuilt } from "./signals";
 import { paidCall, type UsageLine } from "./usage";
 
@@ -328,6 +333,27 @@ async function recordRun(ctx: Pick<Ctx, "repo">, run: CollectionRun): Promise<Co
 
 const DATE_BUDGET_EXPIRED = Symbol("date-budget-expired");
 
+/** Avertissement : des articles Google News ont été écartés faute de date confirmée. */
+export const DATE_REJECTED = "DATE_REJECTED";
+/** Avertissement : aucun article écarté, mais la vérification s'est arrêtée avant d'en avoir assez. */
+export const DATE_UNCHECKED = "DATE_UNCHECKED";
+
+/** Bilan de la vérification de la date des articles Google News d'une source. */
+interface DateChecks {
+  /** Date originale confirmée, dans la fenêtre de fraîcheur : article gardé. */
+  confirmed: number;
+  /** Page d'éditeur refusée, injoignable, en erreur, redirigée, non HTML ou trop lourde. */
+  inaccessible: number;
+  /** Page lue, mais date de publication absente, illisible ou contradictoire. */
+  sansDate: number;
+  /** Date lue, mais hors de la fenêtre de fraîcheur. */
+  horsFenetre: number;
+  /** Redirection Google News qui ne mène à aucune adresse d'éditeur acceptable. */
+  lienNonResolu: number;
+  /** Non examiné : au-delà de `MAX_GOOGLE_NEWS_CHECKS` ou de `GOOGLE_NEWS_DATE_BUDGET_MS`. */
+  nonExamine: number;
+}
+
 /**
  * Vérifie la date originale de chaque article Google News encore inconnu, qu'il
  * arrive par une redirection ou déjà par l'URL de l'éditeur. Une URL d'éditeur
@@ -338,17 +364,28 @@ const DATE_BUDGET_EXPIRED = Symbol("date-budget-expired");
  * sont exclus : la date du flux n'est pas retenue. Les flux officiels et
  * Perplexity (`via` autre que `google_news`) ne passent pas ici. Une adresse
  * déjà connue, ou refusée, n'est pas lue.
+ *
+ * Chaque article écarté ou non examiné est compté : la collecte le rapporte dans
+ * son avertissement, pour qu'une source ne se vide pas sans explication.
  */
 async function resolveGoogleNewsItems(
   state: CollectState,
   items: RawItem[],
   now: Date,
-): Promise<RawItem[]> {
+): Promise<{ items: RawItem[]; checks: DateChecks }> {
   const { links } = adapters();
   const started = Date.now();
-  let checks = 0;
+  let examined = 0;
   let stop = false;
   const out: RawItem[] = [];
+  const checks: DateChecks = {
+    confirmed: 0,
+    inaccessible: 0,
+    sansDate: 0,
+    horsFenetre: 0,
+    lienNonResolu: 0,
+    nonExamine: 0,
+  };
   const expired = () => Date.now() - started >= GOOGLE_NEWS_DATE_BUDGET_MS;
   for (const item of items) {
     if (item.via !== "google_news") {
@@ -359,8 +396,11 @@ async function resolveGoogleNewsItems(
       out.push(item);
       continue;
     }
-    if (stop || checks >= MAX_GOOGLE_NEWS_CHECKS || expired()) continue;
-    checks += 1;
+    if (stop || examined >= MAX_GOOGLE_NEWS_CHECKS || expired()) {
+      checks.nonExamine += 1;
+      continue;
+    }
+    examined += 1;
     const url = await publisherUrl(
       item.url,
       links,
@@ -368,9 +408,13 @@ async function resolveGoogleNewsItems(
     );
     if (url === DATE_BUDGET_EXPIRED) {
       stop = true;
+      checks.nonExamine += 1;
       continue;
     }
-    if (!url) continue;
+    if (!url) {
+      checks.lienNonResolu += 1;
+      continue;
+    }
     const next: RawItem = { ...item, url };
     if (isKnown(state, next)) {
       out.push(next);
@@ -378,17 +422,62 @@ async function resolveGoogleNewsItems(
     }
     if (expired()) {
       stop = true;
+      checks.nonExamine += 1;
       continue;
     }
-    const publishedAt = await confirmedPublishedAt(
+    const check = await checkPublishedAt(
       next.url,
       now,
       GOOGLE_NEWS_DATE_BUDGET_MS - (Date.now() - started),
     );
-    if (!publishedAt) continue;
-    out.push({ ...next, publishedAt });
+    if (check.ok) {
+      checks.confirmed += 1;
+      out.push({ ...next, publishedAt: check.publishedAt });
+    } else if (check.reason === "inaccessible") checks.inaccessible += 1;
+    else if (check.reason === "sans_date") checks.sansDate += 1;
+    else checks.horsFenetre += 1;
   }
-  return out;
+  return { items: out, checks };
+}
+
+/**
+ * Avertissement lisible dans l'historique : combien d'articles écartés, et pourquoi.
+ *
+ * Les articles non examinés ne sont pas des refus : ils sont cités à côté des refus, ou
+ * seuls (`DATE_UNCHECKED`) quand la vérification s'est arrêtée sans avoir confirmé de quoi
+ * remplir la collecte. Une source dont `MAX_ITEMS` articles sont confirmés et aucun écarté
+ * ne porte pas d'avertissement : le surplus attend la collecte suivante, comme pour un flux.
+ */
+function dateWarning(checks: DateChecks): CollectWarning | undefined {
+  const reasons: string[] = [];
+  const add = (count: number, one: string, many: string) => {
+    if (count > 0) reasons.push(count === 1 ? `1 ${one}` : `${count} ${many}`);
+  };
+  add(checks.inaccessible, "page d'éditeur inaccessible", "pages d'éditeur inaccessibles");
+  add(checks.sansDate, "sans date de publication lisible", "sans date de publication lisible");
+  const window = `hors de la fenêtre de ${FRESHNESS_DAYS} jours`;
+  add(checks.horsFenetre, window, window);
+  add(checks.lienNonResolu, "lien non résolu", "liens non résolus");
+  const rejected =
+    checks.inaccessible + checks.sansDate + checks.horsFenetre + checks.lienNonResolu;
+  const starved = checks.nonExamine > 0 && checks.confirmed < MAX_ITEMS;
+  if (rejected === 0 && !starved) return undefined;
+
+  const sentences: string[] = [];
+  if (rejected > 0) {
+    const subject = rejected === 1 ? "1 publication écartée" : `${rejected} publications écartées`;
+    sentences.push(`${subject} par la vérification de la date (${reasons.join(", ")})`);
+  }
+  if (checks.nonExamine > 0) {
+    const limit = `limite de ${MAX_GOOGLE_NEWS_CHECKS} vérifications ou de ${GOOGLE_NEWS_DATE_BUDGET_MS / 1000} s par source`;
+    const noun = rejected > 0 ? "" : checks.nonExamine === 1 ? " publication" : " publications";
+    const unchecked = checks.nonExamine === 1 ? "non examinée" : "non examinées";
+    sentences.push(`${checks.nonExamine}${noun} ${unchecked} (${limit})`);
+  }
+  return {
+    code: rejected > 0 ? DATE_REJECTED : DATE_UNCHECKED,
+    reason: `Google News : ${sentences.join(" ; ")}.`,
+  };
 }
 
 async function publisherUrl(
@@ -494,12 +583,12 @@ async function fetchOutcome(
     result = await collector.collect(input());
   }
   if (result.ok) {
-    const items = await assessItems(
-      state,
-      await resolveGoogleNewsItems(state, result.items, ctx.now),
-      company,
-    );
-    result = { ...result, items };
+    const checked = await resolveGoogleNewsItems(state, result.items, ctx.now);
+    const items = await assessItems(state, checked.items, company);
+    // L'avertissement du collecteur (Google News relayé par Perplexity) garde la priorité :
+    // dans ce cas aucun article Google News n'a été lu, donc aucun n'a été écarté.
+    const warning = result.warning ?? dateWarning(checked.checks);
+    result = { ...result, items, ...(warning ? { warning } : {}) };
   }
   return { result, attempts: attempt };
 }

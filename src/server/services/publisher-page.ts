@@ -14,10 +14,20 @@ const TIMEOUT_MS = 15_000;
 export const MAX_PUBLISHER_HTML_BYTES = 1024 * 1024;
 
 /**
- * Date originale confirmée par la page éditeur, dans la fenêtre de fraîcheur.
- * `null` si l'adresse est refusée, si la page ne répond pas, si elle redirige,
- * si son type n'est pas du HTML, si elle dépasse `MAX_PUBLISHER_HTML_BYTES`,
- * ou si elle ne donne pas de date de publication lisible et récente.
+ * Pourquoi la date d'un article n'est pas confirmée :
+ * - `inaccessible` : adresse refusée, page qui ne répond pas, erreur HTTP, redirection,
+ *   type autre que du HTML ou page de plus de `MAX_PUBLISHER_HTML_BYTES` ;
+ * - `sans_date` : page lue, mais date de publication absente, illisible ou contradictoire ;
+ * - `hors_fenetre` : date lue, mais hors de la fenêtre de fraîcheur.
+ */
+export type DateRejection = "inaccessible" | "sans_date" | "hors_fenetre";
+
+export type PublishedAtCheck =
+  { ok: true; publishedAt: string } | { ok: false; reason: DateRejection };
+
+/**
+ * Date originale confirmée par la page éditeur, dans la fenêtre de fraîcheur, ou le motif
+ * du refus : l'appelant le rapporte dans l'historique des collectes.
  *
  * `budgetMs` borne cette lecture (le délai propre de 15 s reste un maximum).
  * Les redirections ne sont pas suivies (`redirect: "manual"`). Ce choix n'est
@@ -30,17 +40,18 @@ export const MAX_PUBLISHER_HTML_BYTES = 1024 * 1024;
  * pas détecté par l'application. Une protection de ce genre, si elle existe, est
  * celle du réseau Cloudflare, pas une garantie de ce module.
  */
-export async function confirmedPublishedAt(
+export async function checkPublishedAt(
   url: string,
   now: Date,
   budgetMs = TIMEOUT_MS,
-): Promise<string | null> {
-  if (budgetMs <= 0) return null;
+): Promise<PublishedAtCheck> {
+  if (budgetMs <= 0) return { ok: false, reason: "inaccessible" };
   const html = await fetchPublisherHtml(url, Math.min(TIMEOUT_MS, budgetMs));
-  if (!html) return null;
+  if (html === null) return { ok: false, reason: "inaccessible" };
   const original = readOriginalPublishedAt(html);
-  if (!original || !isFresh(original, now)) return null;
-  return original;
+  if (!original) return { ok: false, reason: "sans_date" };
+  if (!isFresh(original, now)) return { ok: false, reason: "hors_fenetre" };
+  return { ok: true, publishedAt: original };
 }
 
 function isFresh(iso: string, now: Date): boolean {
