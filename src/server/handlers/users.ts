@@ -1,4 +1,5 @@
 import type { CreatedUser, InvitationResult, InvitationStatus, Role } from "@/lib/api/types";
+import { MAX_ACCOUNTS } from "@/lib/auth/limits";
 import { disconnectAppUser } from "@/integrations/lovable/appUserConnector";
 import { deleteConnectionKeyForUser } from "../appUserConnections.server";
 import { inviteAccount } from "../auth/admin";
@@ -134,8 +135,16 @@ export const createUser: Handler = async (ctx) => {
   const emailTaken = () =>
     conflict("email_taken", "Un utilisateur utilise déjà cette adresse e-mail.");
   return withUsersLock(ctx, async () => {
-    if ((await ctx.repo.users.list()).some((u) => u.email.toLowerCase() === input.email)) {
-      throw emailTaken();
+    const users = await ctx.repo.users.list();
+    if (users.some((u) => u.email.toLowerCase() === input.email)) throw emailTaken();
+    // Compté sous le verrou : deux créations simultanées ne dépassent pas le plafond. Tous les
+    // comptes comptent, y compris ceux dont l'invitation est en attente.
+    if (users.length >= MAX_ACCOUNTS) {
+      throw unprocessable(
+        "account_limit",
+        `L'abonnement inclut ${MAX_ACCOUNTS} comptes et ils sont tous attribués : supprimez un compte pour en ajouter un autre.`,
+        { limit: MAX_ACCOUNTS },
+      );
     }
     const created: UserRecord = {
       id: userIdForEmail(input.email),

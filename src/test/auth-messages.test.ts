@@ -71,6 +71,22 @@ describe("comptes", () => {
     });
   });
 
+  it("explique le plafond de comptes de l'abonnement", () => {
+    const server =
+      "L'abonnement inclut 5 comptes et ils sont tous attribués : supprimez un compte pour en ajouter un autre.";
+    expect(accountError(new ApiError(422, "account_limit", server), "Ajout impossible")).toEqual({
+      title: "Nombre de comptes atteint",
+      message: server,
+    });
+    expect(
+      accountError(new ApiError(422, "account_limit", "account_limit"), "Ajout impossible"),
+    ).toEqual({
+      title: "Nombre de comptes atteint",
+      message:
+        "Tous les comptes inclus dans l'abonnement sont attribués : supprimez un compte pour en ajouter un autre.",
+    });
+  });
+
   it("signale un échec d'invitation", () => {
     expect(invitationFeedback("failed", "a@b.fr", "Adresse non confirmée.")).toEqual({
       tone: "warning",

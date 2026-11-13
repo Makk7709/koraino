@@ -27,11 +27,11 @@ import {
 import { useDeleteUser, useMe, useResendInvitation, useUsers } from "@/lib/api/hooks";
 import type { Role, User } from "@/lib/api/types";
 import { accountError, invitationFeedback } from "@/lib/auth/accounts";
+import { MAX_ACCOUNTS } from "@/lib/auth/limits";
 import { useAuth } from "@/lib/auth/session";
 import { cn } from "@/lib/utils";
 import { ROLE_TONE } from "./labels";
 
-const INCLUDED_ACCOUNTS = 5;
 const ROLES: Role[] = ["admin", "redacteur", "validateur", "lecteur"];
 const AVATAR_TONES: Tone[] = ["teal", "blue", "purple", "green", "orange", "rose"];
 
@@ -123,6 +123,8 @@ function AccountsCard() {
   const supabaseMode = mode === "supabase";
   const isAdmin = me.data?.roles.includes("admin") ?? false;
   const adminCount = (users.data ?? []).filter((u) => u.roles.includes("admin")).length;
+  const accountCount = users.data?.length;
+  const full = accountCount !== undefined && accountCount >= MAX_ACCOUNTS;
 
   const deleteUser = (u: User) =>
     remove.mutate(u.id, {
@@ -159,11 +161,14 @@ function AccountsCard() {
               isAdmin && "hidden whitespace-nowrap @lg:inline",
             )}
           >
-            {INCLUDED_ACCOUNTS} comptes inclus dans l&apos;abonnement
+            {accountCount === undefined
+              ? `${MAX_ACCOUNTS} comptes inclus dans l'abonnement`
+              : `${accountCount} / ${MAX_ACCOUNTS} comptes inclus dans l'abonnement`}
           </span>
           {isAdmin && (
             <PrimaryButton
               className="h-8 px-3 text-[12px]"
+              disabled={full}
               onClick={() => setDialog({ open: true, user: null })}
             >
               <UserPlus className="size-3.5" />
@@ -269,6 +274,12 @@ function AccountsCard() {
             })}
           </tbody>
         </DataTable>
+      )}
+      {isAdmin && full && (
+        <Notice tone="amber" icon={Users} title="Nombre de comptes atteint" className="mt-3">
+          L&apos;abonnement inclut {MAX_ACCOUNTS} comptes et ils sont tous attribués, invitations en
+          attente comprises. Supprimez un compte pour en ajouter un autre.
+        </Notice>
       )}
       <p className="mt-3 text-[11px] text-muted-foreground">
         {supabaseMode ? (

@@ -6,6 +6,11 @@ const ACCOUNT_ERRORS: Record<string, { title: string; fallback: string }> = {
     title: "Adresse e-mail déjà utilisée",
     fallback: "Un utilisateur KORA utilise déjà cette adresse e-mail.",
   },
+  account_limit: {
+    title: "Nombre de comptes atteint",
+    fallback:
+      "Tous les comptes inclus dans l'abonnement sont attribués : supprimez un compte pour en ajouter un autre.",
+  },
   last_admin: {
     title: "Dernier administrateur",
     fallback: "KORA doit conserver au moins un administrateur.",

@@ -400,6 +400,7 @@ Liste exhaustive des codes émis par le serveur (recherche de tous les `HttpErro
 | 422 | `duplicate_variant` | Identifiants de variantes non uniques | — |
 | 422 | `item_not_found` | Sujet inconnu dans l'édition (modification groupée) | `{ itemIds }` |
 | 422 | `newsletter_empty` | Approbation d'une édition sans sujet | — |
+| 422 | `account_limit` | Création d'un utilisateur alors que les 5 comptes de l'abonnement sont attribués | `{ limit }` |
 | 422 | `last_admin` | Retrait du rôle `admin` ou suppression du dernier administrateur (actif, en mode `supabase`) | — |
 | 422 | `self_demotion` | Un administrateur retire son propre rôle `admin` | — |
 | 422 | `self_delete` | Un administrateur supprime son propre utilisateur | — |
@@ -660,7 +661,9 @@ Le compte Supabase est rattaché en écrivant seulement `authUserId` et `activat
 | `team` | chaîne | non | 120 caractères au plus ; défaut `""` |
 | `roles` | `Role[]` | oui | 1 à 4 rôles parmi `ROLES`, doublons retirés |
 
-Effets : l'identifiant est `userIdForEmail(email)` (`u_` suivi des 16 premiers caractères hexadécimaux du SHA-256 de l'adresse), `authUserId` et `activatedAt` valent `null` jusqu'à l'invitation ; entrée d'audit `user.create` avec le résultat de l'invitation. Erreurs spécifiques : `409 email_taken`, `409 users_busy`.
+Effets : l'identifiant est `userIdForEmail(email)` (`u_` suivi des 16 premiers caractères hexadécimaux du SHA-256 de l'adresse), `authUserId` et `activatedAt` valent `null` jusqu'à l'invitation ; entrée d'audit `user.create` avec le résultat de l'invitation. Erreurs spécifiques : `409 email_taken`, `422 account_limit`, `409 users_busy`.
+
+Plafond de comptes : l'abonnement inclut 5 comptes (`MAX_ACCOUNTS`, [`lib/auth/limits.ts`](../src/lib/auth/limits.ts)). Quand la base en contient déjà 5 ou plus, la création est refusée par `422 account_limit` (« L'abonnement inclut 5 comptes et ils sont tous attribués : supprimez un compte pour en ajouter un autre. », `details.limit`) : aucun utilisateur n'est créé, aucune invitation n'est envoyée, rien n'est écrit au journal d'audit. Tous les comptes comptent, invitation en attente comprise ; supprimer un compte libère une place. Le décompte se fait sous le verrou `users:admins` : deux créations simultanées ne dépassent pas le plafond. Ordre des contrôles : droit (`403`), validation du corps (`400`), adresse déjà utilisée (`409 email_taken`), puis plafond. Les autres opérations (`PATCH`, `DELETE`, renvoi d'invitation) ne sont pas concernées, et l'amorçage du premier administrateur par `KORA_ADMIN_EMAILS` n'est pas plafonné, pour ne jamais bloquer l'accès à l'administration.
 
 <a id="patch-user"></a>
 
