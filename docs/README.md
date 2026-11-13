@@ -22,6 +22,7 @@ Cette documentation répond à la liste de livrables du cahier des charges (§10
 | [10 — Couverture du cahier des charges](10-couverture-cahier-des-charges.md) | Statut de chaque exigence, préparation des épreuves R01 à R13, reste à faire. | Chef de projet, ingénieurs |
 | [11 — Anomalies connues](11-anomalies-connues.md) | Bugs, incohérences et écarts relevés dans le code, classés par priorité, avec emplacement et piste de correction. | Ingénieurs, chef de projet |
 | [12 — Logos entreprises / Brandfetch](12-logos-entreprises-brandfetch.md) | Dossier de revue PR, architecture et configuration, CI, recette locale, limites, sécurité et critères avant fusion. | Ingénieurs, reviewer, exploitation |
+| [13 — Date de publication des articles Google News](13-dates-publication-google-news.md) | Vérification de la date sur la page de l'éditeur, avertissements de l'historique, reprise par Perplexity, bornes, tests, mesure en production, limites. | Ingénieurs, exploitation, chef de projet |
 
 ## Parcours de lecture conseillés
 
