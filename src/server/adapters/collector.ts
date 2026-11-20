@@ -428,7 +428,7 @@ export function perplexityRequest(company: CompanyRecord): Record<string, unknow
 }
 
 /**
- * Recherche Perplexity (via la passerelle) : résultats web du dernier mois sur l'entreprise.
+ * Recherche Perplexity : clé personnelle prioritaire, sinon connexion gérée.
  * Ne lève jamais : un échec n'interrompt pas la collecte Google News, il est consigné.
  */
 export async function perplexitySearch(
@@ -446,20 +446,27 @@ export async function perplexitySearch(
   });
   const lovableKey = env["LOVABLE_API_KEY"];
   const pplxKey = env["PERPLEXITY_API_KEY"];
-  if (!lovableKey || !pplxKey) {
+  const personalKey = env["PERPLEXITY_PERSONAL_API_KEY"];
+  if (!personalKey && (!lovableKey || !pplxKey)) {
     const missing = [!lovableKey && "LOVABLE_API_KEY", !pplxKey && "PERPLEXITY_API_KEY"].filter(
       Boolean,
     );
     return outcome("non_configure", `Secret manquant : ${missing.join(", ")}`);
   }
   try {
-    const res = await fetch("https://connector-gateway.lovable.dev/perplexity/search", {
+    const endpoint = personalKey
+      ? "https://api.perplexity.ai/search"
+      : "https://connector-gateway.lovable.dev/perplexity/search";
+    const headers: Record<string, string> = personalKey
+      ? { Authorization: `Bearer ${personalKey}`, "Content-Type": "application/json" }
+      : {
+          Authorization: `Bearer ${lovableKey}`,
+          "X-Connection-Api-Key": pplxKey ?? "",
+          "Content-Type": "application/json",
+        };
+    const res = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableKey}`,
-        "X-Connection-Api-Key": pplxKey,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(perplexityRequest(company)),
       signal: AbortSignal.timeout(20_000),
     });
