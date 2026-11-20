@@ -42,7 +42,7 @@ const MODEL = OPENAI_MODEL;
 /** Réponse la plus longue du modèle quand la requête ne la borne pas. */
 const MODEL_MAX_OUTPUT_TOKENS = 16_384;
 
-interface ChatOptions {
+export interface ChatOptions {
   /** Réponse JSON imposée au modèle et bornée en jetons (classification). */
   json?: boolean;
   maxTokens?: number;
@@ -164,7 +164,7 @@ const CLASSIFY_SYSTEM =
 /** Évaluation valide : catégorie connue, importance entière entre 0 et 100, motif non vide. */
 export function toAssessment(
   parsed: Partial<ContentAssessment> | null | undefined,
-  model = MODEL,
+  model: string = MODEL,
 ): ContentAssessment | null {
   if (!parsed) return null;
   const category = parsed.category;
@@ -177,9 +177,14 @@ export function toAssessment(
 }
 
 export class OpenAiEnhancer implements AiTextEnhancer {
+  constructor(
+    private readonly generate: typeof chat = chat,
+    private readonly model: string = MODEL,
+  ) {}
+
   async enhanceDossier(input: DossierInput, base: Dossier, meter?: ApiMeter): Promise<Dossier> {
     const facts = base.factChecks.map((f) => `- [${f.status}] ${f.claim}`).join("\n");
-    const raw = await chat(
+    const raw = await this.generate(
       STYLE,
       `À partir de ces faits vérifiés, réécris l'article.\n\n` +
         `Signal : ${input.signal.title}\nAngle : ${input.angle ?? input.signal.suggestedAngle.text}\n\n` +
@@ -219,7 +224,7 @@ export class OpenAiEnhancer implements AiTextEnhancer {
     base: Omit<LinkedInVariant, "id">[],
     meter?: ApiMeter,
   ): Promise<Omit<LinkedInVariant, "id">[]> {
-    const raw = await chat(
+    const raw = await this.generate(
       STYLE,
       `Écris 2 variantes d'un post LinkedIn pour cette actualité.\n\n` +
         `Titre : ${input.title}\nChapô : ${input.lead}\n` +
@@ -252,13 +257,13 @@ export class OpenAiEnhancer implements AiTextEnhancer {
       return base;
     }
     return variants.slice(0, 3).map((v) => ({
-      text: v.text!.trim(),
-      hashtags: v.hashtags!.filter((h) => typeof h === "string" && h.trim()).slice(0, 6),
+      text: v.text?.trim() ?? "",
+      hashtags: (v.hashtags ?? []).filter((h) => typeof h === "string" && h.trim()).slice(0, 6),
     }));
   }
 
   async classify(input: ClassifyInput, meter?: ApiMeter): Promise<ContentAssessment | null> {
-    const raw = await chat(
+    const raw = await this.generate(
       CLASSIFY_SYSTEM,
       `Entreprise suivie : ${input.companyName ?? "inconnue"}\n` +
         `Titre : ${input.title}\n` +
@@ -273,7 +278,7 @@ export class OpenAiEnhancer implements AiTextEnhancer {
       meter,
     );
     const parsed = raw ? parseJson<Partial<ContentAssessment>>(raw) : null;
-    return toAssessment(parsed);
+    return toAssessment(parsed, this.model);
   }
 
   async enhanceSummary(
@@ -281,7 +286,7 @@ export class OpenAiEnhancer implements AiTextEnhancer {
     base: string,
     meter?: ApiMeter,
   ): Promise<string> {
-    const raw = await chat(
+    const raw = await this.generate(
       STYLE,
       `Résume cette actualité en 2 phrases maximum pour une newsletter.\n\n` +
         `Titre : ${input.title}\nTexte : ${input.text}\n\n` +

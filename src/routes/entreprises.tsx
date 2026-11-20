@@ -32,6 +32,14 @@ export const Route = createFileRoute("/entreprises")({
   head: () => ({
     meta: [
       { title: "Entreprises — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Entreprises — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Registre des entreprises suivies, alias et sources rattachées.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "Registre des entreprises suivies, alias et sources rattachées.",

@@ -7,6 +7,14 @@ export const Route = createFileRoute("/articles")({
   head: () => ({
     meta: [
       { title: "Articles — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Articles — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Editorial Studio : dossiers factuels, brouillons et approbations.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "Editorial Studio : dossiers factuels, brouillons et approbations.",

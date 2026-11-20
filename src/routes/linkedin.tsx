@@ -7,6 +7,14 @@ export const Route = createFileRoute("/linkedin")({
   head: () => ({
     meta: [
       { title: "LinkedIn — Inovallée Newsroom IA" },
+      { property: "og:title", content: "LinkedIn — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Posts et variantes préparés à partir d'articles approuvés.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "Posts et variantes préparés à partir d'articles approuvés.",

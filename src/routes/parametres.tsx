@@ -29,6 +29,14 @@ export const Route = createFileRoute("/parametres")({
   head: () => ({
     meta: [
       { title: "Paramètres — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Paramètres — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Grille de score, Editorial DNA, rôles, WordPress, quotas et exports.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "Grille de score, Editorial DNA, rôles, WordPress, quotas et exports.",

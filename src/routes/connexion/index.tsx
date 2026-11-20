@@ -16,7 +16,15 @@ export const Route = createFileRoute("/connexion/")({
     redirect: safeRedirect(s["redirect"], "") || undefined,
   }),
   head: () => ({
-    meta: [{ title: "Connexion — Inovallée Newsroom IA" }, { name: "robots", content: "noindex" }],
+    meta: [
+      { title: "Connexion — Inovallée Newsroom IA" },
+      { name: "description", content: "Accès sécurisé à la newsroom KORA." },
+      { property: "og:title", content: "Connexion — Inovallée Newsroom IA" },
+      { property: "og:description", content: "Accès sécurisé à la newsroom KORA." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+      { name: "robots", content: "noindex" },
+    ],
   }),
   component: LoginPage,
 });

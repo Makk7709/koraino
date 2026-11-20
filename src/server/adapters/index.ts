@@ -3,12 +3,13 @@ import { ExportOnlyLinkedIn, type LinkedInClient, type WordPressClient } from ".
 import { RealCollector, SimulatedCollector, type Collector } from "./collector";
 import { GoogleNewsLinkResolver, NoopLinkResolver, type LinkResolver } from "./google-news";
 import { OpenAiEnhancer, type AiTextEnhancer } from "./openai";
+import { AnthropicEnhancer } from "./anthropic";
 import { TemplateTextModel, type TextModel } from "./text-model";
 
 /** Adaptateurs tiers : remplaçables sans toucher au domaine (modèle, collecte, canaux). */
 export interface Adapters {
   textModel: TextModel;
-  /** Amélioration IA des textes (OpenAI) — absente sans clé AI_API_KEY. */
+  /** Anthropic preferred when configured; legacy OpenAI otherwise, never cross-provider retry. */
   ai: AiTextEnhancer | null;
   collector: Collector;
   /** Résolution des redirections Google News vers l'adresse de l'article (jamais sous Vitest). */
@@ -24,7 +25,13 @@ function defaults(): Adapters {
   return {
     textModel: new TemplateTextModel(),
     // Désactivé sous Vitest : les tests restent déterministes et hors réseau.
-    ai: process.env["AI_API_KEY"] && !process.env["VITEST"] ? new OpenAiEnhancer() : null,
+    ai: process.env["VITEST"]
+      ? null
+      : process.env["ANTHROPIC_API_KEY"]
+        ? new AnthropicEnhancer()
+        : process.env["AI_API_KEY"]
+          ? new OpenAiEnhancer()
+          : null,
     collector: process.env["VITEST"] ? new SimulatedCollector() : new RealCollector(),
     links: process.env["VITEST"] ? new NoopLinkResolver() : new GoogleNewsLinkResolver(),
     wordpress: createWordPressClient(),

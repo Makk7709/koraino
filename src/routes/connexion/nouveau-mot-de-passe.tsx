@@ -15,6 +15,18 @@ export const Route = createFileRoute("/connexion/nouveau-mot-de-passe")({
   head: () => ({
     meta: [
       { title: "Choisir un mot de passe — Inovallée Newsroom IA" },
+      {
+        name: "description",
+        content: "Activation et réinitialisation du mot de passe du compte KORA.",
+      },
+      { property: "og:title", content: "Choisir un mot de passe — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Activation et réinitialisation du mot de passe du compte KORA.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       { name: "robots", content: "noindex" },
     ],
   }),

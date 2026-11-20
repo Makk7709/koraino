@@ -14,6 +14,14 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Dashboard éditorial — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Dashboard éditorial — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Le poste de pilotage : signaux scorés, sujets prioritaires et diffusion.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "Le poste de pilotage : signaux scorés, sujets prioritaires et diffusion.",

@@ -26,6 +26,17 @@ export type OpenAiModel = keyof typeof OPENAI_USD_PER_MILLION_TOKENS;
 /** Modèle appelé : changer de modèle impose d'en renseigner le prix ci-dessus. */
 export const OPENAI_MODEL: OpenAiModel = "gpt-4o-mini";
 
+/** Haiku 5.5 standard Messages prices, verified 2026-11-20:
+ * https://platform.claude.com/docs/en/about-claude/pricing
+ * No cache writes are requested by this adapter. Rates depend on total prompt size.
+ */
+export function anthropicCostEur(inputTokens: number, outputTokens: number): number {
+  const longContext = inputTokens > 100_000;
+  const inputRate = longContext ? 0.5 : 0.1;
+  const outputRate = longContext ? 2.5 : 0.5;
+  return ((inputTokens * inputRate + outputTokens * outputRate) / 1e6) * EUR_PER_USD;
+}
+
 /**
  * Bornes de chaque appel au modèle : réponse la plus longue admise (`max_tokens` de la requête)
  * et texte soumis le plus long couvert par la réservation.

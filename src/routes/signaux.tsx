@@ -67,6 +67,14 @@ export const Route = createFileRoute("/signaux")({
   head: () => ({
     meta: [
       { title: "Signaux — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Signaux — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "Sujets détectés, scorés et sourcés par le Signal Engine.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       { name: "description", content: "Sujets détectés, scorés et sourcés par le Signal Engine." },
     ],
   }),

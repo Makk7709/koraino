@@ -37,6 +37,14 @@ export const Route = createFileRoute("/veille")({
   head: () => ({
     meta: [
       { title: "Veille — Inovallée Newsroom IA" },
+      { property: "og:title", content: "Veille — Inovallée Newsroom IA" },
+      {
+        property: "og:description",
+        content: "KORA Radar : registre des sources, collectes et erreurs d'accès.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+
       {
         name: "description",
         content: "KORA Radar : registre des sources, collectes et erreurs d'accès.",
